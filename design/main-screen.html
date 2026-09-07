@@ -49,14 +49,6 @@ body{
   display:flex;flex-direction:column;
   user-select:none;overflow:hidden;
 }
-/* царапины и зерно серого пластика */
-.tv::after{
-  content:"";position:absolute;inset:0;z-index:11;pointer-events:none;
-  background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cg stroke-linecap='round' fill='none'%3E%3Cline x1='20' y1='40' x2='120' y2='28' stroke='rgba(255,255,255,.17)' stroke-width='1'/%3E%3Cline x1='180' y1='90' x2='285' y2='70' stroke='rgba(0,0,0,.34)' stroke-width='1'/%3E%3Cline x1='40' y1='170' x2='160' y2='185' stroke='rgba(255,255,255,.13)' stroke-width='1'/%3E%3Cline x1='200' y1='220' x2='270' y2='200' stroke='rgba(0,0,0,.28)' stroke-width='1'/%3E%3Cline x1='90' y1='250' x2='150' y2='272' stroke='rgba(255,255,255,.15)' stroke-width='1'/%3E%3Cline x1='240' y1='18' x2='292' y2='52' stroke='rgba(0,0,0,.24)' stroke-width='1'/%3E%3Cline x1='8' y1='112' x2='72' y2='100' stroke='rgba(0,0,0,.2)' stroke-width='1'/%3E%3Cline x1='150' y1='140' x2='230' y2='132' stroke='rgba(255,255,255,.035)' stroke-width='1'/%3E%3C/g%3E%3C/svg%3E"),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23g)' opacity='.16'/%3E%3C/svg%3E");
-  opacity:.6;
-}
 
 /* объёмная рамка: затемнение по краям + блик выпуклого стекла */
 .tv::before{
@@ -80,7 +72,32 @@ body{
 .light:not(.g):active{filter:brightness(.8)}
 
 .glass{
-  position:relative;flex:1;
+  position:relative;flex:1;margin:16px 18px;border-radius:16px;overflow:hidden;
+  background:radial-gradient(ellipse 120% 95% at 50% 42%,#0C0805 0%,#070402 52%,#030201 100%);
+  box-shadow:
+    0 0 0 6px rgba(0,0,0,.30),
+    0 0 0 7px rgba(255,255,255,.045),
+    inset 0 3px 12px rgba(0,0,0,.92),
+    inset 0 -2px 10px rgba(0,0,0,.7),
+    inset 2px 0 10px rgba(0,0,0,.5),
+    inset -2px 0 10px rgba(0,0,0,.5),
+    inset 0 0 60px rgba(0,0,0,.5),
+    0 1px 0 rgba(255,255,255,.05);
+}
+/* рыбий глаз: выпуклое стекло — блик в центре, края тонут */
+.glass::before{
+  content:"";position:absolute;inset:0;z-index:6;pointer-events:none;
+  background:
+    radial-gradient(58% 46% at 50% 44%,rgba(255,236,200,.05) 0%,rgba(255,236,200,0) 60%),
+    radial-gradient(140% 118% at 50% 46%,rgba(0,0,0,0) 46%,rgba(0,0,0,.32) 78%,rgba(0,0,0,.6) 100%);
+}
+/* сканлайны + зерно сигнала на экране */
+.glass::after{
+  content:"";position:absolute;inset:0;z-index:5;pointer-events:none;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23g)' opacity='.5'/%3E%3C/filter%3E%3C/svg%3E"),
+    repeating-linear-gradient(0deg,rgba(0,0,0,.2) 0 1px,transparent 1px 3px);
+  opacity:.4;
 }
 
 /* строка трекинга VHS — изредка проезжает по экрану */
@@ -96,8 +113,8 @@ body{
 .scrim.show{opacity:1;pointer-events:auto}
 
 /* лёгкое мерцание яркости */
-.flick{position:absolute;inset:0;z-index:13;pointer-events:none;background:#FFF;opacity:0;
-  border-radius:26px;animation:breathe 6.5s infinite}
+.flick{position:absolute;inset:0;z-index:7;pointer-events:none;background:#FFF;opacity:0;
+  animation:breathe 6.5s infinite}
 @keyframes breathe{0%,100%{opacity:0}46%{opacity:0}47%{opacity:.028}48%{opacity:0}79%{opacity:0}80%{opacity:.016}81%{opacity:0}}
 
 /* ---- содержимое экрана ---- */
@@ -307,6 +324,8 @@ a.logo:hover .logo-deboss{color:var(--amber);
 
       <div class="tracking" id="tracking"></div>
       <div class="scrim" id="scrim"></div>
+
+      <div class="flick"></div>
 
       <!-- VPN: центр экрана, одна строка -->
       <div class="vpn" id="vpn">
