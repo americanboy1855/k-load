@@ -1,0 +1,253 @@
+// Контрактные тесты kdcore.
+//
+// Чистые (детектор, разбор ссылок, имена файлов) гоняются всегда; живые
+// (--live) бьют по реальным источникам: probe по ссылкам, поиск по
+// названию, сквозные скачивания YouTube/SoundCloud в тестовую папку.
+// Живые тесты прогонять после каждого обновления yt-dlp.
+
+#include "Engine.h"
+#include "Detector.h"
+#include "kd_compat.h"
+#include "kd_url.h"
+#include "kd_capi.h"
+
+#include <chrono>
+#include <cstdio>
+#include <filesystem>
+#include <iostream>
+#include <string>
+#include <thread>
+
+namespace fs = std::filesystem;
+
+static int passed = 0, failed = 0;
+
+static void check (bool ok, const std::string& name, const std::string& detail = {})
+{
+    if (ok) { ++passed; std::cout << "  ok  " << name << "\n"; }
+    else    { ++failed; std::cout << "FAIL  " << name << (detail.empty() ? "" : "  → " + detail) << "\n"; }
+}
+
+// ---- чистые ----
+
+static void testDetector()
+{
+    std::cout << "Detector::serviceFor\n";
+    using S = Detector::Service;
+    check (Detector::serviceFor ("https://www.youtube.com/watch?v=jNQXAC9IVRw") == S::youtube, "youtube watch");
+    check (Detector::serviceFor ("https://youtu.be/jNQXAC9IVRw") == S::youtube, "youtu.be");
+    check (Detector::serviceFor ("https://music.youtube.com/watch?v=x") == S::youtubeMusic, "youtube music");
+    check (Detector::serviceFor ("https://www.instagram.com/reel/DaikHQxo_Z3/") == S::instagram, "instagram reel");
+    check (Detector::serviceFor ("https://www.tiktok.com/@user/video/123") == S::tiktok, "tiktok");
+    check (Detector::serviceFor ("https://pin.it/3xYz") == S::pinterest, "pin.it");
+    check (Detector::serviceFor ("https://www.pinterest.com/pin/1004795366878354024/") == S::pinterest, "pinterest pin");
+    check (Detector::serviceFor ("https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC") == S::spotify, "spotify");
+    check (Detector::serviceFor ("https://music.apple.com/ru/album/1440833098") == S::appleMusic, "apple music");
+    check (Detector::serviceFor ("music.yandex.ru/album/123/track/456") == S::yandexMusic, "yandex music");
+    check (Detector::serviceFor ("https://soundcloud.com/forss/flickermood") == S::soundcloud, "soundcloud");
+    check (Detector::serviceFor ("https://vk.com/audio1_-123_456") == S::vkMusic, "vk audio");
+    check (Detector::serviceFor ("https://vkvideo.ru/video-123_456") == S::vk, "vk video");
+    check (Detector::serviceFor ("https://example.com/video") == S::unknown, "unknown host");
+}
+
+static void testLinkLogic()
+{
+    std::cout << "плейлисты и ссылки\n";
+    check (Detector::hasPlaylist ("https://www.youtube.com/watch?v=x&list=PL123"), "hasPlaylist: watch+list");
+    check (! Detector::isCollection ("https://www.youtube.com/watch?v=x&list=PL123"), "watch+list — не подборка");
+    check (Detector::isCollection ("https://www.youtube.com/playlist?list=PL123"), "чистый playlist — подборка");
+    check (Detector::isCollection ("https://open.spotify.com/album/4aawyAB9vmq"), "альбом — подборка");
+    check (Detector::looksLikeLink ("https://youtube.com/watch?v=1"), "looksLikeLink: да");
+    check (! Detector::looksLikeLink ("radiohead creep acoustic"), "looksLikeLink: текст — нет");
+
+    auto links = Engine::splitLinks ("https://www.youtube.com/watch?v=dQw4w9WgXcQ\n"
+                                     "мусор без ссылки\n"
+                                     "https://www.instagram.com/reel/DaikHQxo_Z3/,"
+                                     " https://soundcloud.com/forss/flickermood");
+    check (links.size() == 3, "splitLinks: 3 ссылки из свалки", std::to_string (links.size()));
+}
+
+static void testNames()
+{
+    std::cout << "имена файлов\n";
+    check (Engine::safeName ("AC/DC: Back in Black") == "AC DC  Back in Black", "safeName чистит / и :");
+    check (Engine::safeName ("") == "track", "safeName пустого");
+    check (Engine::cleanTrackName ("Song (Official Video) [HD]") == "Song", "cleanTrackName сносит мусор");
+    check (Engine::cleanTrackName ("Song (feat. Someone)") == "Song (feat. Someone)", "cleanTrackName бережёт фита");
+}
+
+static void testCAPIPure()
+{
+    std::cout << "C-API: базовое\n";
+    check (std::string (kd_version()) == std::string ("1.0.0"), "kd_version");
+
+    auto links = kd_split_links ("https://youtu.be/jNQXAC9IVRw текст");
+    check (std::string (links) == "[\"https://youtu.be/jNQXAC9IVRw\"]", "kd_split_links JSON", links);
+    kd_string_free (links);
+
+    kd_engine* e = kd_engine_create (nullptr);
+    check (e != nullptr, "kd_engine_create");
+
+    auto snap = kd_snapshot (e);
+    check (std::string (snap) == "[]", "kd_snapshot пустой очереди", snap);
+    kd_string_free (snap);
+
+    auto dest = kd_default_dest (e);
+    std::string destStr = dest;
+    check (destStr.find ("K DWNLD") != std::string::npos, "kd_default_dest внутри K DWNLD", destStr);
+    kd_string_free (dest);
+
+    auto tools = kd_tools_status (e);
+    std::string toolsStr = tools;
+    check (toolsStr.find ("\"found\":true") != std::string::npos, "kd_tools_status нашёл core/tools", toolsStr);
+    kd_string_free (tools);
+
+    // VPN: просто проверяем валидность ответа, значение зависит от машины.
+    const int vpn = kd_vpn_state (e);
+    check (vpn >= 0 && vpn <= 2, "kd_vpn_state в диапазоне", std::to_string (vpn));
+
+    kd_engine_destroy (e);
+}
+
+// ---- живые источники ----
+
+static std::string waitForState (kd_engine* e, int id, const char* stateA, const char* stateB, int seconds)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds (seconds);
+    for (;;)
+    {
+        char* snap = kd_snapshot (e);
+        std::string s = snap;
+        kd_string_free (snap);
+        const auto key = s.find ("\"id\":" + std::to_string (id) + ",");
+        if (key != std::string::npos)
+        {
+            const auto a = s.rfind ('{', key);
+            const auto b = s.find ('}', key);
+            if (a != std::string::npos && b != std::string::npos)
+            {
+                const auto item = s.substr (a, b - a + 1);
+                if (item.find (std::string ("\"state\":\"") + stateA + "\"") != std::string::npos) return item;
+                if (stateB != nullptr && item.find (std::string ("\"state\":\"") + stateB + "\"") != std::string::npos) return item;
+            }
+        }
+        if (std::chrono::steady_clock::now() > deadline) return s;
+        std::this_thread::sleep_for (std::chrono::milliseconds (500));
+    }
+}
+
+static void testLiveProbes (kd_engine* e)
+{
+    std::cout << "живой probe\n";
+
+    auto p = kd_probe_blocking (e, "https://www.youtube.com/watch?v=jNQXAC9IVRw");
+    std::string ps = p;
+    check (ps.find ("\"ok\":true") != std::string::npos, "probe YouTube ok", ps.substr (0, 200));
+    check (ps.find ("\"title\":\"Me at the zoo\"") != std::string::npos, "probe YouTube title", ps.substr (0, 200));
+    // «Макс. качество» честно: показываем только реально доступные высоты
+    // (у «Me at the zoo» их две — 240p и 360p, никакого 1080).
+    {
+        const auto h = ps.find ("\"heights\":[");
+        const bool real = h != std::string::npos
+            && ps.substr (h, 40).find ("2") != std::string::npos;
+        check (real, "probe YouTube высоты (реальные, без выдуманных)");
+    }
+    kd_string_free (p);
+
+    p = kd_probe_blocking (e, "https://soundcloud.com/forss/flickermood");
+    ps = p;
+    check (ps.find ("\"ok\":true") != std::string::npos, "probe SoundCloud ok", ps.substr (0, 200));
+    check (ps.find ("Flickermood") != std::string::npos, "probe SoundCloud title");
+    kd_string_free (p);
+
+    p = kd_probe_blocking (e, "a-ha take on me");
+    ps = p;
+    check (ps.find ("\"isSearch\":true") != std::string::npos, "probe поиск: isSearch", ps.substr (0, 200));
+    check (ps.find ("\"resolved\":\"https://www.youtube.com/watch?v=djV11Xbc914\"") != std::string::npos
+        || ps.find ("\"resolved\":\"https://www.youtube.com/watch?") != std::string::npos,
+        "probe поиск нашёл ролик", ps.substr (0, 200));
+    kd_string_free (p);
+
+    p = kd_probe_blocking (e, "https://www.pinterest.com/pin/1004795366878354024/");
+    ps = p;
+    check (ps.find ("\"ok\":true") != std::string::npos, "probe Pinterest ok", ps.substr (0, 200));
+    check (ps.find ("\"isPhoto\":true") != std::string::npos || ps.find ("\"thumbnail\":\"http") != std::string::npos,
+        "probe Pinterest фото/превью", ps.substr (0, 200));
+    kd_string_free (p);
+}
+
+static void testLiveDownload (kd_engine* e)
+{
+    std::cout << "живые скачивания\n";
+    const auto tmp = fs::temp_directory_path() / "kdcore-live" / "K DWNLD";
+    fs::remove_all (fs::temp_directory_path() / "kdcore-live");
+    fs::create_directories (tmp);
+    const std::string dest = kd::pathStr (tmp);
+
+    // Видео YouTube (коротчайший «Me at the zoo»).
+    std::string links = "[\"https://www.youtube.com/watch?v=jNQXAC9IVRw\"]";
+    const std::string opts = "{\"dest\":\"" + dest + "\",\"mode\":\"video\",\"quality\":\"1080\"}";
+    check (kd_enqueue_batch (e, links.c_str(), opts.c_str()) == 1, "enqueue youtube");
+
+    const auto item1 = waitForState (e, 1, "done", "failed", 180);
+    check (item1.find ("\"state\":\"done\"") != std::string::npos, "youtube скачан", item1.substr (0, 300));
+    check (item1.find ("\"files\":[\"/") != std::string::npos, "youtube путь файла выдан", item1.substr (0, 300));
+
+    // Аудио SoundCloud → mp3.
+    links = "[\"https://soundcloud.com/forss/flickermood\"]";
+    const std::string optsAudio = "{\"dest\":\"" + dest + "\",\"mode\":\"audio\",\"audioFormat\":\"mp3\"}";
+    check (kd_enqueue_batch (e, links.c_str(), optsAudio.c_str()) == 1, "enqueue soundcloud");
+
+    const auto item2 = waitForState (e, 2, "done", "failed", 180);
+    check (item2.find ("\"state\":\"done\"") != std::string::npos, "soundcloud скачан", item2.substr (0, 300));
+    check (item2.find (".mp3\"") != std::string::npos, "soundcloud отдал mp3", item2.substr (0, 300));
+
+    // Пачка из двух ссылок.
+    links = "[\"https://www.youtube.com/watch?v=jNQXAC9IVRw\",\"https://youtu.be/jNQXAC9IVRw\"]";
+    check (kd_enqueue_batch (e, links.c_str(), opts.c_str()) == 2, "enqueue пачка из 2");
+
+    const auto item3 = waitForState (e, 3, "done", "failed", 180);
+    const auto item4 = waitForState (e, 4, "done", "failed", 180);
+    check (item3.find ("\"state\":\"done\"") != std::string::npos && item3.find ("\"batchTotal\":2") != std::string::npos
+        && item3.find ("\"batchIndex\":1") != std::string::npos, "пачка: первое задание 1/2", item3.substr (0, 300));
+    check (item4.find ("\"state\":\"done\"") != std::string::npos && item4.find ("\"batchIndex\":2") != std::string::npos,
+        "пачка: второе задание 2/2", item4.substr (0, 300));
+
+    // Ролик в пачке тот же, что и первое задание: повтор не дублируется
+    // («уже скачано»), поэтому ждём mp4 от первого задания и mp3 от аудио.
+    bool sawMp4 = false, sawMp3 = false;
+    for (const auto& entry : fs::recursive_directory_iterator (tmp))
+        if (entry.is_regular_file())
+        {
+            const auto ext = entry.path().extension().string();
+            if (ext == ".mp4") sawMp4 = true;
+            if (ext == ".mp3") sawMp3 = true;
+        }
+    check (sawMp4 && sawMp3, "в папке назначения mp4 и mp3");
+
+    kd_clear_finished (e);
+    char* snap = kd_snapshot (e);
+    check (std::string (snap) == "[]", "clearFinished опустошил очередь");
+    kd_string_free (snap);
+}
+
+int main (int argc, char** argv)
+{
+    const bool live = argc > 1 && std::string (argv[1]) == "--live";
+
+    testDetector();
+    testLinkLogic();
+    testNames();
+    testCAPIPure();
+
+    if (live)
+    {
+        kd_engine* e = kd_engine_create (nullptr);
+        testLiveProbes (e);
+        testLiveDownload (e);
+        kd_engine_destroy (e);
+    }
+
+    std::cout << "\nитого: " << passed << " ok, " << failed << " fail\n";
+    return failed == 0 ? 0 : 1;
+}

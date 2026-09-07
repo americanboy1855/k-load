@@ -1,0 +1,20 @@
+# Большие инструменты — докачиваются core/fetch-tools.sh
+core/tools/
+core/ytdlp/
+core/ffmpeg
+core/ffprobe
+
+# Сборка
+kdcore/build/
+build/
+*.o
+*.dylib
+
+# Агентский инструментарий и служебное
+.agent*/
+.claude/
+agent/
+skills-lock.json
+.video_agent/
+out/
+.DS_Store
