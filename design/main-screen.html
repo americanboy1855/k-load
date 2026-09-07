@@ -39,7 +39,7 @@ body{
    ================================================================ */
 .tv{
   position:relative;
-  width:500px;height:800px;flex:none;
+  width:560px;height:520px;flex:none;
   transform:scale(var(--s,1));transform-origin:center;
   border-radius:26px;
   background:linear-gradient(155deg,#2E2A27 0%,var(--plastic) 34%,#1D1B19 78%,#161413 100%);
@@ -66,22 +66,8 @@ body{
 .light:not(.g){cursor:pointer}
 .light:not(.g):active{filter:brightness(.8)}
 
-/* ================================================================
-   ЭКРАН: впалая ниша, стекло с рыбьим глазом, текстура старого ТВ
-   ================================================================ */
-.recess{
-  flex:1;margin:0 14px;border-radius:22px;position:relative;
-  background:linear-gradient(180deg,#0E0C0A 0%,#151210 8%,#181513 92%,#0D0B0A 100%);
-  box-shadow:
-    inset 0 4px 10px rgba(0,0,0,.85),
-    inset 0 -2px 6px rgba(0,0,0,.8),
-    inset 2px 0 6px rgba(0,0,0,.5),
-    inset -2px 0 6px rgba(0,0,0,.5),
-    0 1px 0 rgba(255,255,255,.05);
-  padding:10px;
-}
 .glass{
-  position:relative;width:100%;height:100%;border-radius:16px;overflow:hidden;
+  position:relative;flex:1;margin:0 14px;border-radius:14px;overflow:hidden;
   background:radial-gradient(ellipse 120% 95% at 50% 42%,#0C0805 0%,#070402 52%,#030201 100%);
   box-shadow:
     inset 0 0 0 1px #000,
@@ -106,6 +92,18 @@ body{
   opacity:.16;
 }
 
+/* строка трекинга VHS — изредка проезжает по экрану */
+.tracking{position:absolute;left:0;right:0;height:11%;top:-20%;z-index:5;pointer-events:none;opacity:0;
+  background:linear-gradient(180deg,transparent 0%,rgba(255,255,255,.035) 35%,rgba(255,255,255,.07) 50%,rgba(255,255,255,.025) 65%,transparent 100%);
+  filter:blur(.4px)}
+.tracking.run{animation:track 1.7s linear forwards}
+@keyframes track{0%{top:-15%;opacity:1}100%{top:115%;opacity:1}}
+
+/* затемнение под уведомлением */
+.scrim{position:absolute;inset:0;z-index:7;background:rgba(0,0,0,.58);opacity:0;
+  pointer-events:none;transition:opacity .3s ease}
+.scrim.show{opacity:1;pointer-events:auto}
+
 /* лёгкое мерцание яркости */
 .flick{position:absolute;inset:0;z-index:7;pointer-events:none;background:#FFF;opacity:0;
   animation:breathe 6.5s infinite}
@@ -120,12 +118,12 @@ body{
 .search{
   position:relative;display:flex;align-items:center;gap:11px;min-height:52px;
   background:rgba(5,3,0,.74);
-  border:1px solid rgba(255,176,0,.26);
+  border:1px dashed rgba(255,176,0,.5);
   border-radius:0;padding:12px 16px;cursor:text;
   transition:border-color .25s ease, box-shadow .25s ease;
 }
 .search.focus{border-color:rgba(255,176,0,.62);box-shadow:0 0 0 1px rgba(255,176,0,.14),0 0 22px rgba(255,176,0,.10)}
-.search .ic{flex:none;display:flex;color:var(--dimtxt)}
+.search .ic{flex:none;display:flex;color:rgba(255,176,0,.55)}
 .search.focus .ic{color:var(--amber)}
 .search input{
   flex:1;background:none;border:none;outline:none;padding:0;
@@ -136,7 +134,7 @@ body{
 .search .ph{
   position:absolute;left:48px;right:14px;top:50%;transform:translateY(-50%);
   font:500 15px/1.15 'Handjet',monospace;letter-spacing:.02em;
-  color:#9A7B3F;pointer-events:none;cursor:text;white-space:nowrap;overflow:hidden;
+  color:rgba(255,176,0,.6);pointer-events:none;cursor:text;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis;text-shadow:0 0 6px rgba(255,176,0,.16);
 }
 .search .ph.off{display:none}
@@ -186,7 +184,9 @@ body{
   opacity:0;pointer-events:none;
   transition:opacity .35s ease, transform .35s cubic-bezier(.2,.9,.25,1);
 }
-.vpn.show{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1)}
+.vpn.show{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1);
+  animation:vpnIn .5s ease}
+@keyframes vpnIn{0%{opacity:0}25%{opacity:1}40%{opacity:.55}55%{opacity:1}70%{opacity:.85}100%{opacity:1}}
 .vpn .vic{flex:none;display:flex;color:var(--amber);
   filter:drop-shadow(0 0 5px rgba(255,176,0,.5))}
 .vpn .vt{font:500 17px/1 'Handjet',monospace;letter-spacing:.03em;color:var(--soft);
@@ -200,9 +200,11 @@ body{
    НИЖНЯЯ РАМКА: кнопка папки · выдавленный логотип · Boosty
    ================================================================ */
 .band{
-  height:96px;flex:none;display:flex;align-items:center;justify-content:center;
-  gap:26px;position:relative;padding:0 20px;
+  height:96px;flex:none;position:relative;padding:0 20px;
 }
+.band .plate{position:absolute;top:50%;transform:translateY(-50%)}
+#folder{left:22px}
+.band .plate:active{transform:translateY(calc(-50% + 1px))}
 .plate{
   width:46px;height:46px;border-radius:50%;flex:none;cursor:pointer;
   border:1px solid var(--plastic-edge);
@@ -225,7 +227,8 @@ body{
 a.plate{text-decoration:none}
 
 /* выдавленный логотип — размером с кнопки, при наведении загорается янтарным */
-a.logo{text-decoration:none;display:block;transform:translateY(-2px)}
+a.logo{position:absolute;left:50%;top:50%;transform:translate(-50%,-52%);
+  text-decoration:none;display:block}
 .logo-deboss{height:40px;color:#161412;display:block;
   filter:drop-shadow(0 1px 0 rgba(255,255,255,.075)) drop-shadow(0 -1px 1px rgba(0,0,0,.7));
   transition:color .25s ease, filter .25s ease}
@@ -266,7 +269,8 @@ a.logo:hover .logo-deboss{color:var(--amber);
   .boot{display:none}
   .ui{opacity:1}
   .flick{animation:none}
-  .vpn{transition:opacity .2s ease}
+  .tracking{display:none}
+  .vpn{transition:opacity .2s ease;animation:none}
 }
 </style>
 </head>
@@ -284,8 +288,7 @@ a.logo:hover .logo-deboss{color:var(--amber);
     </div>
   </div>
 
-  <!-- впалая ниша экрана -->
-  <div class="recess">
+  <!-- экран: монолитный корпус -->
     <div class="glass" id="glass">
 
       <!-- поисковая строка — квадратная линия, у верхнего края -->
@@ -308,6 +311,9 @@ a.logo:hover .logo-deboss{color:var(--amber);
         </div>
       </div>
 
+      <div class="tracking" id="tracking"></div>
+      <div class="scrim" id="scrim"></div>
+
       <!-- VPN: центр экрана, одна строка -->
       <div class="vpn" id="vpn">
         <span class="vic">
@@ -323,7 +329,6 @@ a.logo:hover .logo-deboss{color:var(--amber);
       <div class="flick"></div>
       <div class="boot" id="boot"><div class="beam"></div></div>
     </div>
-  </div>
 
   <!-- нижняя рамка -->
   <div class="band">
@@ -342,7 +347,7 @@ a.logo:hover .logo-deboss{color:var(--amber);
         </svg>
       </span>
     </a>
-    <a class="plate" style="position:absolute;right:20px" href="https://boosty.to/kvartalrecords/donate" target="_blank" rel="noopener" title="Поддержать на Boosty">
+    <a class="plate" style="right:22px" href="https://boosty.to/kvartalrecords/donate" target="_blank" rel="noopener" title="Поддержать на Boosty">
       <span class="dollar">$</span>
     </a>
   </div>
@@ -388,13 +393,16 @@ else{
 
 /* ---- VPN ---- */
 let vpnDemoOff=true;
-function showVpn(){vpn.classList.add('show')}
-document.getElementById('vpn-x').onclick=()=>vpn.classList.remove('show');
+const scrim=document.getElementById('scrim'),trk=document.getElementById('tracking');
+function showVpn(){vpn.classList.add('show');scrim.classList.add('show')}
+function hideVpn(){vpn.classList.remove('show');scrim.classList.remove('show')}
+document.getElementById('vpn-x').onclick=hideVpn;
+scrim.onclick=hideVpn;
 const bOff=document.getElementById('d-vpn-off'),bOn=document.getElementById('d-vpn-on');
 function setVpnDemo(off){
   vpnDemoOff=off;
   bOff.classList.toggle('on',off);bOn.classList.toggle('on',!off);
-  if(!off)vpn.classList.remove('show');
+  if(!off)hideVpn();
   else if(booted)showVpn();
 }
 bOff.onclick=()=>setVpnDemo(true);
@@ -402,7 +410,7 @@ bOn.onclick=()=>setVpnDemo(false);
 
 /* ---- повтор включения ---- */
 document.getElementById('d-replay').onclick=()=>{
-  booted=false;tv.classList.remove('booted');vpn.classList.remove('show');
+  booted=false;tv.classList.remove('booted');hideVpn();
   const b2=boot.querySelector('.beam');b2.style.animation='none';void b2.offsetWidth;b2.style.animation='';
   setTimeout(()=>{finishBoot();},1600);
 };
@@ -479,6 +487,16 @@ function doGlitch(){
   setTimeout(doGlitch,3800+Math.random()*5200);
 }
 setTimeout(doGlitch,5200);
+
+/* ---- строка трекинга изредка проезжает ---- */
+function runTrack(){
+  if(booted && !matchMedia('(prefers-reduced-motion: reduce)').matches){
+    trk.classList.add('run');
+    setTimeout(()=>trk.classList.remove('run'),1750);
+  }
+  setTimeout(runTrack,9000+Math.random()*7000);
+}
+setTimeout(runTrack,4200);
 </script>
 </body>
 </html>
