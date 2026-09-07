@@ -1,0 +1,125 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf8">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#232528;--lane:#2B2E32;--lane2:#27292D;--edge:#1B1D20;--ink:#E8EAED;--dim:#9BA1A9;--acc:#79C0FF;--ok:#7BD88F;--err:#F2857B}
+*{margin:0;box-sizing:border-box}
+body{width:1240px;height:780px;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,'Helvetica Neue',sans-serif;overflow:hidden}
+.fx{font-family:'Archivo',sans-serif}
+.frame{height:100%;display:flex;flex-direction:column}
+/* транспорт */
+.tr{display:flex;align-items:center;gap:16px;padding:14px 22px;border-bottom:1px solid var(--edge)}
+.logo{display:flex;align-items:center;gap:10px}
+.kv{font:800 12px 'Archivo';letter-spacing:.2em;color:var(--dim);background:#34373C;border-radius:4px;padding:6px 9px}
+.name{font:800 20px 'Archivo';letter-spacing:.04em}
+.name span{color:var(--acc)}
+.spacer{flex:1}
+.vpn{display:flex;gap:8px;align-items:center;background:#3A3327;border:1px solid #55492F;color:#E8D49A;padding:6px 12px;border-radius:6px;font-size:12.5px}
+.vpn b{color:#F0C860}
+.boosty{font:700 12.5px 'Archivo';color:#fff;background:#F0642D;padding:8px 14px;border-radius:6px}
+/* вход */
+.deck{margin:18px 22px 0;display:flex;gap:12px}
+.field{flex:1;background:#1D1F22;border:1px solid #34373C;border-radius:8px;padding:13px 15px;color:var(--dim);font-size:14.5px}
+.go{display:flex;align-items:center;gap:10px;background:var(--acc);color:#10233A;border-radius:8px;padding:0 22px;font:700 15px 'Archivo'}
+.go .tri{width:0;height:0;border-left:11px solid #10233A;border-top:7px solid transparent;border-bottom:7px solid transparent}
+.chips{display:flex;gap:20px;padding:12px 22px 0;align-items:center}
+.grp{display:flex;gap:5px}
+.lbl{font:600 11px 'Archivo';letter-spacing:.14em;color:#6E747C;margin-right:5px;align-self:center}
+.chip{font:600 12px 'Archivo';color:var(--dim);background:#2F3236;border-radius:5px;padding:5px 11px}
+.chip.on{color:#10233A;background:var(--acc)}
+.dest{margin-left:auto;font-size:12px;color:var(--dim)}
+.dest b{color:var(--ink);font-weight:600}
+/* инспектор клипа */
+.card{margin:16px 22px 0;background:#2E3135;border:1px solid #3A3D42;border-left:3px solid #E0A9F0;border-radius:8px;padding:12px 14px;display:flex;gap:14px;align-items:center}
+.thumb{width:84px;height:84px;border-radius:6px;background:linear-gradient(140deg,#7A3D74,#31173A);position:relative;flex:none}
+.thumb:after{content:"";position:absolute;inset:auto 8px 8px 8px;height:2px;background:#ffffff44;box-shadow:0 -6px 0 #ffffff44,0 -12px 0 #ffffff44,0 6px 0 #ffffff44}
+.meta{flex:1}
+.badge{font:700 10.5px 'Archivo';letter-spacing:.12em;color:#2A1030;background:#E0A9F0;border-radius:4px;padding:2px 8px}
+.t1{font:600 16px 'Archivo';margin:6px 0 2px}
+.t2{font-size:12.5px;color:var(--dim)}
+.hrow{display:flex;gap:6px;margin-top:9px;align-items:center}
+.chip.min{padding:3px 9px;font-size:11.5px}
+.tog{margin-left:8px;border:1px solid #4A4E54;border-radius:5px;padding:3px 10px;font:600 11.5px 'Archivo';color:var(--dim)}
+.tog.on{border-color:var(--acc);color:var(--acc)}
+/* дорожки */
+.tracks{margin:14px 22px 0;border:1px solid #1B1D20;border-radius:8px;overflow:hidden;flex:1}
+.tlabel{display:flex;justify-content:space-between;padding:8px 14px;font:700 10.5px 'Archivo';letter-spacing:.18em;color:#6E747C;background:#1F2124}
+.lane{display:flex;align-items:center;gap:13px;padding:9px 14px;border-top:1px solid var(--edge);height:84px;position:relative}
+.lane.a{background:var(--lane)}
+.lane.b{background:var(--lane2)}
+.clip{width:56px;height:56px;border-radius:6px;flex:none}
+.c1{background:linear-gradient(150deg,#8A4383,#41193E)}
+.c2{background:linear-gradient(150deg,#C4561B,#4A1E08)}
+.c3{background:linear-gradient(150deg,#1E6B63,#0D2A27)}
+.svc{font:700 10px 'Archivo';letter-spacing:.1em;border-radius:4px;padding:2px 7px;flex:none;color:#14161A;background:#9BA1A9}
+.stitle{flex:1;min-width:0}
+.st1{font:600 13.5px 'Archivo';white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st2{font-size:12px;color:var(--dim);margin-top:2px}
+.bar{width:240px;flex:none}
+.rail{height:6px;background:#1B1D20;border-radius:3px;overflow:hidden}
+.rail i{display:block;height:100%;border-radius:3px}
+.prow{display:flex;justify-content:space-between;margin-top:5px;font:600 11.5px 'Archivo'}
+.pct{color:var(--acc)}
+.rate{color:#6E747C;font-weight:500}
+.tag{font:700 11px 'Archivo';color:#10270F;background:var(--ok);border-radius:4px;padding:3px 9px}
+.fpath{font-size:12.5px;color:var(--dim);margin-top:4px}
+.fpath u{color:var(--acc);text-underline-offset:3px}
+.errline{font-size:12px;color:var(--err);margin-top:2px}
+.errt{font:700 11px 'Archivo';color:var(--err);border:1px solid #5A3532;border-radius:4px;padding:3px 9px}
+/* игла воспроизведения на рабочей дорожке */
+.play{position:absolute;top:6px;bottom:6px;width:2px;background:#fff;box-shadow:0 0 6px #ffffff88;left:calc(56px + 13px + 74px + 13px + 240px + 13px + 240px * .472)}
+.foot{display:flex;align-items:center;gap:10px;padding:12px 22px;border-top:1px solid var(--edge)}
+.foot .f2{color:#6E747C;font-size:12px}
+.foot .sp{flex:1}
+.foot .b2{font:600 11.5px 'Archivo';color:var(--dim);border:1px solid #34373C;padding:6px 12px;border-radius:5px}
+</style></head><body><div class="frame">
+<div class="tr">
+  <div class="logo"><span class="kv">КВАРТАЛ</span><span class="name fx">K LOAD<span>.</span></span></div>
+  <div class="spacer"></div>
+  <div class="vpn"><b>VPN</b> выключен — для лучшей работы загрузчика включите его</div>
+  <div class="boosty fx">Boosty · поддержать</div>
+</div>
+<div class="deck">
+  <div class="field">Ссылки или название трека — по одной в строке</div>
+  <div class="go fx"><span class="tri"></span>СКАЧАТЬ · 2 ССЫЛКИ</div>
+</div>
+<div class="chips">
+  <div class="grp"><span class="chip on">Видео</span><span class="chip">Музыка</span></div>
+  <div class="grp"><span class="lbl">КАЧЕСТВО</span><span class="chip on">Макс. качество</span><span class="chip">1080</span><span class="chip">720</span></div>
+  <div class="grp"><span class="lbl">ЗВУК</span><span class="chip on">MP3</span><span class="chip">M4A</span><span class="chip">WAV</span></div>
+  <div class="dest">Сохраняю в <b>~/Downloads/K DWNLD</b> · изменить</div>
+</div>
+<div class="card">
+  <div class="thumb"></div>
+  <div class="meta">
+    <span class="badge">YOUTUBE</span>
+    <div class="t1">a-ha — Take On Me (Remastered in 4K)</div>
+    <div class="t2">a-ha Official · 4:51 · в плейлисте ещё 13</div>
+    <div class="hrow"><span class="chip min on">2160</span><span class="chip min">1080</span><span class="chip min">720</span><span class="tog on">Плейлист целиком · 14</span></div>
+  </div>
+</div>
+<div class="tracks">
+  <div class="tlabel"><span>ОЧЕРЕДЬ · 3 ЗАДАНИЯ</span><span>ДВИЖОК ГОТОВ</span></div>
+  <div class="lane a">
+    <div class="clip c1"></div><span class="svc" style="background:#E0A9F0">INSTAGRAM</span>
+    <div class="stitle"><div class="st1">Заказала новый свет… reel</div><div class="st2">Качаю 2 из 14</div></div>
+    <div class="bar"><div class="rail"><i style="width:47%;background:var(--acc)"></i></div>
+    <div class="prow"><span class="pct">47.2%</span><span class="rate">14.8 MB/s</span></div></div>
+    <div class="play"></div>
+  </div>
+  <div class="lane b">
+    <div class="clip c2"></div><span class="svc" style="background:#F0A468">SOUNDCLOUD</span>
+    <div class="stitle"><div class="st1">Forss — Flickermood</div><div class="fpath">~/Downloads/K DWNLD/<u>Flickermood.mp3</u> — Удержите плашку и перетащите файл</div></div>
+    <span class="tag">ГОТОВО</span>
+  </div>
+  <div class="lane a">
+    <div class="clip c3"></div><span class="svc" style="background:#8FE0D0">TIKTOK</span>
+    <div class="stitle"><div class="st1" style="color:var(--err)">@nightset — сет из подвала</div>
+    <div class="errline">Не получилось: запись закрыта. Качаются только открытые материалы</div></div>
+    <span class="errt">ОШИБКА</span>
+  </div>
+</div>
+<div class="foot">
+  <span class="kv">КВАРТАЛ</span><span class="f2">сделано kvartal records</span>
+  <span class="sp"></span><span class="b2">Движок 1.0 · yt-dlp 2026.08.19</span>
+</div>
+</div></body></html>

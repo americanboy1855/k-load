@@ -1,0 +1,111 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf8">
+<style>
+:root{--bg:#F5F5F7;--card:#FFFFFF;--edge:#E3E3E8;--ink:#1D1D1F;--dim:#6E6E73;--blue:#0A84FF}
+*{margin:0;box-sizing:border-box}
+body{width:1240px;height:780px;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,'Helvetica Neue',sans-serif;overflow:hidden}
+.frame{height:100%;display:flex;flex-direction:column}
+.tb{display:flex;align-items:center;gap:14px;padding:16px 24px}
+.logo{display:flex;align-items:center;gap:10px}
+.kv{font-size:11px;font-weight:700;letter-spacing:.18em;color:var(--dim);border:1px solid var(--edge);background:#fff;border-radius:6px;padding:5px 8px}
+.name{font-size:19px;font-weight:700}
+.spacer{flex:1}
+.vpn{display:flex;gap:8px;align-items:center;background:#FFF4E5;border:1px solid #F0D9B8;color:#8A6116;padding:7px 12px;border-radius:8px;font-size:12.5px}
+.boosty{font-size:12.5px;font-weight:600;color:#fff;background:#F0642D;padding:8px 14px;border-radius:8px}
+.deck{margin:6px 24px 0;background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:14px}
+.inrow{display:flex;gap:10px}
+.field{flex:1;border:1px solid var(--edge);border-radius:8px;padding:12px 14px;color:#A1A1A6;background:#FAFAFC}
+.go{font-size:14.5px;font-weight:600;color:#fff;background:var(--blue);border-radius:8px;padding:0 22px;display:flex;align-items:center}
+.chips{display:flex;gap:18px;margin-top:12px;align-items:center}
+.grp{display:flex;gap:5px}
+.lbl{font-size:11px;font-weight:600;color:var(--dim);letter-spacing:.06em;align-self:center;margin-right:3px}
+.chip{font-size:12px;font-weight:500;color:var(--dim);background:#F0F0F3;border-radius:7px;padding:5px 11px}
+.chip.on{color:#fff;background:var(--blue)}
+.dest{margin-left:auto;font-size:12px;color:var(--dim)}
+.dest b{color:var(--ink);font-weight:600}
+.card{margin:14px 24px 0;background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:13px;display:flex;gap:13px;align-items:center}
+.thumb{width:86px;height:86px;border-radius:8px;background:linear-gradient(140deg,#B9C6D8,#6E7F95)}
+.meta{flex:1}
+.badge{font-size:10.5px;font-weight:600;color:var(--dim);background:#F0F0F3;border-radius:5px;padding:2px 7px}
+.t1{font-size:15.5px;font-weight:600;margin:6px 0 2px}
+.t2{font-size:12.5px;color:var(--dim)}
+.hrow{display:flex;gap:6px;margin-top:9px;align-items:center}
+.min{font-size:11.5px;font-weight:500;color:var(--dim);border:1px solid var(--edge);border-radius:6px;padding:3px 9px}
+.min.on{color:var(--blue);border-color:var(--blue)}
+.tog{margin-left:8px;font-size:11.5px;font-weight:500;color:var(--blue);border:1px solid var(--blue);border-radius:6px;padding:3px 10px}
+.ql{margin:16px 24px 0;background:var(--card);border:1px solid var(--edge);border-radius:12px;overflow:hidden}
+.qh{display:flex;justify-content:space-between;padding:10px 14px;font-size:11px;font-weight:600;letter-spacing:.1em;color:var(--dim);border-bottom:1px solid var(--edge)}
+.row{display:flex;align-items:center;gap:13px;padding:11px 14px;border-bottom:1px solid #F0F0F3;height:78px}
+.row:last-child{border-bottom:none}
+.th2{width:54px;height:54px;border-radius:7px}
+.i1{background:linear-gradient(150deg,#C9A0D8,#7E5A94)}
+.i2{background:linear-gradient(150deg,#F0B48A,#C96A2E)}
+.i3{background:linear-gradient(150deg,#9CC8BE,#4E8175)}
+.svc{font-size:10px;font-weight:600;color:var(--dim);background:#F0F0F3;border-radius:5px;padding:2px 7px}
+.st{flex:1;min-width:0}
+.s1{font-size:13.5px;font-weight:600}
+.s2{font-size:12px;color:var(--dim);margin-top:2px}
+.bar{width:230px}
+.rail{height:5px;background:#ECECF0;border-radius:3px;overflow:hidden}
+.rail i{display:block;height:100%;width:47%;background:var(--blue);border-radius:3px}
+.pm{display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-top:4px}
+.pct{color:var(--blue);font-weight:600}
+.ok{font-size:11.5px;font-weight:600;color:#1E7F3C;background:#E8F6EC;border-radius:6px;padding:3px 9px}
+.err{font-size:11.5px;font-weight:600;color:#C0392B;background:#FCEDEB;border-radius:6px;padding:3px 9px}
+.errline{font-size:12px;color:#C0392B;margin-top:2px}
+.fpath{font-size:12.5px;color:var(--dim);margin-top:2px}
+.fpath u{color:var(--blue)}
+.foot{margin-top:auto;display:flex;align-items:center;gap:10px;padding:14px 24px}
+.foot .f2{color:var(--dim);font-size:12px}
+.foot .sp{flex:1}
+.foot .b2{font-size:11.5px;color:var(--dim);border:1px solid var(--edge);background:#fff;padding:6px 12px;border-radius:7px}
+</style></head><body><div class="frame">
+<div class="tb">
+  <div class="logo"><span class="kv">КВАРТАЛ</span><span class="name">K LOAD</span></div>
+  <div class="spacer"></div>
+  <div class="vpn"><span style="width:7px;height:7px;border-radius:50%;background:#E8A13C;display:inline-block"></span> Для лучшей работы загрузчика - включите VPN</div>
+  <div class="boosty">Boosty · поддержать</div>
+</div>
+<div class="deck">
+  <div class="inrow">
+    <div class="field">Ссылки или название трека — по одной в строке</div>
+    <div class="go">Скачать · 2 ссылки</div>
+  </div>
+  <div class="chips">
+    <div class="grp"><span class="chip on">Видео</span><span class="chip">Музыка</span></div>
+    <div class="grp"><span class="lbl">КАЧЕСТВО</span><span class="chip on">Макс.</span><span class="chip">1080</span><span class="chip">720</span></div>
+    <div class="grp"><span class="lbl">ЗВУК</span><span class="chip on">MP3</span><span class="chip">M4A</span><span class="chip">WAV</span></div>
+    <div class="dest">Сохраняю в <b>~/Downloads/K DWNLD</b> · изменить</div>
+  </div>
+</div>
+<div class="card">
+  <div class="thumb"></div>
+  <div class="meta">
+    <span class="badge">YOUTUBE</span>
+    <div class="t1">a-ha — Take On Me (Remastered in 4K)</div>
+    <div class="t2">a-ha Official · 4:51 · в плейлисте ещё 13</div>
+    <div class="hrow"><span class="min">2160</span><span class="min on">1080</span><span class="min">720</span><span class="tog">Плейлист целиком · 14</span></div>
+  </div>
+</div>
+<div class="ql">
+  <div class="qh"><span>ОЧЕРЕДЬ · 3 ЗАДАНИЯ</span><span>ВСЕ СИСТЕМЫ ГОТОВЫ</span></div>
+  <div class="row">
+    <div class="th2 i1"></div><span class="svc">INSTAGRAM</span>
+    <div class="st"><div class="s1">Заказала новый свет… reel</div><div class="s2">Качаю 2 из 14</div></div>
+    <div class="bar"><div class="rail"><i></i></div><div class="pm"><span class="pct">47.2%</span><span>14.8 MB/s</span></div></div>
+  </div>
+  <div class="row">
+    <div class="th2 i2"></div><span class="svc">SOUNDCLOUD</span>
+    <div class="st"><div class="s1">Forss — Flickermood</div><div class="fpath">~/Downloads/K DWNLD/<u>Flickermood.mp3</u> · Удержите плашку и перетащите файл</div></div>
+    <span class="ok">Готово</span>
+  </div>
+  <div class="row">
+    <div class="th2 i3"></div><span class="svc">TIKTOK</span>
+    <div class="st"><div class="s1">@nightset — сет из подвала</div><div class="errline">Не получилось: запись закрыта. Качаются только открытые материалы</div></div>
+    <span class="err">Ошибка</span>
+  </div>
+</div>
+<div class="foot">
+  <span class="kv">КВАРТАЛ</span><span class="f2">сделано kvartal records</span>
+  <span class="sp"></span><span class="b2">Движок 1.0 · yt-dlp 2026.08.19</span>
+</div>
+</div></body></html>

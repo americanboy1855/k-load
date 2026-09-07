@@ -1,0 +1,107 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf8">
+<link href="https://fonts.googleapis.com/css2?family=PT+Mono:wght@400;700&family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--wall:#F2EEE4;--paper:#FFFDF7;--ink:#26221A;--dim:#8A8172;--stamp:#C0362C;--wood:#C9AE85;--wood2:#B09572;--green:#3E7A4C}
+*{margin:0;box-sizing:border-box}
+body{width:1240px;height:780px;background:var(--wall);color:var(--ink);font:14px/1.5 'PT Mono',monospace;overflow:hidden}
+.fx{font-family:'Oswald',sans-serif}
+.frame{height:100%;display:flex;flex-direction:column}
+.head{display:flex;align-items:center;gap:16px;padding:18px 26px 12px}
+.logo{font:700 30px 'PT Mono';letter-spacing:-.03em;border:3px solid var(--ink);padding:2px 12px;background:var(--paper);transform:rotate(-1deg)}
+.kv{font:600 11px 'Oswald';letter-spacing:.28em;color:var(--dim)}
+.sp{flex:1}
+.vpn{background:#F5E2C4;border:1.5px dashed #B98E4C;color:#6E5210;padding:7px 12px;font-size:12px}
+.boosty{font:600 12px 'Oswald';letter-spacing:.1em;color:var(--paper);background:var(--stamp);padding:8px 14px}
+/* бланк заказа */
+.order{margin:8px 26px 0;background:var(--paper);border:1.5px solid var(--ink);padding:16px 18px;box-shadow:5px 5px 0 #D9D2C2}
+.ordhead{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.ordhead .t{font:700 13px 'Oswald';letter-spacing:.18em}
+.ordhead .n{font:700 13px 'PT Mono';color:var(--stamp)}
+.ordhead .sp{flex:1}
+.field{border:1.5px dashed #B9B0A0;padding:12px 14px;color:var(--dim);background:#FBF8F0}
+.inrow{display:flex;gap:10px;margin-top:10px;align-items:stretch}
+.calc{flex:1;font-size:12px;color:var(--dim);background:#F3EFE4;padding:9px 12px;border:1px solid #E2DCCB}
+.calc b{color:var(--ink)}
+.go{font:700 15px 'Oswald';letter-spacing:.1em;color:var(--paper);background:var(--stamp);padding:0 26px;display:flex;align-items:center}
+.chips{display:flex;gap:16px;margin-top:10px;align-items:center}
+.grp{display:flex;gap:5px;align-items:center}
+.lbl{font:700 10px 'Oswald';letter-spacing:.18em;color:var(--dim)}
+.chip{font:400 12px 'PT Mono';border:1px solid #C9C1AD;color:var(--dim);padding:4px 9px;background:var(--paper)}
+.chip.on{border:1.5px solid var(--ink);color:var(--ink);font-weight:700}
+.dest{margin-left:auto;font-size:12px;color:var(--dim)}
+.dest b{color:var(--stamp)}
+/* рейка */
+.railbar{display:flex;align-items:center;gap:10px;margin:20px 26px 10px}
+.railbar .bar{flex:1;height:14px;background:linear-gradient(180deg,var(--wood),var(--wood2));border-radius:3px;box-shadow:0 2px 3px #00000022}
+.railbar .t{font:700 12px 'Oswald';letter-spacing:.2em;color:var(--dim)}
+/* талоны */
+.tickets{display:flex;gap:16px;margin:0 26px;align-items:stretch}
+.ticket{background:var(--paper);border:1px solid #E0D9C8;border-bottom:4px solid #E0D9C8;padding:14px 16px;flex:1;position:relative;box-shadow:3px 4px 0 #D9D2C2}
+.ticket:before{content:"";position:absolute;top:-7px;left:24px;right:24px;height:12px;background:radial-gradient(circle at 8px 6px,transparent 4px,var(--wall) 4px,var(--wall) 5px,transparent 5px);background-size:16px 12px}
+.tno{display:flex;align-items:baseline;gap:10px}
+.tno .num{font:700 30px 'PT Mono';letter-spacing:-.05em}
+.tno .svc{font:700 10.5px 'Oswald';letter-spacing:.12em;color:var(--paper);background:var(--ink);padding:2px 8px}
+.tit{font:700 14.5px 'PT Mono';margin-top:6px;line-height:1.3}
+.sub{font:400 12px 'PT Mono';color:var(--dim);margin-top:4px}
+.prow{margin-top:12px}
+.rrail{height:8px;border:1px solid #C9C1AD;background:repeating-linear-gradient(90deg,#FBF8F0 0 6px,#F1ECDE 6px 12px)}
+.rrail i{display:block;height:100%;background:repeating-linear-gradient(90deg,var(--stamp) 0 6px,#A8291F 6px 12px);width:47%}
+.pm{display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-top:4px}
+.stamp{position:absolute;top:10px;right:12px;transform:rotate(7deg);border:3px solid var(--green);color:var(--green);font:700 15px 'Oswald';letter-spacing:.14em;padding:3px 10px;border-radius:4px;opacity:.85}
+.stamp.err{border-color:var(--stamp);color:var(--stamp)}
+.pathline{font-size:11.5px;color:var(--dim);margin-top:10px;border-top:1px dashed #C9C1AD;padding-top:8px}
+.pathline u{color:var(--stamp);text-underline-offset:3px}
+.errt{color:var(--stamp);font-size:12px;margin-top:10px;border-top:1px dashed #C9C1AD;padding-top:8px}
+.foot{margin-top:auto;display:flex;align-items:center;gap:12px;padding:14px 26px}
+.foot .f2{color:var(--dim);font-size:12px}
+.foot .sp{flex:1}
+.foot .b2{font:600 11.5px 'Oswald';letter-spacing:.1em;border:1.5px solid var(--ink);padding:5px 11px;background:var(--paper)}
+</style></head><body><div class="frame">
+<div class="head">
+  <div class="logo">K LOAD</div><span class="kv">КВАРТАЛ</span>
+  <span class="sp"></span>
+  <span class="vpn">Для лучшей работы загрузчика - включите VPN</span>
+  <span class="boosty fx">BOOSTY · ПОДДЕРЖАТЬ</span>
+</div>
+<div class="order">
+  <div class="ordhead"><span class="t fx">ЗАКАЗ</span><span class="n">№ 000-274</span><span class="sp"></span><span class="t fx">КУХНЯ K LOAD</span></div>
+  <div class="field">Ссылки или название трека — по одной в строке</div>
+  <div class="inrow">
+    <div class="calc">к обработке: <b>2 ссылки</b> · плейлист: <b>14 видео</b> · качество: <b>макс.</b></div>
+    <div class="go fx">СКАЧАТЬ · 2 ССЫЛКИ</div>
+  </div>
+  <div class="chips">
+    <div class="grp"><span class="chip on">ВИДЕО</span><span class="chip">МУЗЫКА</span></div>
+    <div class="grp"><span class="lbl">КАЧЕСТВО</span><span class="chip on">МАКС</span><span class="chip">1080</span><span class="chip">720</span></div>
+    <div class="grp"><span class="lbl">ЗВУК</span><span class="chip on">MP3</span><span class="chip">M4A</span><span class="chip">WAV</span></div>
+    <div class="dest">выдача: <b>~/Downloads/K DWNLD</b> · изменить</div>
+  </div>
+</div>
+<div class="railbar"><span class="t fx">РЕЙКА ВЫДАЧИ · 3 ЗАДАНИЯ</span><div class="bar"></div></div>
+<div class="tickets">
+  <div class="ticket">
+    <div class="tno"><span class="num">02/14</span><span class="svc">INSTAGRAM</span></div>
+    <div class="tit">«Заказала новый свет…» reel</div>
+    <div class="sub">плейлист · видео+звук</div>
+    <div class="prow"><div class="rrail"><i></i></div><div class="pm"><span>47.2%</span><span>14.8 MB/s</span></div></div>
+  </div>
+  <div class="ticket">
+    <div class="stamp">ГОТОВО</div>
+    <div class="tno"><span class="num">01/01</span><span class="svc" style="background:var(--stamp)">SOUNDCLOUD</span></div>
+    <div class="tit">Forss — Flickermood</div>
+    <div class="sub">аудио · MP3 320</div>
+    <div class="pathline">~/Downloads/K DWNLD/<u>Flickermood.mp3</u><br>удержите плашку и перетащите файл</div>
+  </div>
+  <div class="ticket">
+    <div class="stamp err">ОТКАЗ</div>
+    <div class="tno"><span class="num">—</span><span class="svc">TIKTOK</span></div>
+    <div class="tit">@nightset — сет из подвала</div>
+    <div class="errt">Не получилось: запись закрыта. Качаются только открытые материалы</div>
+  </div>
+</div>
+<div class="foot">
+  <span class="kv">КВАРТАЛ</span><span class="f2">сделано kvartal records</span>
+  <span class="sp"></span><span class="f2">движок 1.0 · yt-dlp 2026.08.19</span>
+  <span class="b2">СМЕНА ЗАКРЫТА</span>
+</div>
+</div></body></html>

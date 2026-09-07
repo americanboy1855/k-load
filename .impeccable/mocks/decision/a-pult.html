@@ -1,0 +1,127 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf8">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{--gnd:#141210;--panel:#1D1A16;--edge:#2E2A24;--ink:#EFE7D8;--dim:#A89A85;--amber:#FFB254;--cyan:#5FD4E8;--red:#E4574A;--ok:#EFE7D8}
+*{margin:0;box-sizing:border-box}
+body{width:1240px;height:780px;background:var(--gnd);color:var(--ink);font:14px/1.45 -apple-system,'Helvetica Neue',sans-serif;overflow:hidden}
+.fx{font-family:'Chakra Petch',sans-serif}
+.mono{font-family:'IBM Plex Mono',monospace}
+.frame{height:100%;display:flex;flex-direction:column}
+/* верхняя шина */
+.bus{display:flex;align-items:center;gap:14px;padding:14px 22px;border-bottom:1px solid var(--edge)}
+.bus .mark{display:flex;align-items:center;gap:10px}
+.kv{font:700 12px 'Chakra Petch';letter-spacing:.22em;color:var(--dim);border:1px solid var(--edge);padding:5px 9px;border-radius:3px}
+.name{font:700 21px 'Chakra Petch';letter-spacing:.16em}
+.name b{color:var(--amber)}
+.spacer{flex:1}
+.vpn{display:flex;align-items:center;gap:8px;background:#241D12;border:1px solid #4A3A1E;color:#E8C88F;padding:6px 12px;border-radius:4px;font-size:12.5px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--amber);box-shadow:0 0 6px #FFB25488}
+.boosty{font:600 12px 'Chakra Petch';letter-spacing:.12em;color:var(--gnd);background:var(--amber);padding:7px 14px;border-radius:4px}
+/* вход канала */
+.deck{margin:20px 22px 0;background:var(--panel);border:1px solid var(--edge);border-radius:8px;padding:16px}
+.inrow{display:flex;gap:12px}
+.field{flex:1;background:#151310;border:1px solid var(--edge);border-radius:6px;padding:13px 14px;color:var(--dim);font-size:14.5px}
+.field em{color:#7A6F5D;font-style:normal}
+.go{font:700 15px 'Chakra Petch';letter-spacing:.1em;color:#191410;background:var(--amber);border-radius:6px;padding:0 26px;display:flex;align-items:center}
+.chips{display:flex;gap:22px;margin-top:13px;align-items:center}
+.grp{display:flex;gap:6px;align-items:center}
+.lbl{font:600 10.5px 'Chakra Petch';letter-spacing:.2em;color:#7A6F5D}
+.chip{font:600 12px 'Chakra Petch';letter-spacing:.06em;color:var(--dim);border:1px solid var(--edge);border-radius:4px;padding:5px 11px}
+.chip.on{color:#191410;background:var(--amber);border-color:var(--amber)}
+.chip.cy.on{color:#0E1517;background:var(--cyan);border-color:var(--cyan)}
+.dest{margin-left:auto;font-size:12px;color:var(--dim)}
+.dest b{color:var(--cyan);font-weight:600}
+.dest u{color:#7A6F5D;text-underline-offset:3px}
+/* карточка разбора */
+.card{margin:16px 22px 0;display:flex;gap:14px;background:var(--panel);border:1px solid var(--edge);border-radius:8px;padding:13px 14px;align-items:center}
+.thumb{width:88px;height:88px;border-radius:5px;background:linear-gradient(135deg,#2E4A63,#18232E);position:relative;flex:none}
+.thumb:after{content:"▶";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#EFE7D8CC;font-size:22px}
+.meta{flex:1;min-width:0}
+.badge{display:inline-block;font:600 10.5px 'Chakra Petch';letter-spacing:.14em;color:#0E1517;background:var(--cyan);border-radius:3px;padding:2px 7px}
+.t1{font-size:16px;font-weight:600;margin:6px 0 2px;white-space:nowrap;overflow:hidden}
+.t2{font-size:12.5px;color:var(--dim)}
+.t2 .mono{color:var(--cyan)}
+.hrow{display:flex;gap:6px;margin-top:9px;align-items:center}
+.card .go2{margin-left:8px}
+/* очередь: канальные полосы */
+.qhead{display:flex;padding:16px 22px 8px;font:600 10.5px 'Chakra Petch';letter-spacing:.22em;color:#7A6F5D}
+.strip{margin:0 22px 8px;background:var(--panel);border:1px solid var(--edge);border-radius:7px;display:flex;align-items:center;gap:13px;padding:10px 14px;height:76px}
+.led{width:9px;height:9px;border-radius:50%;flex:none}
+.led.w{background:var(--amber);box-shadow:0 0 8px #FFB254}
+.led.d{background:#B7E29A;box-shadow:0 0 6px #B7E29A66}
+.led.e{background:var(--red)}
+.th2{width:56px;height:56px;border-radius:4px;flex:none}
+.i1{background:linear-gradient(160deg,#5A2C55,#2A1230)}
+.i2{background:linear-gradient(160deg,#B34A16,#3D1A08)}
+.i3{background:linear-gradient(160deg,#1F5F5A,#0E2726)}
+.svc{font:600 10px 'Chakra Petch';letter-spacing:.12em;color:#0E1517;background:var(--dim);border-radius:3px;padding:2px 6px;flex:none}
+.stitle{flex:1;min-width:0}
+.st1{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st2{font-size:12px;color:var(--dim);margin-top:2px}
+.meter{width:230px;flex:none}
+.seg{display:flex;gap:3px;height:14px}
+.seg i{flex:1;background:#2A261F;border-radius:1.5px}
+.seg i.f{background:var(--amber);box-shadow:0 0 5px #FFB25455}
+.mrow{display:flex;justify-content:space-between;margin-top:5px}
+.pct{font:600 12px 'IBM Plex Mono';color:var(--cyan)}
+.done .meter{width:auto}
+.tag{font:600 11.5px 'IBM Plex Mono';color:#B7E29A;border:1px solid #33402A;border-radius:3px;padding:3px 8px}
+.fpath{font:500 12.5px 'IBM Plex Mono';color:var(--dim);margin-top:4px}
+.fpath u{color:var(--cyan);text-underline-offset:3px;cursor:grab}
+.err{color:#E8938A}
+.errline{font-size:12px;color:var(--red);margin-top:2px}
+/* низ */
+.foot{margin-top:auto;display:flex;align-items:center;gap:10px;padding:12px 22px;border-top:1px solid var(--edge)}
+.foot .f2{color:#7A6F5D;font-size:12px}
+.foot .sp{flex:1}
+.foot .b2{font:600 11.5px 'Chakra Petch';letter-spacing:.1em;color:var(--dim);border:1px solid var(--edge);padding:6px 12px;border-radius:4px}
+</style></head><body><div class="frame">
+<div class="bus">
+  <div class="mark"><span class="kv">КВАРТАЛ</span><span class="name fx">K<b>·</b>LOAD</span></div>
+  <div class="spacer"></div>
+  <div class="vpn"><span class="dot"></span>Для лучшей работы загрузчика - включите VPN</div>
+  <div class="boosty fx">BOOSTY · ПОДДЕРЖАТЬ</div>
+</div>
+<div class="deck">
+  <div class="inrow">
+    <div class="field"><em>Ссылки или название трека — по одной в строке</em></div>
+    <div class="go fx">СКАЧАТЬ · 2 ССЫЛКИ</div>
+  </div>
+  <div class="chips">
+    <div class="grp"><span class="chip on">ВИДЕО</span><span class="chip">МУЗЫКА</span></div>
+    <div class="grp"><span class="lbl">КАЧЕСТВО</span><span class="chip on">МАКС</span><span class="chip">1080</span><span class="chip">720</span></div>
+    <div class="grp"><span class="lbl">ЗВУК</span><span class="chip cy on">MP3</span><span class="chip">M4A</span><span class="chip">WAV</span></div>
+    <div class="dest">Сохраняю в <b>~/Downloads/K DWNLD</b> · <u>изменить</u></div>
+  </div>
+</div>
+<div class="card">
+  <div class="thumb"></div>
+  <div class="meta">
+    <span class="badge">YOUTUBE</span>
+    <div class="t1">a-ha — Take On Me (Remastered in 4K)</div>
+    <div class="t2">a-ha Official · <span class="mono">4:51</span> · в плейлисте ещё 13</div>
+    <div class="hrow"><span class="lbl">ДОСТУПНО</span><span class="chip">2160</span><span class="chip on">1080</span><span class="chip">720</span>
+      <span class="chip" style="margin-left:10px">ПЛЕЙЛИСТ ЦЕЛИКОМ</span></div>
+  </div>
+</div>
+<div class="qhead">ОЧЕРЕДЬ · 3 ЗАДАНИЯ</div>
+<div class="strip">
+  <span class="led w"></span><div class="th2 i1"></div><span class="svc" style="background:#E0A9F0">INSTAGRAM</span>
+  <div class="stitle"><div class="st1">Заказала новый свет… reel</div><div class="st2">Качаю 2 из 14</div></div>
+  <div class="meter"><div class="seg"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  <div class="mrow"><span class="pct">47.2%</span><span class="pct" style="color:#7A6F5D">14.8 MB/s</span></div></div>
+</div>
+<div class="strip done">
+  <span class="led d"></span><div class="th2 i2"></div><span class="svc" style="background:#FFB254">SOUNDCLOUD</span>
+  <div class="stitle"><div class="st1">Forss — Flickermood</div><div class="st2">Готово · MP3 320</div><div class="fpath">~/Downloads/K DWNLD/<u>Flickermood.mp3</u> · Удержите плашку и перетащите файл</div></div>
+  <span class="tag">ГОТОВО</span>
+</div>
+<div class="strip">
+  <span class="led e"></span><div class="th2 i3"></div><span class="svc" style="background:#8FE8DC">TIKTOK</span>
+  <div class="stitle"><div class="st1 err">@nightset — сет из подвала</div><div class="errline err">Не получилось: запись закрыта. Качаются только открытые материалы</div></div>
+</div>
+<div class="foot">
+  <span class="kv">КВАРТАЛ</span><span class="f2">сделано kvartal records</span>
+  <span class="sp"></span><span class="f2 mono">ENGINE 1.0 · YT-DLP 2026.08.19</span>
+</div>
+</div></body></html>

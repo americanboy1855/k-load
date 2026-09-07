@@ -1,0 +1,115 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf8">
+<link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{--mch:#17181B;--panel:#1F2126;--edge:#2C2F36;--ink:#E9EAEC;--dim:#8B919B;--led:#FF8A2A;--ledhot:#FFC24A;--grn:#8FE07A;--red:#FF5A4E;--blu:#5AA7FF}
+*{margin:0;box-sizing:border-box}
+body{width:1240px;height:780px;background:var(--mch);color:var(--ink);font:14px/1.45 -apple-system,sans-serif;overflow:hidden}
+.fx{font-family:'Saira Semi Condensed',sans-serif}
+.mono{font-family:'IBM Plex Mono',monospace}
+.frame{height:100%;display:flex;flex-direction:column}
+.head{display:flex;align-items:center;gap:16px;padding:16px 24px;border-bottom:1px solid var(--edge);background:var(--panel)}
+.logo{display:flex;align-items:center;gap:12px}
+.kv{font:700 10.5px 'Saira Semi Condensed';letter-spacing:.26em;color:var(--dim);border:1px solid var(--edge);padding:5px 8px;border-radius:3px}
+.name{font:800 22px 'Saira Semi Condensed';letter-spacing:.08em}
+.name i{font-style:normal;color:var(--led)}
+.sp{flex:1}
+.vpn{display:flex;gap:8px;align-items:center;background:#2A2114;border:1px solid #4E3D1C;color:#EFC98A;padding:6px 12px;border-radius:4px;font:600 12.5px 'Saira Semi Condensed'}
+.dot{width:7px;height:7px;background:var(--led);border-radius:2px;box-shadow:0 0 7px var(--led)}
+.boosty{font:700 12px 'Saira Semi Condensed';letter-spacing:.1em;color:#17181B;background:var(--led);padding:7px 14px;border-radius:3px}
+/* пульт: транспорт */
+.tr{margin:16px 24px 0;display:flex;gap:14px;align-items:stretch;background:var(--panel);border:1px solid var(--edge);border-radius:8px;padding:14px}
+.field{flex:1;background:#141519;border:1px solid var(--edge);border-radius:5px;padding:12px 14px;color:var(--dim);font-size:14px}
+.go{display:flex;align-items:center;gap:12px;background:var(--led);color:#1A1206;border-radius:5px;padding:0 24px;font:800 15px 'Saira Semi Condensed';letter-spacing:.12em}
+.go .sq{width:10px;height:10px;background:#1A1206}
+.chips{display:flex;gap:18px;padding:12px 24px 0;align-items:center}
+.grp{display:flex;gap:5px;align-items:center}
+.lbl{font:700 10px 'Saira Semi Condensed';letter-spacing:.22em;color:#5F6570}
+.chip{font:600 12px 'Saira Semi Condensed';border:1px solid var(--edge);color:var(--dim);border-radius:3px;padding:4px 10px;background:var(--panel)}
+.chip.on{background:var(--ink);color:#141519;border-color:var(--ink)}
+.dest{margin-left:auto;font-size:12px;color:var(--dim)}
+.dest b{color:var(--blu)}
+/* секвенсор */
+.seq{margin:16px 24px 0;background:var(--panel);border:1px solid var(--edge);border-radius:8px;overflow:hidden;flex:1}
+.seqh{display:flex;justify-content:space-between;padding:9px 14px;font:700 10.5px 'Saira Semi Condensed';letter-spacing:.22em;color:#5F6570;border-bottom:1px solid var(--edge)}
+.row2{display:grid;grid-template-columns:220px 1fr 120px;gap:14px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--edge)}
+.row2:last-child{border-bottom:none}
+.mmain{min-width:0}
+.m1{font:700 13.5px 'Saira Semi Condensed';white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.m2{font:600 12px 'Saira Semi Condensed';color:var(--dim);margin-top:2px}
+.svc{display:inline-block;font:700 9.5px 'Saira Semi Condensed';letter-spacing:.1em;color:#141519;border-radius:2px;padding:1px 6px;margin-right:7px;vertical-align:1px}
+.steps{display:grid;grid-template-columns:repeat(16,1fr);gap:5px}
+.stp{height:30px;border-radius:3px;background:#26292F;border:1px solid #303440}
+.stp.p{background:var(--led);border-color:var(--led);box-shadow:0 0 8px #FF8A2A66}
+.stp.p.cur{background:var(--ledhot);box-shadow:0 0 14px var(--ledhot)}
+.stp.done{background:#3A4632;border-color:#465540}
+.stp.err{background:#4A2420;border-color:#5E2E29}
+.stp.play{background:var(--blu);border-color:var(--blu);box-shadow:0 0 8px #5AA7FF55}
+.bcol{text-align:right}
+.state{font:800 11px 'Saira Semi Condensed';letter-spacing:.14em;color:var(--led)}
+.state.ok{color:var(--grn)}.state.er{color:var(--red)}
+.path{font:500 11px 'IBM Plex Mono';color:var(--dim);margin-top:4px}
+.path u{color:var(--blu);text-underline-offset:3px}
+.errline{font:600 11.5px 'Saira Semi Condensed';color:var(--red);margin-top:3px}
+.foot{margin-top:auto;display:flex;align-items:center;gap:12px;padding:13px 24px;border-top:1px solid var(--edge);background:var(--panel)}
+.foot .f2{color:#5F6570;font:600 12px 'Saira Semi Condensed'}
+.foot .sp{flex:1}
+.foot .b2{font:700 11.5px 'Saira Semi Condensed';letter-spacing:.1em;border:1px solid var(--edge);padding:5px 11px;border-radius:3px}
+</style></head><body><div class="frame">
+<div class="head">
+  <div class="logo"><span class="kv">КВАРТАЛ</span><span class="name fx">K<i>·</i>LOAD</span></div>
+  <span class="sp"></span>
+  <span class="vpn"><span class="dot"></span>Для лучшей работы загрузчика - включите VPN</span>
+  <span class="boosty fx">BOOSTY · ПОДДЕРЖАТЬ</span>
+</div>
+<div class="tr">
+  <div class="field">Ссылки или название трека — по одной в строке</div>
+  <div class="go fx"><span class="sq"></span>СКАЧАТЬ · 2 ССЫЛКИ</div>
+</div>
+<div class="chips">
+  <div class="grp"><span class="chip on">ВИДЕО</span><span class="chip">МУЗЫКА</span></div>
+  <div class="grp"><span class="lbl">КАЧЕСТВО</span><span class="chip on">МАКС</span><span class="chip">1080</span><span class="chip">720</span></div>
+  <div class="grp"><span class="lbl">ЗВУК</span><span class="chip on">MP3</span><span class="chip">M4A</span><span class="chip">WAV</span></div>
+  <div class="dest">Сохраняю в <b>~/Downloads/K DWNLD</b> · изменить</div>
+</div>
+<div class="seq">
+  <div class="seqh fx"><span>ПАТТЕРН · ОЧЕРЕДЬ — 3 ЗАДАНИЯ</span><span>16 ШАГОВ · ДВИЖОК ГОТОВ</span></div>
+  <div class="row2">
+    <div class="mmain fx"><span class="svc" style="background:#E0A9F0">INSTAGRAM</span><span class="m1" style="display:inline">Заказала новый свет… reel</span>
+      <div class="m2">Качаю 2 из 14 · 14.8 MB/s</div></div>
+    <div class="steps">
+      <div class="stp p done"></div><div class="stp p done"></div><div class="stp p done"></div><div class="stp p done"></div>
+      <div class="stp p done"></div><div class="stp p done"></div><div class="stp p"></div><div class="stp cur p"></div>
+      <div class="stp"></div><div class="stp"></div><div class="stp"></div><div class="stp"></div>
+      <div class="stp"></div><div class="stp"></div><div class="stp"></div><div class="stp"></div>
+    </div>
+    <div class="bcol"><span class="state fx">▶ 47.2%</span><div class="path mono">2/14 · h264</div></div>
+  </div>
+  <div class="row2">
+    <div class="mmain fx"><span class="svc" style="background:var(--led)">SOUNDCLOUD</span><span class="m1" style="display:inline">Forss — Flickermood</span>
+      <div class="path">~/Downloads/K DWNLD/<u>Flickermood.mp3</u> · Удержите плашку и перетащите файл</div></div>
+    <div class="steps">
+      <div class="stp p done"></div><div class="stp p done"></div><div class="stp p done"></div><div class="stp p done"></div>
+      <div class="stp p done"></div><div class="stp p done"></div><div class="stp p done"></div><div class="stp p done"></div>
+      <div class="stp done"></div><div class="stp done"></div><div class="stp done"></div><div class="stp done"></div>
+      <div class="stp done"></div><div class="stp done"></div><div class="stp done"></div><div class="stp done"></div>
+    </div>
+    <div class="bcol"><span class="state fx ok">■ ГОТОВО</span><div class="path mono">mp3 320</div></div>
+  </div>
+  <div class="row2">
+    <div class="mmain fx"><span class="svc" style="background:#8FE8DC">TIKTOK</span><span class="m1" style="display:inline;color:var(--red)">@nightset — сет из подвала</span>
+      <div class="errline">Не получилось: запись закрыта. Качаются только открытые материалы</div></div>
+    <div class="steps">
+      <div class="stp err"></div><div class="stp"></div><div class="stp"></div><div class="stp"></div>
+      <div class="stp"></div><div class="stp"></div><div class="stp"></div><div class="stp"></div>
+      <div class="stp"></div><div class="stp"></div><div class="stp"></div><div class="stp"></div>
+      <div class="stp"></div><div class="stp"></div><div class="stp"></div><div class="stp"></div>
+    </div>
+    <div class="bcol"><span class="state fx er">■ СБОЙ</span><div class="path mono">—</div></div>
+  </div>
+</div>
+<div class="foot">
+  <span class="kv">КВАРТАЛ</span><span class="f2">сделано kvartal records</span>
+  <span class="sp"></span><span class="f2">движок 1.0 · yt-dlp 2026.08.19</span>
+  <span class="b2 fx">ПАТТЕРН B</span>
+</div>
+</div></body></html>
