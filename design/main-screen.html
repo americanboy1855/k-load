@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K LOAD — макет · главный экран</title>
+<style>
+/* ===== шрифты webcore (кириллица) ===== */
+@font-face{font-family:'Chakra Petch';src:url('assets/fonts/ChakraPetch-Regular.ttf');font-weight:400;font-style:normal}
+@font-face{font-family:'Chakra Petch';src:url('assets/fonts/ChakraPetch-Bold.ttf');font-weight:700;font-style:normal}
+@font-face{font-family:'IBM Plex Mono';src:url('assets/fonts/IBMPlexMono-Regular.ttf');font-weight:400;font-style:normal}
+@font-face{font-family:'IBM Plex Mono';src:url('assets/fonts/IBMPlexMono-Bold.ttf');font-weight:700;font-style:normal}
+
+/* ===== палитра B (amber terminal) + пластик корпуса ===== */
+:root{
+  --desk:#0B0B0D;
+  --plastic:#262321; --plastic-hi:#3B3733; --plastic-lo:#141211; --plastic-edge:#0C0B0A;
+  --bg:#050300; --screen:#070402;
+  --amber:#FFB000; --soft:#FFCF7A; --dim:#33230A; --dimtxt:#8A6E38;
+  --white:#EDE8DC;
+}
+
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  background:var(--desk);
+  background-image:radial-gradient(1200px 800px at 50% 18%,#111114 0%,#0B0B0D 55%,#060607 100%);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:18px;min-height:100vh;overflow:hidden;
+  font-family:'Chakra Petch',sans-serif;color:var(--white);
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ================================================================
+   ТЕЛЕВИЗОР = окно приложения (macOS)
+   ================================================================ */
+.tv{
+  position:relative;
+  width:var(--w,500px);height:var(--h,800px);
+  min-width:440px;min-height:760px;max-width:680px;max-height:1020px;
+  border-radius:26px;
+  background:linear-gradient(155deg,#2E2A27 0%,var(--plastic) 34%,#1D1B19 78%,#161413 100%);
+  box-shadow:
+    0 40px 90px rgba(0,0,0,.62),
+    0 6px 18px rgba(0,0,0,.5),
+    inset 0 1px 0 rgba(255,255,255,.09),
+    inset 1px 0 0 rgba(255,255,255,.04),
+    inset -1px -1px 0 rgba(0,0,0,.6);
+  display:flex;flex-direction:column;
+  padding:26px 22px 0;
+  user-select:none;
+}
+
+/* ---- экран: стекло с лёгкой выпуклостью ---- */
+.glass{
+  position:relative;flex:1;border-radius:16px;overflow:hidden;
+  background:var(--screen);
+  box-shadow:
+    inset 0 0 0 1px #000,
+    inset 0 2px 14px rgba(0,0,0,.9),
+    inset 0 0 70px rgba(0,0,0,.62),
+    0 1px 0 rgba(255,255,255,.05);
+}
+/* блик выпуклого стекла — статичный, не эффект */
+.glass::before{
+  content:"";position:absolute;inset:0;z-index:6;pointer-events:none;
+  background:
+    radial-gradient(120% 90% at 50% 8%,rgba(255,255,255,.05) 0%,rgba(255,255,255,0) 34%),
+    radial-gradient(140% 120% at 50% 50%,rgba(0,0,0,0) 58%,rgba(0,0,0,.5) 100%);
+}
+/* сканлайны */
+.glass::after{
+  content:"";position:absolute;inset:0;z-index:5;pointer-events:none;
+  background:repeating-linear-gradient(0deg,rgba(0,0,0,.22) 0 1px,transparent 1px 3px);
+  opacity:.5;
+}
+#noise{position:absolute;inset:0;z-index:1;width:100%;height:100%;
+  opacity:.14;image-rendering:pixelated;
+  animation:flicker 4.2s infinite}
+@keyframes flicker{0%,100%{opacity:.14}92%{opacity:.14}93%{opacity:.11}94%{opacity:.15}96%{opacity:.12}}
+
+/* ---- содержимое экрана ---- */
+.ui{position:absolute;inset:0;z-index:4;opacity:0}
+.booted .ui{opacity:1;transition:opacity .5s ease .05s}
+
+/* mac-кнопки: только они наверху */
+.lights{position:absolute;top:14px;left:16px;display:flex;gap:8px;z-index:7}
+.light{width:12px;height:12px;border-radius:50%;border:.5px solid rgba(0,0,0,.45);
+  box-shadow:inset 0 0 1px rgba(255,255,255,.35)}
+.light.r{background:#FF5F57}.light.y{background:#FEBC2E}
+.light.g{background:#28C840;filter:saturate(.25) brightness(.62);cursor:default}
+.light:not(.g){cursor:pointer}
+.light:not(.g):active{filter:brightness(.8)}
+.tv:not(.booted) .light.g{cursor:help}
+
+/* ---- строка поиска ---- */
+.search-wrap{position:absolute;left:7%;right:7%;top:40%;z-index:4}
+.search{
+  position:relative;display:flex;align-items:center;gap:11px;min-height:50px;
+  background:rgba(5,3,0,.72);
+  border:1px solid rgba(255,176,0,.26);
+  border-radius:10px;padding:13px 16px;cursor:text;
+  transition:border-color .25s ease, box-shadow .25s ease;
+}
+.search.focus{border-color:rgba(255,176,0,.62);box-shadow:0 0 0 1px rgba(255,176,0,.14),0 0 22px rgba(255,176,0,.10)}
+.search .ic{flex:none;display:flex;color:var(--dimtxt)}
+.search.focus .ic{color:var(--amber)}
+.search input{
+  flex:1;background:none;border:none;outline:none;padding:0;
+  font:400 14px/1.35 'Chakra Petch',sans-serif;letter-spacing:.01em;
+  color:var(--soft);caret-color:var(--amber);min-width:0;
+}
+.search .ph{
+  position:absolute;left:52px;right:18px;top:50%;transform:translateY(-50%);
+  font:400 13px/1.45 'Chakra Petch',sans-serif;letter-spacing:.01em;
+  color:#9A7B3F;pointer-events:none;cursor:text;
+}
+.search .ph.off{display:none}
+
+/* ---- состояния под строкой: ищу / найдено ---- */
+.state{margin-top:16px;min-height:44px;font-family:'IBM Plex Mono',monospace}
+.state .row1{display:flex;align-items:baseline;gap:10px;justify-content:space-between}
+.state .word{font-weight:700;font-size:12px;letter-spacing:.22em;color:var(--amber)}
+.state .pct{font-size:12px;color:var(--dimtxt);font-variant-numeric:tabular-nums}
+.scan{margin-top:8px;height:3px;background:rgba(255,176,0,.12);position:relative;overflow:hidden;border-radius:2px}
+.scan i{position:absolute;top:0;bottom:0;left:0;width:34%;background:var(--amber);
+  box-shadow:0 0 10px rgba(255,176,0,.55);border-radius:2px}
+.state.found .word{color:var(--soft)}
+.state .note{margin-top:9px;font-size:11px;letter-spacing:.06em;color:#6E5A31}
+.hidden{display:none}
+
+/* ================================================================
+   ВКЛЮЧЕНИЕ ТЕЛЕВИЗОРА (CRT power-on) — оверлей внутри стекла
+   ================================================================ */
+.boot{position:absolute;inset:0;z-index:9;background:#000;pointer-events:auto;cursor:pointer}
+.boot .beam{
+  position:absolute;left:50%;top:50%;width:2px;height:2px;background:#FFF;
+  transform:translate(-50%,-50%);border-radius:50%;
+  box-shadow:0 0 18px 4px rgba(255,255,255,.9),0 0 60px 18px rgba(255,220,150,.5);
+  animation:beam 1.5s cubic-bezier(.2,.7,.3,1) forwards;
+}
+@keyframes beam{
+  0%   {width:2px;height:2px;opacity:0}
+  12%  {width:3px;height:3px;opacity:1}
+  30%  {width:2px;height:2px;transform:translate(-50%,-50%) scaleX(1)}
+  44%  {width:96%;height:3px;border-radius:2px;transform:translate(-50%,-50%);opacity:1}
+  62%  {width:100%;height:100%;border-radius:0;transform:translate(0,0);opacity:.95;
+        box-shadow:0 0 90px 30px rgba(255,240,210,.85)}
+  78%  {opacity:.75}
+  100% {width:100%;height:100%;border-radius:0;transform:translate(0,0);opacity:0}
+}
+.booted .boot{display:none}
+
+/* ---- VPN-плашка: системное уведомление внутри экрана ---- */
+.vpn{
+  position:absolute;top:14px;right:14px;z-index:8;max-width:320px;
+  display:flex;gap:11px;align-items:flex-start;
+  background:rgba(13,9,2,.92);
+  border:1px solid rgba(255,176,0,.34);
+  border-radius:8px;padding:12px 13px;
+  box-shadow:0 10px 26px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,176,0,.10);
+  transform:translateX(calc(100% + 30px));
+  transition:transform .5s cubic-bezier(.2,.9,.25,1);
+}
+.vpn.show{transform:translateX(0)}
+.vpn .vic{flex:none;margin-top:1px;color:var(--amber)}
+.vpn .vt{font:400 12.5px/1.45 'Chakra Petch',sans-serif;color:var(--soft)}
+.vpn .vt b{font-weight:700;color:var(--white)}
+.vpn .x{flex:none;margin-left:2px;background:none;border:none;color:#6E5A31;cursor:pointer;
+  font:700 13px 'IBM Plex Mono',monospace;line-height:1;padding:2px}
+.vpn .x:hover{color:var(--amber)}
+
+/* ================================================================
+   НИЖНЯЯ РАМКА: кнопка папки · выдавленный логотип · Boosty
+   ================================================================ */
+.band{
+  height:80px;flex:none;display:flex;align-items:center;
+  padding:0 20px;position:relative;
+}
+.plate{
+  width:46px;height:46px;border-radius:50%;flex:none;cursor:pointer;
+  border:1px solid var(--plastic-edge);
+  background:radial-gradient(circle at 34% 28%,#413D39 0%,#2A2724 52%,#1B1917 100%);
+  box-shadow:
+    0 3px 5px rgba(0,0,0,.6),
+    0 1px 2px rgba(0,0,0,.5),
+    inset 0 1px 1px rgba(255,255,255,.11),
+    inset 0 -3px 5px rgba(0,0,0,.55);
+  display:flex;align-items:center;justify-content:center;
+  color:#151312;transition:transform .06s ease;
+}
+.plate:active{transform:translateY(1px);
+  box-shadow:0 1px 2px rgba(0,0,0,.55), inset 0 2px 5px rgba(0,0,0,.65), inset 0 1px 1px rgba(255,255,255,.05)}
+.plate svg,.plate span{filter:drop-shadow(0 1px 0 rgba(255,255,255,.08))}
+.plate .dollar{font:700 19px 'Chakra Petch',sans-serif;color:#161413;line-height:1;text-decoration:none}
+a.plate{text-decoration:none}
+
+.logo-deboss{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-52%);
+  height:24px;color:#161412;
+  filter:drop-shadow(0 1px 0 rgba(255,255,255,.075)) drop-shadow(0 -1px 1px rgba(0,0,0,.7));
+}
+.logo-deboss svg{height:24px;width:auto;display:block}
+
+/* ---- ручка изменения размера ---- */
+.grip{position:absolute;right:6px;bottom:6px;width:18px;height:18px;cursor:nwse-resize;z-index:20;
+  opacity:.5}
+.grip::before{content:"";position:absolute;inset:4px;
+  background:repeating-linear-gradient(135deg,rgba(255,255,255,.25) 0 1px,transparent 1px 5px);
+  border-radius:2px}
+.grip:hover{opacity:.9}
+
+/* ---- шторка-подсказка выбранной папки (терминальная строка) ---- */
+.toast{
+  position:absolute;left:50%;bottom:96px;transform:translateX(-50%) translateY(6px);
+  z-index:7;font:400 11.5px/1 'IBM Plex Mono',monospace;letter-spacing:.04em;
+  color:var(--soft);background:rgba(5,3,0,.9);border:1px solid rgba(255,176,0,.3);
+  border-radius:6px;padding:9px 13px;opacity:0;pointer-events:none;
+  transition:opacity .3s ease, transform .3s ease;white-space:nowrap}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast b{color:var(--amber);font-weight:700}
+
+/* ================================================================
+   ДЕМО-ПУЛЬТ (вне макета — только для просмотра)
+   ================================================================ */
+.demo{display:flex;gap:10px;align-items:center;
+  font:400 11px/1 'IBM Plex Mono',monospace;color:#6B6B70;letter-spacing:.06em;user-select:none}
+.demo button{
+  font:700 10.5px 'IBM Plex Mono',monospace;letter-spacing:.12em;cursor:pointer;
+  color:#9A9AA0;background:#131316;border:1px solid #26262B;border-radius:5px;padding:7px 11px}
+.demo button:hover{color:#CFCFD4;border-color:#3A3A41}
+.demo button.on{color:#0A0A0A;background:var(--amber);border-color:var(--amber)}
+.demo .sep{color:#3A3A3F}
+
+@media (prefers-reduced-motion: reduce){
+  #noise{animation:none}
+  .boot{display:none}
+  .ui{opacity:1}
+  .vpn{transition:opacity .2s ease;transform:none;opacity:0;pointer-events:none}
+  .vpn.show{opacity:1;pointer-events:auto}
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════ ТЕЛЕВИЗОР ═══════════ -->
+<div class="tv" id="tv">
+  <div class="glass" id="glass">
+    <canvas id="noise"></canvas>
+
+    <!-- mac-кнопки; зелёная отключена — во весь экран нельзя -->
+    <div class="lights" title="Во весь экран недоступно">
+      <div class="light r" title="Закрыть"></div>
+      <div class="light y" title="Свернуть"></div>
+      <div class="light g"></div>
+    </div>
+
+    <!-- VPN-уведомление (появляется через 2 с, если VPN выключен) -->
+    <div class="vpn" id="vpn">
+      <svg class="vic" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" shape-rendering="crispEdges"><path d="M2 3h12M8 3v3M5 6h6l3 7H2l3-7z"/></svg>
+      <div class="vt">Для лучшей работы загрузчика - <b>включите VPN</b></div>
+      <button class="x" id="vpn-x" title="Скрыть">×</button>
+    </div>
+
+    <!-- поисковая строка — единственный элемент интерфейса -->
+    <div class="search-wrap">
+      <div class="search" id="search">
+        <span class="ic">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="miter" shape-rendering="crispEdges">
+            <path d="M6.5 9.5l3-3"/>
+            <path d="M5 7L3.5 8.5a2 2 0 002.8 2.8L8 9.7"/>
+            <path d="M11 9l1.5-1.5a2 2 0 00-2.8-2.8L8 6.3"/>
+          </svg>
+        </span>
+        <input id="q" type="text" autocomplete="off" spellcheck="false" aria-label="Вставьте ссылку или напишите название того что нужно скачать">
+        <label class="ph" for="q" id="ph">Вставьте ссылку или напишите название того что нужно скачать</label>
+      </div>
+      <div class="state hidden" id="state">
+        <div class="row1"><span class="word" id="sw">ИЩУ…</span><span class="pct" id="sp">0%</span></div>
+        <div class="scan"><i id="si"></i></div>
+        <div class="note hidden" id="sn">меню разбора — следующий этап макета</div>
+      </div>
+    </div>
+
+    <!-- терминальная подсказка выбранной папки -->
+    <div class="toast" id="toast">ПАПКА: <b>~/Downloads/K DWNLD</b></div>
+
+    <!-- включение телевизора -->
+    <div class="boot" id="boot"><div class="beam"></div></div>
+  </div>
+
+  <!-- нижняя рамка -->
+  <div class="band">
+    <button class="plate" id="folder" title="Выбрать папку загрузок">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+        <path d="M2.5 5.5c0-.8.7-1.5 1.5-1.5h3.2c.4 0 .8.2 1.1.5l.9 1h7.3c.8 0 1.5.7 1.5 1.5v7.5c0 .8-.7 1.5-1.5 1.5H4c-.8 0-1.5-.7-1.5-1.5v-9z"/>
+      </svg>
+    </button>
+    <div class="logo-deboss" title="kvartal">
+      <svg version="1.0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000.000000 340.000000" preserveAspectRatio="xMidYMid meet">
+        <g transform="translate(0.000000,340.000000) scale(0.100000,-0.100000)" fill="currentColor" stroke="none">
+        <path d="M1710 2937 c-60 -21 -62 -29 -62 -420 0 -194 0 -468 1 -609 1 -142 0 -262 -3 -267 -3 -5 -2 -80 3 -168 13 -204 1 -193 203 -193 198 0 208 5 209 98 1 37 2 123 3 191 l3 125 38 33 c49 42 73 39 99 -12 12 -22 37 -65 56 -95 20 -30 49 -80 65 -110 69 -133 109 -192 143 -212 50 -30 372 -26 407 4 38 33 32 55 -50 176 -41 61 -75 114 -75 118 0 3 -13 24 -28 47 -56 83 -100 153 -127 202 -15 28 -43 73 -62 102 -45 68 -55 105 -36 132 8 12 19 21 25 21 5 0 54 45 108 100 107 109 115 113 131 73 6 -16 18 -40 26 -55 8 -16 20 -49 28 -75 16 -58 41 -127 59 -168 31 -67 66 -161 66 -177 0 -9 4 -19 9 -22 5 -3 14 -27 20 -52 7 -26 34 -95 61 -155 28 -60 50 -112 50 -116 0 -4 11 -37 25 -73 36 -95 44 -98 244 -98 l163 0 39 39 c21 21 39 46 39 55 0 8 17 52 39 97 21 45 42 93 46 107 6 23 36 97 70 175 7 17 25 64 39 105 15 41 36 95 46 120 23 58 47 120 54 142 4 14 10 15 38 7 18 -5 53 -9 77 -9 25 0 70 -5 100 -11 79 -16 120 2 152 66 53 106 283 124 333 26 15 -28 22 -101 11 -101 -3 0 -38 -9 -78 -19 -39 -10 -112 -24 -162 -31 -354 -46 -509 -146 -545 -350 -31 -181 49 -332 216 -405 138 -60 422 -40 518 36 49 39 69 39 94 3 32 -48 61 -52 396 -52 l299 0 29 28 c27 28 28 32 29 137 3 357 9 521 19 548 40 105 153 172 300 177 l95 3 2 -230 c3 -294 14 -363 68 -465 26 -49 90 -119 120 -131 17 -7 41 -20 55 -28 35 -23 90 -41 125 -41 17 0 36 -5 42 -11 19 -19 227 -6 298 18 33 11 71 23 85 26 14 4 59 38 100 77 41 40 76 67 78 61 8 -23 63 -91 94 -114 71 -54 149 -72 313 -72 162 0 238 17 312 72 40 29 33 30 81 -17 l40 -40 183 -1 c101 -1 252 -1 334 0 202 2 194 -7 197 214 1 89 1 171 1 182 -1 11 -2 289 -3 617 l-1 598 -24 27 -23 28 -154 -1 c-173 -1 -201 -10 -212 -66 -3 -17 -6 -163 -6 -325 0 -194 -3 -292 -10 -288 -6 3 -10 14 -10 25 0 10 -21 45 -46 79 -93 123 -268 191 -495 191 -263 0 -455 -97 -535 -269 -60 -130 -45 -159 87 -166 46 -2 107 -9 135 -15 68 -14 95 -3 140 60 43 60 53 66 137 83 72 16 157 1 188 -31 19 -19 33 -101 21 -118 -7 -11 -120 -36 -267 -59 -178 -27 -323 -75 -366 -121 -34 -36 -39 -30 -39 39 0 95 -5 98 -183 102 -190 4 -178 18 -182 -202 -1 -92 -7 -179 -13 -193 -33 -83 -162 -98 -217 -26 -18 25 -20 46 -25 264 -3 130 -3 255 0 277 l5 40 246 5 c211 5 249 8 272 23 15 10 28 21 28 25 13 68 12 191 -2 219 -16 29 -61 34 -299 32 -107 -1 -207 -1 -222 0 l-28 1 0 175 0 175 -37 18 c-36 17 -155 21 -303 9 -72 -5 -81 -28 -81 -202 0 -72 -4 -136 -7 -141 -4 -5 -43 -9 -88 -9 -107 -1 -203 -38 -264 -101 -46 -48 -59 -49 -58 -4 2 67 -48 84 -229 78 -124 -5 -136 -7 -159 -29 -21 -20 -24 -30 -19 -58 8 -43 -4 -163 -16 -155 -5 3 -16 20 -24 37 -18 41 -67 92 -134 140 -170 122 -566 131 -753 17 -41 -25 -47 -25 -41 -2 10 39 -33 51 -188 51 -207 0 -245 -14 -255 -97 -5 -46 -22 -96 -89 -267 -26 -66 -50 -137 -54 -157 -5 -21 -13 -43 -18 -50 -5 -7 -18 -39 -28 -70 -11 -32 -23 -58 -27 -58 -14 0 -37 44 -47 90 -16 72 -60 201 -87 254 -13 28 -24 58 -24 68 0 11 -8 35 -19 56 -10 20 -28 70 -40 109 -13 40 -31 83 -41 95 l-18 23 -334 0 c-297 -1 -337 -3 -365 -18 -18 -10 -33 -22 -33 -27 0 -6 -45 -63 -99 -128 -154 -182 -168 -198 -177 -189 -4 4 -7 168 -7 365 0 197 -4 365 -9 375 -17 34 -74 47 -197 46 -64 0 -132 -5 -151 -12z m2894 -1113 c24 -63 -10 -170 -70 -223 -125 -110 -286 -109 -329 2 -17 44 -17 46 5 85 35 62 71 79 235 113 54 11 106 24 115 29 23 14 37 12 44 -6z m2919 -68 c-2 -89 -22 -131 -86 -177 -111 -81 -262 -67 -296 26 -38 105 42 163 274 200 22 3 51 13 65 20 40 22 45 14 43 -69z"/>
+        </g>
+      </svg>
+    </div>
+    <a class="plate" style="margin-left:auto" href="https://boosty.to/kvartalrecords/donate" target="_blank" rel="noopener" title="Поддержать на Boosty">
+      <span class="dollar">$</span>
+    </a>
+  </div>
+
+  <div class="grip" id="grip" title="Потяни — окно увеличивается"></div>
+</div>
+
+<!-- демо-пульт (вне макета) -->
+<div class="demo">
+  <span>ДЕМО ·</span>
+  <button id="d-vpn-off" class="on">VPN ВЫКЛ</button>
+  <button id="d-vpn-on">VPN ВКЛ</button>
+  <span class="sep">|</span>
+  <button id="d-replay">ПОВТОРИТЬ ВКЛЮЧЕНИЕ</button>
+  <span class="sep">|</span>
+  <span>окно: тяни за угол ↓</span>
+</div>
+
+<script>
+const tv=document.getElementById('tv'),glass=document.getElementById('glass'),
+      boot=document.getElementById('boot'),vpn=document.getElementById('vpn'),
+      q=document.getElementById('q'),search=document.getElementById('search'),
+      state=document.getElementById('state'),sw=document.getElementById('sw'),
+      sp=document.getElementById('sp'),si=document.getElementById('si'),sn=document.getElementById('sn'),
+      toast=document.getElementById('toast');
+const hash=new URLSearchParams(location.hash.slice(1));
+
+/* ---- шум телевизора: канвас 120×72, перерисовка ~12 fps ---- */
+const cv=document.getElementById('noise'),cx=cv.getContext('2d',{alpha:false});
+cv.width=120;cv.height=72;
+let noiseOn=true;
+function drawNoise(){
+  if(!noiseOn)return;
+  const img=cx.createImageData(120,72),d=img.data;
+  for(let i=0;i<d.length;i+=4){const v=(Math.random()*255)|0;d[i]=v;d[i+1]=v;d[i+2]=v;d[i+3]=255;}
+  cx.putImageData(img,0,0);
+  setTimeout(()=>requestAnimationFrame(drawNoise),80);
+}
+drawNoise();
+
+/* ---- включение: точка → линия → вспышка → интерфейс ---- */
+let booted=false;
+function finishBoot(){
+  if(booted)return;booted=true;
+  tv.classList.add('booted');
+  setTimeout(()=>{ if(hash.get('vpn')!=='on' && vpnDemoOff) showVpn(); },2000);
+}
+if(hash.get('boot')==='skip'){finishBoot();}
+else{
+  boot.addEventListener('click',finishBoot);
+  window.addEventListener('keydown',e=>{if(!booted&&(e.key==='Enter'||e.key===' '))finishBoot();});
+  boot.addEventListener('animationend',finishBoot);
+  setTimeout(finishBoot,2600); // страховка, если событие анимации потерялось
+}
+
+/* ---- VPN ---- */
+let vpnDemoOff=true;
+function showVpn(){vpn.classList.add('show')}
+document.getElementById('vpn-x').onclick=()=>vpn.classList.remove('show');
+const bOff=document.getElementById('d-vpn-off'),bOn=document.getElementById('d-vpn-on');
+function setVpnDemo(off){
+  vpnDemoOff=off;
+  bOff.classList.toggle('on',off);bOn.classList.toggle('on',!off);
+  if(!off)vpn.classList.remove('show');
+  else if(booted)showVpn();
+}
+bOff.onclick=()=>setVpnDemo(true);
+bOn.onclick=()=>setVpnDemo(false);
+
+/* ---- повтор включения ---- */
+document.getElementById('d-replay').onclick=()=>{
+  booted=false;tv.classList.remove('booted');vpn.classList.remove('show');
+  const b2=boot.querySelector('.beam');b2.style.animation='none';void b2.offsetWidth;b2.style.animation='';
+  boot.style.display='';setTimeout(()=>{finishBoot();},1600);
+  boot.removeEventListener('animationend',finishBoot);
+  boot.addEventListener('animationend',finishBoot);
+};
+
+/* ---- поиск: пауза в печати → ИЩУ… → НАЙДЕНО ---- */
+let timer=null,prog=null;
+function resetState(){clearInterval(prog);state.classList.add('hidden');si.style.width='0%';
+  ph.classList.toggle('off',q.value.length>0);}
+q.addEventListener('input',()=>{
+  clearTimeout(timer);
+  if(!q.value.trim()){resetState();return;}
+  timer=setTimeout(startSearch,600);
+});
+function startSearch(){
+  ph.classList.add('off');
+  state.classList.remove('hidden','found');sn.classList.add('hidden');
+  sw.textContent='ИЩУ…';
+  let p=0;clearInterval(prog);
+  prog=setInterval(()=>{
+    p+=Math.random()*9+3;if(p>=100){p=100;clearInterval(prog);found();}
+    sp.textContent=Math.floor(p)+'%';si.style.width=p*0.9+'%';
+  },110);
+}
+function found(){
+  state.classList.add('found');sw.textContent='НАЙДЕНО';sp.textContent='';
+  si.style.width='100%';sn.classList.remove('hidden');
+}
+if(hash.get('demo')==='found'){finishBoot();q.value='https://youtu.be/jNQXAC9IVRw';startSearch();}
+else if(hash.get('demo')==='search'){finishBoot();q.value='a-ha take on me';startSearch();}
+
+/* ---- фокус строки и плейсхолдер ---- */
+search.addEventListener('click',()=>q.focus());
+q.addEventListener('input',()=>ph.classList.toggle('off',q.value.length>0));
+q.addEventListener('focus',()=>search.classList.add('focus'));
+q.addEventListener('blur',()=>search.classList.remove('focus'));
+
+/* ---- папка: терминальная подсказка ---- */
+let toastT=null;
+document.getElementById('folder').onclick=()=>{
+  toast.classList.add('show');clearTimeout(toastT);
+  toastT=setTimeout(()=>toast.classList.remove('show'),2200);
+};
+
+/* ---- изменение окна: ручка за нижний правый угол ---- */
+const grip=document.getElementById('grip');
+let sx,sy,sw0,sh0,dragging=false;
+grip.addEventListener('pointerdown',e=>{
+  dragging=true;sx=e.clientX;sy=e.clientY;
+  sw0=tv.offsetWidth;sh0=tv.offsetHeight;
+  grip.setPointerCapture(e.pointerId);e.preventDefault();
+});
+grip.addEventListener('pointermove',e=>{
+  if(!dragging)return;
+  const w=Math.min(680,Math.max(440,sw0+e.clientX-sx));
+  const h=Math.min(1020,Math.max(760,sh0+e.clientY-sy));
+  tv.style.setProperty('--w',w+'px');tv.style.setProperty('--h',h+'px');
+});
+grip.addEventListener('pointerup',()=>dragging=false);
+</script>
+</body>
+</html>
