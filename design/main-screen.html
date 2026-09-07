@@ -42,15 +42,27 @@ body{
   width:560px;height:670px;flex:none;
   transform:scale(var(--s,1));transform-origin:center;
   border-radius:26px;
-  background:linear-gradient(155deg,#2E2A27 0%,var(--plastic) 34%,#1D1B19 78%,#161413 100%);
+  background:radial-gradient(ellipse 125% 100% at 50% 44%,#0D0806 0%,#080503 52%,#030201 100%);
   box-shadow:
     0 40px 90px rgba(0,0,0,.62),
-    0 6px 18px rgba(0,0,0,.5),
-    inset 0 1px 0 rgba(255,255,255,.09),
-    inset 1px 0 0 rgba(255,255,255,.04),
-    inset -1px -1px 0 rgba(0,0,0,.6);
+    0 6px 18px rgba(0,0,0,.5);
   display:flex;flex-direction:column;
-  user-select:none;
+  user-select:none;overflow:hidden;
+}
+/* объёмная рамка: затемнение по краям + блик выпуклого стекла */
+.tv::before{
+  content:"";position:absolute;inset:0;z-index:12;pointer-events:none;border-radius:26px;
+  background:
+    radial-gradient(52% 44% at 50% 44%,rgba(255,236,200,.05) 0%,rgba(255,236,200,0) 62%),
+    radial-gradient(135% 120% at 50% 46%,rgba(0,0,0,0) 42%,rgba(0,0,0,.3) 72%,rgba(0,0,0,.62) 100%);
+}
+/* сканлайны и зерно «испорченного» сигнала — на всю панель */
+.tv::after{
+  content:"";position:absolute;inset:0;z-index:11;pointer-events:none;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23g)' opacity='.5'/%3E%3C/filter%3E%3C/svg%3E"),
+    repeating-linear-gradient(0deg,rgba(0,0,0,.2) 0 1px,transparent 1px 3px);
+  opacity:.16;
 }
 
 /* ---- верхняя рамка: mac-кнопки, чуть воздуха ---- */
@@ -67,23 +79,7 @@ body{
 .light:not(.g):active{filter:brightness(.8)}
 
 .glass{
-  position:relative;flex:1;overflow:hidden;
-  background:radial-gradient(ellipse 120% 95% at 50% 42%,#0C0805 0%,#070402 52%,#030201 100%);
-}
-/* рыбий глаз: выпуклое стекло — блик в центре, края тонут */
-.glass::before{
-  content:"";position:absolute;inset:0;z-index:6;pointer-events:none;
-  background:
-    radial-gradient(58% 46% at 50% 44%,rgba(255,236,200,.05) 0%,rgba(255,236,200,0) 60%),
-    radial-gradient(140% 118% at 50% 46%,rgba(0,0,0,0) 46%,rgba(0,0,0,.34) 78%,rgba(0,0,0,.66) 100%);
-}
-/* сканлайны + статичная текстура «испорченного» сигнала */
-.glass::after{
-  content:"";position:absolute;inset:0;z-index:5;pointer-events:none;
-  background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23g)' opacity='.5'/%3E%3C/svg%3E"),
-    repeating-linear-gradient(0deg,rgba(0,0,0,.2) 0 1px,transparent 1px 3px);
-  opacity:.16;
+  position:relative;flex:1;
 }
 
 /* строка трекинга VHS — изредка проезжает по экрану */
@@ -122,13 +118,13 @@ body{
 .search.focus .ic{filter:drop-shadow(0 0 8px rgba(255,176,0,.65))}
 .search input{
   flex:1;background:none;border:none;outline:none;padding:0;
-  font:500 18px/1.2 'Handjet',monospace;letter-spacing:.02em;
-  color:var(--soft);caret-color:var(--amber);min-width:0;
-  text-shadow:0 0 6px rgba(255,176,0,.28);
+  font:500 21px/1.2 'Handjet',monospace;letter-spacing:.02em;
+  color:var(--amber);caret-color:var(--amber);min-width:0;
+  text-shadow:0 0 8px rgba(255,176,0,.35);
 }
 .search .ph{
   position:absolute;left:44px;right:14px;top:50%;transform:translateY(-50%);
-  font:500 15px/1.15 'Handjet',monospace;letter-spacing:.02em;
+  font:500 17px/1.15 'Handjet',monospace;letter-spacing:.02em;
   color:var(--amber);pointer-events:none;cursor:text;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis;text-shadow:0 0 8px rgba(255,176,0,.35);
 }
@@ -188,7 +184,7 @@ body{
   filter:drop-shadow(0 0 5px rgba(255,176,0,.5))}
 .vpn .vt{font:500 17px/1 'Handjet',monospace;letter-spacing:.03em;color:var(--soft);
   white-space:nowrap;text-shadow:0 0 8px rgba(255,176,0,.35)}
-.vpn .vt b{font-weight:700;color:var(--white)}
+.vpn .vt b{font-weight:700;color:var(--amber);text-shadow:0 0 9px rgba(255,176,0,.5)}
 .vpn .x{flex:none;margin-left:4px;background:none;border:none;color:#6E5A31;cursor:pointer;
   font:700 13px 'IBM Plex Mono',monospace;line-height:1;padding:2px}
 .vpn .x:hover{color:var(--amber)}
@@ -224,7 +220,7 @@ body{
 a.plate{text-decoration:none}
 
 /* выдавленный логотип — размером с кнопки, при наведении загорается янтарным */
-a.logo{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+a.logo{position:absolute;left:50%;top:calc(50% + 4px);transform:translate(-50%,-50%);
   text-decoration:none;display:block}
 .logo-deboss{height:40px;color:#161412;display:block;
   filter:drop-shadow(0 1px 0 rgba(255,255,255,.075)) drop-shadow(0 -1px 1px rgba(0,0,0,.7));
@@ -472,8 +468,8 @@ if(hash.get('scale'))setScale(parseFloat(hash.get('scale'))||1);
 /* ---- мерцание живёт в CSS; глитчи — редко и слегка ---- */
 const gl=document.createElement('div');gl.className='glitch';gl.style.cssText=
   'position:absolute;inset:0;z-index:7;pointer-events:none;opacity:0;transition:opacity .12s;'+
-  'background:linear-gradient(180deg,transparent 31%,rgba(255,255,255,.06) 31.2%,rgba(255,255,255,.02) 32.4%,transparent 32.6%),'+
-  'linear-gradient(180deg,transparent 67%,rgba(255,176,0,.05) 67.3%,transparent 68.4%)';
+  'background:linear-gradient(180deg,transparent 31%,rgba(255,255,255,.028) 31.3%,transparent 32.2%),'+
+  'linear-gradient(180deg,transparent 67%,rgba(255,176,0,.022) 67.3%,transparent 68.1%)';
 glass.appendChild(gl);
 const ui=document.querySelector('.ui');
 function doGlitch(){
