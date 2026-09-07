@@ -42,27 +42,28 @@ body{
   width:560px;height:670px;flex:none;
   transform:scale(var(--s,1));transform-origin:center;
   border-radius:26px;
-  background:radial-gradient(ellipse 125% 100% at 50% 44%,#0D0806 0%,#080503 52%,#030201 100%);
+  background:linear-gradient(155deg,#2E2A27 0%,var(--plastic) 34%,#1D1B19 78%,#161413 100%);
   box-shadow:
     0 40px 90px rgba(0,0,0,.62),
     0 6px 18px rgba(0,0,0,.5);
   display:flex;flex-direction:column;
   user-select:none;overflow:hidden;
 }
+/* царапины и зерно серого пластика */
+.tv::after{
+  content:"";position:absolute;inset:0;z-index:11;pointer-events:none;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cg stroke-linecap='round' fill='none'%3E%3Cline x1='20' y1='40' x2='120' y2='28' stroke='rgba(255,255,255,.17)' stroke-width='1'/%3E%3Cline x1='180' y1='90' x2='285' y2='70' stroke='rgba(0,0,0,.34)' stroke-width='1'/%3E%3Cline x1='40' y1='170' x2='160' y2='185' stroke='rgba(255,255,255,.13)' stroke-width='1'/%3E%3Cline x1='200' y1='220' x2='270' y2='200' stroke='rgba(0,0,0,.28)' stroke-width='1'/%3E%3Cline x1='90' y1='250' x2='150' y2='272' stroke='rgba(255,255,255,.15)' stroke-width='1'/%3E%3Cline x1='240' y1='18' x2='292' y2='52' stroke='rgba(0,0,0,.24)' stroke-width='1'/%3E%3Cline x1='8' y1='112' x2='72' y2='100' stroke='rgba(0,0,0,.2)' stroke-width='1'/%3E%3Cline x1='150' y1='140' x2='230' y2='132' stroke='rgba(255,255,255,.035)' stroke-width='1'/%3E%3C/g%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23g)' opacity='.16'/%3E%3C/svg%3E");
+  opacity:.6;
+}
+
 /* объёмная рамка: затемнение по краям + блик выпуклого стекла */
 .tv::before{
   content:"";position:absolute;inset:0;z-index:12;pointer-events:none;border-radius:26px;
   background:
     radial-gradient(52% 44% at 50% 44%,rgba(255,236,200,.05) 0%,rgba(255,236,200,0) 62%),
-    radial-gradient(135% 120% at 50% 46%,rgba(0,0,0,0) 42%,rgba(0,0,0,.3) 72%,rgba(0,0,0,.62) 100%);
-}
-/* сканлайны и зерно «испорченного» сигнала — на всю панель */
-.tv::after{
-  content:"";position:absolute;inset:0;z-index:11;pointer-events:none;
-  background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23g)' opacity='.5'/%3E%3C/filter%3E%3C/svg%3E"),
-    repeating-linear-gradient(0deg,rgba(0,0,0,.2) 0 1px,transparent 1px 3px);
-  opacity:.16;
+    radial-gradient(135% 120% at 50% 46%,rgba(0,0,0,0) 46%,rgba(0,0,0,.22) 74%,rgba(0,0,0,.45) 100%);
 }
 
 /* ---- верхняя рамка: mac-кнопки, чуть воздуха ---- */
@@ -95,8 +96,8 @@ body{
 .scrim.show{opacity:1;pointer-events:auto}
 
 /* лёгкое мерцание яркости */
-.flick{position:absolute;inset:0;z-index:7;pointer-events:none;background:#FFF;opacity:0;
-  animation:breathe 6.5s infinite}
+.flick{position:absolute;inset:0;z-index:13;pointer-events:none;background:#FFF;opacity:0;
+  border-radius:26px;animation:breathe 6.5s infinite}
 @keyframes breathe{0%,100%{opacity:0}46%{opacity:0}47%{opacity:.028}48%{opacity:0}79%{opacity:0}80%{opacity:.016}81%{opacity:0}}
 
 /* ---- содержимое экрана ---- */
@@ -319,7 +320,6 @@ a.logo:hover .logo-deboss{color:var(--amber);
       </div>
 
       <!-- включение телевизора -->
-      <div class="flick"></div>
       <div class="boot" id="boot"><div class="beam"></div></div>
     </div>
 
@@ -345,6 +345,7 @@ a.logo:hover .logo-deboss{color:var(--amber);
     </a>
   </div>
 
+  <div class="flick"></div>
   <div class="grip" id="grip" title="Тяни по диагонали — масштаб"></div>
 </div>
 
@@ -465,21 +466,6 @@ grip.addEventListener('pointermove',e=>{
 grip.addEventListener('pointerup',()=>dragging=false);
 if(hash.get('scale'))setScale(parseFloat(hash.get('scale'))||1);
 
-/* ---- мерцание живёт в CSS; глитчи — редко и слегка ---- */
-const gl=document.createElement('div');gl.className='glitch';gl.style.cssText=
-  'position:absolute;inset:0;z-index:7;pointer-events:none;opacity:0;transition:opacity .12s;'+
-  'background:linear-gradient(180deg,transparent 31%,rgba(255,255,255,.028) 31.3%,transparent 32.2%),'+
-  'linear-gradient(180deg,transparent 67%,rgba(255,176,0,.022) 67.3%,transparent 68.1%)';
-glass.appendChild(gl);
-const ui=document.querySelector('.ui');
-function doGlitch(){
-  if(booted && !matchMedia('(prefers-reduced-motion: reduce)').matches){
-    gl.style.opacity='1';ui.style.transform='translateX(1.4px)';
-    setTimeout(()=>{gl.style.opacity='0';ui.style.transform='';},120+Math.random()*120);
-  }
-  setTimeout(doGlitch,3800+Math.random()*5200);
-}
-setTimeout(doGlitch,5200);
 
 /* ---- строка трекинга изредка проезжает ---- */
 function runTrack(){
