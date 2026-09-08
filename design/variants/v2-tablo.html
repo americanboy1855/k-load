@@ -108,10 +108,7 @@ body{background:radial-gradient(1200px 800px at 50% 20%,#111114,#0B0B0D 60%,#060
   color:var(--soft);display:flex;align-items:center;justify-content:center}
 .act:hover{background:rgba(255,176,0,.14)}
 
-.band{height:96px;flex:none;position:relative;display:flex;align-items:center;justify-content:center;gap:26px}
-.band .plate{position:absolute;top:50%;transform:translateY(-50%)}
 #folder{left:22px}
-.band a.plate{right:22px}
 .band .plate:active{transform:translateY(calc(-50% + 1px))}
 
 .plate{width:46px;height:46px;border-radius:50%;border:1px solid #0C0B0A;cursor:pointer;
@@ -124,7 +121,7 @@ body{background:radial-gradient(1200px 800px at 50% 20%,#111114,#0B0B0D 60%,#060
 .plate:hover svg,.plate:hover span{color:var(--amber);filter:drop-shadow(0 0 7px rgba(255,176,0,.55))}
 .plate .dollar{font:700 20px 'Chakra Petch',sans-serif;line-height:1;text-decoration:none}
 a.plate{text-decoration:none}
-.logo{position:absolute;left:50%;top:41px;transform:translate(-50%,-50%);text-decoration:none;color:#161412;
+.logo{position:absolute;left:50%;top:46px;transform:translate(-50%,-50%);text-decoration:none;color:#161412;
   filter:drop-shadow(0 1px 0 rgba(255,255,255,.075)) drop-shadow(0 -1px 1px rgba(0,0,0,.7));
   transition:color .25s,filter .25s}
 .logo svg{height:62px;width:auto;display:block}
@@ -141,6 +138,52 @@ a.plate{text-decoration:none}
 .d2.q{color:#8A6E38}
 .d2.done{color:var(--amber)}
 .dlists{scrollbar-width:thin}
+
+/* полоса — 1:1 из main-screen */
+/* ================================================================
+   НИЖНЯЯ РАМКА: кнопка папки · выдавленный логотип · Boosty
+   ================================================================ */
+.band{
+  height:96px;flex:none;position:relative;padding:0 20px;
+}
+/* вертикальная посадка всей нижней группы: центр в 43px от верха полосы
+   (зазоры до кромки экрана и до края окна равны, 30pxdesign каждый) */
+.band .plate{position:absolute;top:40px;transform:translate(-50%,-50%)}
+#folder{left:22px;transform:translate(0,-50%)}
+.band .plate:active{transform:translate(0,calc(-50% + 1px))}
+.band .plate:active svg,.band .plate:active span{transform:translateY(1px)}
+.plate{
+  width:46px;height:46px;border-radius:50%;flex:none;cursor:pointer;
+  border:1px solid var(--plastic-edge);
+  background:radial-gradient(circle at 34% 28%,#413D39 0%,#2A2724 52%,#1B1917 100%);
+  box-shadow:
+    0 3px 5px rgba(0,0,0,.6),
+    0 1px 2px rgba(0,0,0,.5),
+    inset 0 1px 1px rgba(255,255,255,.11),
+    inset 0 -3px 5px rgba(0,0,0,.55);
+  display:flex;align-items:center;justify-content:center;
+  color:#151312;transition:transform .06s ease, color .25s ease, filter .25s ease;
+}
+.plate:active{transform:translateY(1px);
+  box-shadow:0 1px 2px rgba(0,0,0,.55), inset 0 2px 5px rgba(0,0,0,.65), inset 0 1px 1px rgba(255,255,255,.05)}
+.plate svg,.plate span{filter:drop-shadow(0 1px 0 rgba(255,255,255,.08));transition:color .25s ease, filter .25s ease}
+.plate:hover{color:var(--amber)}
+.plate:hover svg,.plate:hover span{color:var(--amber);
+  filter:drop-shadow(0 0 7px rgba(255,176,0,.55))}
+.plate .dollar{font:700 20px 'Chakra Petch',sans-serif;line-height:1;text-decoration:none}
+.plate.pressed{transform:translateY(1px);
+  box-shadow:0 1px 2px rgba(0,0,0,.55), inset 0 2px 5px rgba(0,0,0,.65), inset 0 1px 1px rgba(255,255,255,.05)}
+a.plate{text-decoration:none}
+/* выдавленный логотип — размером с кнопки, при наведении загорается янтарным */
+/* 40px = (96−16)/2: синхронно с padding-bottom полосы — центр кнопок */
+a.logo{position:absolute;left:50%;top:46px;transform:translate(-50%,-50%);
+  text-decoration:none;display:block}
+.logo-deboss{color:#161412;display:block;
+  filter:drop-shadow(0 1px 0 rgba(255,255,255,.075)) drop-shadow(0 -1px 1px rgba(0,0,0,.7));
+  transition:color .25s ease, filter .25s ease}
+.logo-deboss svg{height:62px;width:auto;display:block}
+a.logo:hover .logo-deboss{color:var(--amber);
+  filter:drop-shadow(0 1px 0 rgba(255,255,255,.05)) drop-shadow(0 0 12px rgba(255,176,0,.4))}
 </style>
 </head>
 <body>
@@ -187,14 +230,24 @@ a.plate{text-decoration:none}
   </div>
   <div class="band">
     <button class="plate" id="folder" title="Выбрать папку загрузок">
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M2.5 5.5c0-.8.7-1.5 1.5-1.5h3.2c.4 0 .8.2 1.1.5l.9 1h7.3c.8 0 1.5.7 1.5 1.5v7.5c0 .8-.7 1.5-1.5 1.5H4c-.8 0-1.5-.7-1.5-1.5v-9z"/></svg>
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+        <path d="M2.5 5.5c0-.8.7-1.5 1.5-1.5h3.2c.4 0 .8.2 1.1.5l.9 1h7.3c.8 0 1.5.7 1.5 1.5v7.5c0 .8-.7 1.5-1.5 1.5H4c-.8 0-1.5-.7-1.5-1.5v-9z"/>
+      </svg>
     </button>
+    <!-- ссылка от заказчика: kvartalrecords.ru -->
     <a class="logo" href="https://kvartalrecords.ru" target="_blank" rel="noopener" title="kvartal">
-      <svg version="1.0" xmlns="http://www.w3.org/2000/svg" viewBox="0 14 1000 296" preserveAspectRatio="xMidYMid meet"><g transform="translate(0.000000,340.000000) scale(0.100000,-0.100000)" fill="currentColor" stroke="none"><path d="M1710 2937 c-60 -21 -62 -29 -62 -420 0 -194 0 -468 1 -609 1 -142 0 -262 -3 -267 -3 -5 -2 -80 3 -168 13 -204 1 -193 203 -193 198 0 208 5 209 98 1 37 2 123 3 191 l3 125 38 33 c49 42 73 39 99 -12 12 -22 37 -65 56 -95 20 -30 49 -80 65 -110 69 -133 109 -192 143 -212 50 -30 372 -26 407 4 38 33 32 55 -50 176 -41 61 -75 114 -75 118 0 3 -13 24 -28 47 -56 83 -100 153 -127 202 -15 28 -43 73 -62 102 -45 68 -55 105 -36 132 8 12 19 21 25 21 5 0 54 45 108 100 107 109 115 113 131 73 6 -16 18 -40 26 -55 8 -16 20 -49 28 -75 16 -58 41 -127 59 -168 31 -67 66 -161 66 -177 0 -9 4 -19 9 -22 5 -3 14 -27 20 -52 7 -26 34 -95 61 -155 28 -60 50 -112 50 -116 0 -4 11 -37 25 -73 36 -95 44 -98 244 -98 l163 0 39 39 c21 21 39 46 39 55 0 8 17 52 39 97 21 45 42 93 46 107 6 23 36 97 70 175 7 17 25 64 39 105 15 41 36 95 46 120 23 58 47 120 54 142 4 14 10 15 38 7 18 -5 53 -9 77 -9 25 0 70 -5 100 -11 79 -16 120 2 152 66 53 106 283 124 333 26 15 -28 22 -101 11 -101 -3 0 -38 -9 -78 -19 -39 -10 -112 -24 -162 -31 -354 -46 -509 -146 -545 -350 -31 -181 49 -332 216 -405 138 -60 422 -40 518 36 49 39 69 39 94 3 32 -48 61 -52 396 -52 l299 0 29 28 c27 28 28 32 29 137 3 357 9 521 19 548 40 105 153 172 300 177 l95 3 2 -230 c3 -294 14 -363 68 -465 26 -49 90 -119 120 -131 17 -7 41 -20 55 -28 35 -23 90 -41 125 -41 17 0 36 -5 42 -11 19 -19 227 -6 298 18 33 11 71 23 85 26 14 4 59 38 100 77 41 40 76 67 78 61 8 -23 63 -91 94 -114 71 -54 149 -72 313 -72 162 0 238 17 312 72 40 29 33 30 81 -17 l40 -40 183 -1 c101 -1 252 -1 334 0 202 2 194 -7 197 214 1 89 1 171 1 182 -1 11 -2 289 -3 617 l-1 598 -24 27 -23 28 -154 -1 c-173 -1 -201 -10 -212 -66 -3 -17 -6 -163 -6 -325 0 -194 -3 -292 -10 -288 -6 3 -10 14 -10 25 0 10 -21 45 -46 79 -93 123 -268 191 -495 191 -263 0 -455 -97 -535 -269 -60 -130 -45 -159 87 -166 46 -2 107 -9 135 -15 68 -14 95 -3 140 60 43 60 53 66 137 83 72 16 157 1 188 -31 19 -19 33 -101 21 -118 -7 -11 -120 -36 -267 -59 -178 -27 -323 -75 -366 -121 -34 -36 -39 -30 -39 39 0 95 -5 98 -183 102 -190 4 -178 18 -182 -202 -1 -92 -7 -179 -13 -193 -33 -83 -162 -98 -217 -26 -18 25 -20 46 -25 264 -3 130 -3 255 0 277 l5 40 246 5 c211 5 249 8 272 23 15 10 28 21 28 25 13 68 12 191 -2 219 -16 29 -61 34 -299 32 -107 -1 -207 -1 -222 0 l-28 1 0 175 0 175 -37 18 c-36 17 -155 21 -303 9 -72 -5 -81 -28 -81 -202 0 -72 -4 -136 -7 -141 -4 -5 -43 -9 -88 -9 -107 -1 -203 -38 -264 -101 -46 -48 -59 -49 -58 -4 2 67 -48 84 -229 78 -124 -5 -136 -7 -159 -29 -21 -20 -24 -30 -19 -58 8 -43 -4 -163 -16 -155 -5 3 -16 20 -24 37 -18 41 -67 92 -134 140 -170 122 -566 131 -753 17 -41 -25 -47 -25 -41 -2 10 39 -33 51 -188 51 -207 0 -245 -14 -255 -97 -5 -46 -22 -96 -89 -267 -26 -66 -50 -137 -54 -157 -5 -21 -13 -43 -18 -50 -5 -7 -18 -39 -28 -70 -11 -32 -23 -58 -27 -58 -14 0 -37 44 -47 90 -16 72 -60 201 -87 254 -13 28 -24 58 -24 68 0 11 -8 35 -19 56 -10 20 -28 70 -40 109 -13 40 -31 83 -41 95 l-18 23 -334 0 c-297 -1 -337 -3 -365 -18 -18 -10 -33 -22 -33 -27 0 -6 -45 -63 -99 -128 -154 -182 -168 -198 -177 -189 -4 4 -7 168 -7 365 0 197 -4 365 -9 375 -17 34 -74 47 -197 46 -64 0 -132 -5 -151 -12z"/></g></svg>
+      <span class="logo-deboss">
+        <svg version="1.0" xmlns="http://www.w3.org/2000/svg" viewBox="0 14 1000 296" preserveAspectRatio="xMidYMid meet">
+          <g transform="translate(0.000000,340.000000) scale(0.100000,-0.100000)" fill="currentColor" stroke="none">
+          <path d="M1710 2937 c-60 -21 -62 -29 -62 -420 0 -194 0 -468 1 -609 1 -142 0 -262 -3 -267 -3 -5 -2 -80 3 -168 13 -204 1 -193 203 -193 198 0 208 5 209 98 1 37 2 123 3 191 l3 125 38 33 c49 42 73 39 99 -12 12 -22 37 -65 56 -95 20 -30 49 -80 65 -110 69 -133 109 -192 143 -212 50 -30 372 -26 407 4 38 33 32 55 -50 176 -41 61 -75 114 -75 118 0 3 -13 24 -28 47 -56 83 -100 153 -127 202 -15 28 -43 73 -62 102 -45 68 -55 105 -36 132 8 12 19 21 25 21 5 0 54 45 108 100 107 109 115 113 131 73 6 -16 18 -40 26 -55 8 -16 20 -49 28 -75 16 -58 41 -127 59 -168 31 -67 66 -161 66 -177 0 -9 4 -19 9 -22 5 -3 14 -27 20 -52 7 -26 34 -95 61 -155 28 -60 50 -112 50 -116 0 -4 11 -37 25 -73 36 -95 44 -98 244 -98 l163 0 39 39 c21 21 39 46 39 55 0 8 17 52 39 97 21 45 42 93 46 107 6 23 36 97 70 175 7 17 25 64 39 105 15 41 36 95 46 120 23 58 47 120 54 142 4 14 10 15 38 7 18 -5 53 -9 77 -9 25 0 70 -5 100 -11 79 -16 120 2 152 66 53 106 283 124 333 26 15 -28 22 -101 11 -101 -3 0 -38 -9 -78 -19 -39 -10 -112 -24 -162 -31 -354 -46 -509 -146 -545 -350 -31 -181 49 -332 216 -405 138 -60 422 -40 518 36 49 39 69 39 94 3 32 -48 61 -52 396 -52 l299 0 29 28 c27 28 28 32 29 137 3 357 9 521 19 548 40 105 153 172 300 177 l95 3 2 -230 c3 -294 14 -363 68 -465 26 -49 90 -119 120 -131 17 -7 41 -20 55 -28 35 -23 90 -41 125 -41 17 0 36 -5 42 -11 19 -19 227 -6 298 18 33 11 71 23 85 26 14 4 59 38 100 77 41 40 76 67 78 61 8 -23 63 -91 94 -114 71 -54 149 -72 313 -72 162 0 238 17 312 72 40 29 33 30 81 -17 l40 -40 183 -1 c101 -1 252 -1 334 0 202 2 194 -7 197 214 1 89 1 171 1 182 -1 11 -2 289 -3 617 l-1 598 -24 27 -23 28 -154 -1 c-173 -1 -201 -10 -212 -66 -3 -17 -6 -163 -6 -325 0 -194 -3 -292 -10 -288 -6 3 -10 14 -10 25 0 10 -21 45 -46 79 -93 123 -268 191 -495 191 -263 0 -455 -97 -535 -269 -60 -130 -45 -159 87 -166 46 -2 107 -9 135 -15 68 -14 95 -3 140 60 43 60 53 66 137 83 72 16 157 1 188 -31 19 -19 33 -101 21 -118 -7 -11 -120 -36 -267 -59 -178 -27 -323 -75 -366 -121 -34 -36 -39 -30 -39 39 0 95 -5 98 -183 102 -190 4 -178 18 -182 -202 -1 -92 -7 -179 -13 -193 -33 -83 -162 -98 -217 -26 -18 25 -20 46 -25 264 -3 130 -3 255 0 277 l5 40 246 5 c211 5 249 8 272 23 15 10 28 21 28 25 13 68 12 191 -2 219 -16 29 -61 34 -299 32 -107 -1 -207 -1 -222 0 l-28 1 0 175 0 175 -37 18 c-36 17 -155 21 -303 9 -72 -5 -81 -28 -81 -202 0 -72 -4 -136 -7 -141 -4 -5 -43 -9 -88 -9 -107 -1 -203 -38 -264 -101 -46 -48 -59 -49 -58 -4 2 67 -48 84 -229 78 -124 -5 -136 -7 -159 -29 -21 -20 -24 -30 -19 -58 8 -43 -4 -163 -16 -155 -5 3 -16 20 -24 37 -18 41 -67 92 -134 140 -170 122 -566 131 -753 17 -41 -25 -47 -25 -41 -2 10 39 -33 51 -188 51 -207 0 -245 -14 -255 -97 -5 -46 -22 -96 -89 -267 -26 -66 -50 -137 -54 -157 -5 -21 -13 -43 -18 -50 -5 -7 -18 -39 -28 -70 -11 -32 -23 -58 -27 -58 -14 0 -37 44 -47 90 -16 72 -60 201 -87 254 -13 28 -24 58 -24 68 0 11 -8 35 -19 56 -10 20 -28 70 -40 109 -13 40 -31 83 -41 95 l-18 23 -334 0 c-297 -1 -337 -3 -365 -18 -18 -10 -33 -22 -33 -27 0 -6 -45 -63 -99 -128 -154 -182 -168 -198 -177 -189 -4 4 -7 168 -7 365 0 197 -4 365 -9 375 -17 34 -74 47 -197 46 -64 0 -132 -5 -151 -12z m2894 -1113 c24 -63 -10 -170 -70 -223 -125 -110 -286 -109 -329 2 -17 44 -17 46 5 85 35 62 71 79 235 113 54 11 106 24 115 29 23 14 37 12 44 -6z m2919 -68 c-2 -89 -22 -131 -86 -177 -111 -81 -262 -67 -296 26 -38 105 42 163 274 200 22 3 51 13 65 20 40 22 45 14 43 -69z"/>
+          </g>
+        </svg>
+      </span>
     </a>
-    <a class="plate"  href="https://boosty.to/kvartalrecords/donate" target="_blank" rel="noopener" title="Поддержать на Boosty">
+    <a class="plate" style="right:22px" href="https://boosty.to/kvartalrecords/donate" target="_blank" rel="noopener" title="Поддержать на Boosty">
       <span class="dollar">$</span>
     </a>
+  </div>
   </div>
 </div>
 
@@ -233,6 +286,16 @@ function applyScenario(){
   vm.dataset.m=mode;
   $('go').textContent=d.go;
 }
+document.querySelectorAll('.demo [data-sc]').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.demo [data-sc]').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); sc=b.dataset.sc; applyScenario();
+
+/* удаление строки мусоркой (делегирование — работает и для готовых) */
+document.getElementById('dlists').addEventListener('click',e=>{
+  const t=e.target.closest('[title="Удалить"]');
+  if(t) t.closest('.ditem').remove();
+});
+});
 applyScenario();
 
 /* ---- очередь: предзаполнена для ревью ---- */
