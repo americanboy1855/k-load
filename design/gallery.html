@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf8"><title>K LOAD — все состояния макета</title>
+<style>
+body{background:radial-gradient(1200px 900px at 50% 0%,#121216,#0B0B0D 60%,#060607);
+  color:#EDE8DC;font:14px/1.5 'IBM Plex Mono',monospace;
+  display:flex;flex-direction:column;align-items:center;padding:34px 20px 60px;gap:14px}
+h1{font:700 15px 'IBM Plex Mono';letter-spacing:.28em;color:#FFB000;margin:0}
+p{color:#8a8a90;font-size:12px;max-width:680px;text-align:center;margin:0}
+.grid{display:grid;grid-template-columns:repeat(2,620px);gap:34px 40px}
+@media (max-width:1320px){.grid{grid-template-columns:620px}}
+.cell{display:flex;flex-direction:column;gap:8px;align-items:center}
+.cell .cap{font:700 11px 'IBM Plex Mono';letter-spacing:.24em;color:#8a8a90}
+.frame{width:600px;height:758px;border:1px solid #26262B;border-radius:10px;overflow:hidden;
+  background:#161413;box-shadow:0 24px 60px rgba(0,0,0,.5);position:relative}
+.frame iframe{width:600px;height:758px;border:none}
+.tag{position:absolute;top:8px;left:10px;z-index:2;font:700 10px 'IBM Plex Mono';
+  letter-spacing:.2em;color:#0A0500;background:#FFB000;padding:3px 8px;border-radius:3px}
+.note{margin-top:4px;font:400 11px 'IBM Plex Mono';color:#6a6a70}
+</style></head>
+<body>
+<h1>K LOAD · ВСЕ СОСТОЯНИЯ МАКЕТА</h1>
+<p>Живые фреймы: в каждом можно печатать в строке, жать режимы и «СКАЧАТЬ»,
+крутить колесо над списком загрузок. Включение телевизора — открой
+main-screen.html без параметров (точка → линия → вспышка).</p>
+
+<div class="grid">
+  <div class="cell"><span class="cap">01 · ГЛАВНЫЙ ЭКРАН (VPN ВЫКЛ)</span>
+    <div class="frame"><span class="tag">ГЛАВНЫЙ</span>
+      <iframe src="../main-screen.html?g=1#boot=skip"></iframe></div>
+    <span class="note">через 2 с после включения появится VPN-уведомление</span>
+  </div>
+
+  <div class="cell"><span class="cap">02 · ПОИСК</span>
+    <div class="frame"><span class="tag">ПОИСК</span>
+      <iframe src="../main-screen.html?g=2#boot=skip&vpn=on&flow=seek"></iframe></div>
+    <span class="note">введи текст в строку — шкала и % оживают</span>
+  </div>
+
+  <div class="cell"><span class="cap">03 · НАЙДЕНО (ТРЕК)</span>
+    <div class="frame"><span class="tag">ТРЕК</span>
+      <iframe src="../main-screen.html?g=3#boot=skip&vpn=on&flow=found"></iframe></div>
+    <span class="note">обложка слева, источник и хронометраж справа</span>
+  </div>
+
+  <div class="cell"><span class="cap">04 · ПЛЕЙЛИСТ YOUTUBE</span>
+    <div class="frame"><span class="tag">ПЛЕЙЛИСТ</span>
+      <iframe src="../main-screen.html?g=4#boot=skip&vpn=on&flow=found&sc=playlist"></iframe></div>
+    <span class="note">ХРОН заблокирован, счётчик «СКАЧАТЬ · 14»</span>
+  </div>
+
+  <div class="cell"><span class="cap">05 · ПАЧКА-МИКС (БЕЗ ОБЛОЖКИ)</span>
+    <div class="frame"><span class="tag">ПАЧКА</span>
+      <iframe src="../main-screen.html?g=5#boot=skip&vpn=on&flow=found&sc=batch"></iframe></div>
+    <span class="note">вместо «ВИДЕО» — «МЕДИА», текст центрируется</span>
+  </div>
+
+  <div class="cell"><span class="cap">06 · ОЧЕРЕДЬ ЗАГРУЗОК</span>
+    <div class="frame"><span class="tag">ОЧЕРЕДЬ</span>
+      <iframe src="../main-screen.html?g=6#boot=skip&vpn=on&flow=queue"></iframe></div>
+    <span class="note">Скачивается / В очереди / Готово · у готового — папка и мусорка</span>
+  </div>
+</div>
+</body>
+</html>

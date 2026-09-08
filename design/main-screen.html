@@ -573,6 +573,27 @@ function applyScenario(){
 document.querySelectorAll('.demo [data-sc]').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.demo [data-sc]').forEach(x=>x.classList.remove('on'));
   b.classList.add('on'); scenario=b.dataset.sc; applyScenario();
+
+/* ---- состояния для галереи/скриншотов: #flow=seek|found|queue ---- */
+const flow = hash.get('flow');
+if (flow === 'seek') {
+  q.value = 'https://youtu.be/jNQXAC9IVRw'; ph.classList.add('off');
+  hideFound(); seek.classList.remove('hidden');
+  $('pct').textContent='47%';
+  leds.querySelectorAll('i').forEach((c,i)=>c.classList.toggle('f',i<4));
+} else if (flow === 'found') {
+  q.value = 'https://youtu.be/jNQXAC9IVRw'; ph.classList.add('off');
+  showFound();
+} else if (flow === 'queue') {
+  q.value = 'https://youtu.be/jNQXAC9IVRw'; ph.classList.add('off');
+  showFound();
+  const r1=addRow(scenarios[scenario].title,8); setBar(r1,4);
+  const r2=addRow('Заказала новый свет… reel',8);
+  r2.querySelector('[data-st]').textContent='В ОЧЕРЕДИ'; r2.querySelector('[data-st]').classList.add('q');
+  const r3=addRow('a-ha — Take On Me',8);
+  r3.querySelector('[data-st]').textContent='ГОТОВО'; r3.querySelector('[data-st]').classList.add('done');
+  setBar(r3,8); r3.querySelector('[data-acts]').classList.remove('hidden');
+}
 });
 applyScenario();
 
