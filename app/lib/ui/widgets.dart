@@ -57,9 +57,10 @@ class ChainIcon extends StatelessWidget {
 }
 
 class FolderIcon extends StatelessWidget {
-  const FolderIcon({super.key, this.size = 20, this.color = plateIconIdle});
+  const FolderIcon({super.key, this.size = 20, this.color = plateIconIdle, this.glow = false});
   final double size;
   final Color color;
+  final bool glow;
 
   @override
   Widget build(BuildContext context) {
@@ -85,7 +86,7 @@ class FolderIcon extends StatelessWidget {
             ..relativeCubicTo(-0.8 * sc, 0, -1.5 * sc, -0.7 * sc, -1.5 * sc, -1.5 * sc)
             ..close();
           ctx.drawPath(path, p);
-        }, c, glow: plate?.hover ?? false));
+        }, c, glow: glow || (plate?.hover ?? false)));
   }
 }
 
@@ -187,6 +188,7 @@ class _StrokePainter extends CustomPainter {
 
 // ---- LED-полосы ----
 
+// Мгновенная полоса (шкала ПОИСКа).
 class LedRow extends StatelessWidget {
   const LedRow({super.key, required this.count, required this.filled, this.cellHeight = 16, this.gap = 4});
   final int count;
@@ -219,35 +221,112 @@ class LedRow extends StatelessWidget {
   }
 }
 
-// ---- кинескоп: сканлайны + виньетка ----
+// Полоса очереди: плавно догоняет реальный прогресс (нестабильная индикация
+// видеомагнитофона — ведущий сегмент слабо подмигивает).
+class AnimatedLedRow extends StatefulWidget {
+  const AnimatedLedRow(
+      {super.key,
+      required this.count,
+      required this.progress,
+      this.cellHeight = 14,
+      this.gap = 3,
+      this.blinking = false});
+  final int count;
+  final double progress; // 0..1
+  final int cellHeight;
+  final double gap;
+  final bool blinking;
 
-class GlassOverlay extends StatelessWidget {
-  const GlassOverlay({super.key, this.flicker = 0});
-  final double flicker; // 0..0.03 — дышит экран
+  @override
+  State<AnimatedLedRow> createState() => _AnimatedLedRowState();
+}
+
+class _AnimatedLedRowState extends State<AnimatedLedRow>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _blink =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 1100))
+        ..repeat();
+
+  @override
+  void dispose() {
+    _blink.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, box) {
+      final cell = (box.maxWidth - widget.gap * (widget.count - 1)) / widget.count;
+      final target = (widget.progress * widget.count).clamp(0.0, widget.count.toDouble());
+      return TweenAnimationBuilder<double>(
+        tween: Tween(end: target),
+        // Полоса заметно медленнее реального прогресса — так честнее выглядит.
+        duration: const Duration(milliseconds: 900),
+        curve: Curves.easeOutCubic,
+        builder: (context, value, _) {
+          return AnimatedBuilder(
+            animation: _blink,
+            builder: (context, _) {
+              final lead = value.floor();
+              final leadFrac = value - lead;
+              // Последний заполненный сегмент слабо подмигивает.
+              final blinkCell = widget.blinking
+                  ? (leadFrac > .55 ? lead : lead - 1)
+                  : -1;
+              final dim = .6 + .4 * _blink.value;
+              return Row(
+                children: [
+                  for (var i = 0; i < widget.count; i++)
+                    Container(
+                      width: cell,
+                      height: widget.cellHeight.toDouble(),
+                      margin: EdgeInsets.only(
+                          right: i == widget.count - 1 ? 0 : widget.gap),
+                      decoration: BoxDecoration(
+                        color: i <= lead && value > i ? Pal.amber : Pal.ledOff,
+                        borderRadius:
+                            const BorderRadius.all(Radius.circular(1)),
+                        boxShadow: i <= lead && value > i
+                            ? [BoxShadow(
+                                color: Pal.amber.withValues(
+                                    alpha: .55 *
+                                        (i == blinkCell ? dim : 1.0)),
+                                blurRadius: 9)]
+                            : null,
+                      ),
+                    ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    });
+  }
+}
+
+// ---- кинескоп ----
+
+// Фон экрана: сканлайны, виньетка «рыбий глаз», блик. Рисуется ПОД текстом,
+// поэтому буквы остаются резкими.
+class GlassBackdrop extends StatelessWidget {
+  const GlassBackdrop({super.key});
 
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
-      child: CustomPaint(
-        size: Size.infinite,
-        painter: _GlassPainter(flicker),
-      ),
+      child: CustomPaint(size: Size.infinite, painter: _BackdropPainter()),
     );
   }
 }
 
-class _GlassPainter extends CustomPainter {
-  _GlassPainter(this.flicker);
-  final double flicker;
-
+class _BackdropPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    // сканлайны
-    final line = Paint()..color = const Color(0x33000000);
+    final line = Paint()..color = const Color(0x22000000);
     for (var y = 0.0; y < size.height; y += 3) {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), line);
     }
-    // виньетка «рыбий глаз»
     final vignette = Paint()
       ..shader = RadialGradient(
         center: const Alignment(0, -0.1),
@@ -260,7 +339,6 @@ class _GlassPainter extends CustomPainter {
         stops: const [0.45, 0.78, 1],
       ).createShader(Offset.zero & size);
     canvas.drawRect(Offset.zero & size, vignette);
-    // блик сверху
     final sheen = Paint()
       ..shader = RadialGradient(
         center: const Alignment(0, -0.45),
@@ -268,13 +346,60 @@ class _GlassPainter extends CustomPainter {
         colors: const [Color(0x0DFFECC8), Color(0x00FFECC8)],
       ).createShader(Offset.zero & size);
     canvas.drawRect(Offset.zero & size, sheen);
+  }
+
+  @override
+  bool shouldRepaint(covariant _BackdropPainter old) => false;
+}
+
+// Вуаль над контентом: редкое слабое мерцание + аналоговый шум (почти
+// незаметные, читаемость не трогают).
+class GlassVeil extends StatelessWidget {
+  const GlassVeil({super.key, this.flicker = 0, this.noiseSeed = 0});
+  final double flicker; // 0..0.03
+  final int noiseSeed;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: CustomPaint(
+        size: Size.infinite,
+        painter: _VeilPainter(flicker, noiseSeed),
+      ),
+    );
+  }
+}
+
+class _VeilPainter extends CustomPainter {
+  _VeilPainter(this.flicker, this.noiseSeed);
+  final double flicker;
+  final int noiseSeed;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // аналоговый шум: редкие зёрна, меняются время от времени
+    final rnd = math.Random(noiseSeed);
+    for (var i = 0; i < 260; i++) {
+      final x = rnd.nextDouble() * size.width;
+      final y = rnd.nextDouble() * size.height;
+      final bright = rnd.nextBool();
+      canvas.drawRect(
+          Rect.fromLTWH(x, y, 2, 1),
+          Paint()
+            ..color = (bright ? Colors.white : Colors.black)
+                .withValues(alpha: .03));
+    }
     if (flicker > 0) {
-      canvas.drawRect(Offset.zero & size, Paint()..color = Colors.white.withValues(alpha: flicker));
+      canvas.drawRect(
+          Offset.zero & size,
+          Paint()
+            ..color = Colors.white.withValues(alpha: flicker.clamp(0, .03)));
     }
   }
 
   @override
-  bool shouldRepaint(covariant _GlassPainter old) => old.flicker != flicker;
+  bool shouldRepaint(covariant _VeilPainter old) =>
+      old.flicker != flicker || old.noiseSeed != noiseSeed;
 }
 
 // ---- строка трекинга, изредка пробегает по экрану (узкая, как в ТВ) ----
@@ -394,6 +519,9 @@ class _PlateState extends State<Plate> {
               BoxShadow(color: Colors.black.withValues(alpha: .6), offset: const Offset(0, 3), blurRadius: 5),
               BoxShadow(color: Colors.black.withValues(alpha: .5), offset: const Offset(0, 1), blurRadius: 2),
               const BoxShadow(color: Color(0x1DFFFFFF), offset: Offset(0, 1), blurRadius: 0, spreadRadius: -1),
+              if (hover)
+                BoxShadow(
+                    color: Pal.amber.withValues(alpha: .30), blurRadius: 18),
             ],
           ),
           child: Center(

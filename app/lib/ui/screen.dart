@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../kd/kd_bindings.dart';
@@ -96,6 +97,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   final query = TextEditingController();
   final searchFocus = FocusNode();
   bool searchFocused = false;
+  bool searchHover = false;
   Phase phase = Phase.idle;
   Timer? debounce;
   Timer? seekAnim;
@@ -123,6 +125,19 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   String? toastText;
   Timer? toastTimer;
 
+  // системный выбор папки
+  static const _native = MethodChannel('kload/native');
+
+  // аналоговый шум: зерно меняется время от времени
+  int _noiseSeed = 1;
+
+  bool _actHover = false;
+
+  // хрон: позиция чипа, чтобы панель открывалась прямо под ним
+  final _chronChipKey = GlobalKey();
+  final _uiColumnKey = GlobalKey();
+  double _chronX = 0;
+
   String get rawText => query.text.trim();
   bool get vpnVisible => booted && vpnState == 2 && !vpnDismissed;
   bool get cardVisible => phase == Phase.found;
@@ -132,6 +147,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     super.initState();
     flickC.repeat();
     _scheduleTracking();
+    _scheduleNoise();
     _boot();
     // Телевизор включается сам: без надписей, сразу луч кинескопа.
     beamStarted = true;
@@ -173,6 +189,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     } else {
       setState(() => items = c.snapshot());
     }
+  }
+
+  void _scheduleNoise() {
+    Timer(const Duration(milliseconds: 160), () {
+      if (!mounted) return;
+      setState(() => _noiseSeed = (_noiseSeed + 1) % 100000);
+      _scheduleNoise();
+    });
   }
 
   void _scheduleTracking() {
@@ -354,11 +378,23 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     }
   }
 
-  void _openFolderButton() {
-    final dir = destFolder;
-    if (dir.isEmpty) return;
-    Directory(dir).create(recursive: true).then((_) => _openPath(dir));
-    _showToast('КАЧАЕМ В ~/Downloads/K LOAD');
+  /// Круглая кнопка папки: выбор папки назначения для будущих скачиваний.
+  Future<void> _chooseDestFolder() async {
+    String? path;
+    try {
+      path = await _native.invokeMethod<String>('chooseFolder');
+    } on MissingPluginException {
+      _showToast('СИСТЕМНЫЙ ВЫБОР ПАПКИ НЕДОСТУПЕН — КАЧАЕМ В ~/Downloads/K LOAD');
+      return;
+    } on PlatformException catch (e) {
+      debugPrint('chooseFolder: $e');
+      return;
+    }
+    if (path == null || path.isEmpty) return; // отменено
+    final chosen = path;
+    setState(() => destFolder = chosen);
+    final short = chosen.replaceFirst(RegExp('^/Users/[^/]+'), '~');
+    _showToast('БУДУЩИЕ ЗАГРУЗКИ — В $short');
   }
 
   void _showToast(String text) {
@@ -408,6 +444,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   Widget build(BuildContext context) {
     // Телевизор занимает окно целиком: масштаб «каверкой» (щелей не бывает),
     // углы корпуса — под системный радиус окна, микрощели исключены.
+    if (chronOn) _measureChron();
     return Scaffold(
       backgroundColor: const Color(0xFF161413),
       body: LayoutBuilder(builder: (context, box) {
@@ -456,8 +493,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         child: Container(
           color: Pal.screenBg,
           child: Stack(fit: StackFit.expand, children: [
+            const GlassBackdrop(),
             _ui(),
-            GlassOverlay(flicker: bootless ? 0 : flickValue()),
+            GlassVeil(
+                flicker: bootless ? 0 : flickValue(), noiseSeed: _noiseSeed),
             if (tracking)
               AnimatedBuilder(
                   animation: trackC,
@@ -492,9 +531,18 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   }
 
   Widget _ui() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 22, 20, 14),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    return GestureDetector(
+      // Клик вне панели хрона закрывает её (дети перехватывают свои тапы).
+      behavior: HitTestBehavior.translucent,
+      onTap: () {
+        if (chronOn) setState(() => chronOn = false);
+      },
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 22, 20, 14),
+        child: Column(
+          key: _uiColumnKey,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
         _searchRow(),
         if (phase == Phase.seeking) ...[
           const SizedBox(height: 14),
@@ -508,11 +556,13 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             _modesRow(),
           ],
         ],
-        if (items.isNotEmpty) ...[
-          const SizedBox(height: 14),
-          Expanded(child: _queue()),
-        ],
-      ]),
+            if (items.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Expanded(child: _queue()),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -521,51 +571,69 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   Widget _searchRow() {
     return GestureDetector(
       onTap: () => searchFocus.requestFocus(),
-      child: AnimatedBuilder(
-        animation: Listenable.merge([searchFocus, query]),
-        builder: (context, _) {
-          final focused = searchFocus.hasFocus;
-          return CustomPaint(
-            foregroundPainter: DashedBorderPainter(
-                color: focused ? Pal.amber.withValues(alpha: .85) : Pal.amberSoft),
-            child: Container(
-              decoration: BoxDecoration(
-                boxShadow: focused
-                    ? [BoxShadow(color: Pal.amber.withValues(alpha: .16), blurRadius: 22)]
-                    : [],
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              constraints: const BoxConstraints(minHeight: 52),
-              child: Row(children: [
-                const ChainIcon(),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Stack(children: [
-                    TextField(
-                      controller: query,
-                      focusNode: searchFocus,
-                      onChanged: _onInputChanged,
-                      cursorColor: Pal.amber,
-                      style: T.h(21, w: FontWeight.w500, c: Pal.amber, ls: .045),
-                      decoration: const InputDecoration(
-                          isCollapsed: true, border: InputBorder.none),
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      keyboardType: TextInputType.url,
+      child: MouseRegion(
+        onEnter: (_) => setState(() => searchHover = true),
+        onExit: (_) => setState(() => searchHover = false),
+        child: AnimatedBuilder(
+          animation: Listenable.merge([searchFocus, query]),
+          builder: (context, _) {
+            final focused = searchFocus.hasFocus;
+            // Свечение нарастает и гаснет плавно, без скачков.
+            return TweenAnimationBuilder<double>(
+              tween: Tween(end: focused ? 1.0 : (searchHover ? .35 : 0.0)),
+              duration: const Duration(milliseconds: 320),
+              curve: Curves.easeOutCubic,
+              builder: (context, t, _) {
+                return CustomPaint(
+                  foregroundPainter: DashedBorderPainter(
+                      color: Color.lerp(Pal.amberSoft,
+                          Pal.amber.withValues(alpha: .9), t)!),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      boxShadow: [
+                        BoxShadow(
+                            color: Pal.amber.withValues(alpha: .18 * t),
+                            blurRadius: 13 + 13 * t),
+                      ],
                     ),
-                    if (rawText.isEmpty)
-                      Text(
-                        'Вставьте ссылку или напишите название того что нужно скачать',
-                        style: T.h(18, w: FontWeight.w500, c: Pal.dim),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
+                    constraints: const BoxConstraints(minHeight: 52),
+                    child: Row(children: [
+                      const ChainIcon(),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Stack(children: [
+                          TextField(
+                            controller: query,
+                            focusNode: searchFocus,
+                            onChanged: _onInputChanged,
+                            cursorColor: Pal.amber,
+                            style: T.h(21,
+                                w: FontWeight.w500, c: Pal.amber, ls: .045),
+                            decoration: const InputDecoration(
+                                isCollapsed: true,
+                                border: InputBorder.none),
+                            autocorrect: false,
+                            enableSuggestions: false,
+                            keyboardType: TextInputType.url,
+                          ),
+                          if (rawText.isEmpty)
+                            Text(
+                              'Вставьте ссылку или напишите название того что нужно скачать',
+                              style: T.h(18, w: FontWeight.w500, c: Pal.dim),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                        ]),
                       ),
-                  ]),
-                ),
-              ]),
-            ),
-          );
-        },
+                    ]),
+                  ),
+                );
+              },
+            );
+          },
+        ),
       ),
     );
   }
@@ -732,74 +800,63 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             : 'СКАЧАТЬ · 1';
     final canDownload = isBatch || (p != null && p.ok);
     final videoLabel = mediaMode ? 'МЕДИА' : 'ВИДЕО';
-    return Stack(clipBehavior: Clip.none, children: [
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
-        _chip(videoLabel,
+        _ModeChip(
+            key: const ValueKey('video'),
+            label: videoLabel,
             on: mode == 'video' && !musicOnly,
+            locked: false,
             hidden: musicOnly || photo,
             onTap: () => setState(() => mode = 'video')),
-        _chip('МУЗЫКА',
+        _ModeChip(
+            label: 'МУЗЫКА',
             on: mode == 'music',
+            locked: false,
             hidden: photo,
             onTap: () => setState(() => mode = 'music')),
-        _chip('ХРОН',
+        _ModeChip(
+            key: _chronChipKey,
+            label: 'ХРОН',
             on: chronOn,
             locked: chronLocked,
+            hidden: false,
             onTap: () => setState(() {
                   if (chronLocked) return;
                   chronOn = !chronOn;
+                  if (chronOn) _measureChron();
                 })),
         const Spacer(),
-        if (chronOn && !chronLocked) ...[
-          _chronBox(),
-          const SizedBox(width: 12),
-        ],
-        _goButton(goLabel, enabled: canDownload),
+        _GoButton(label: goLabel, enabled: canDownload),
       ]),
+      // Панель хрона открывается прямо под чипом и плавно раздвигает
+      // следующий контент (очередь уезжает вниз, ничего не перекрывается).
+      AnimatedSize(
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+        alignment: Alignment.topLeft,
+        child: chronOn && !chronLocked
+            ? Padding(
+                padding: EdgeInsets.only(left: _chronX, top: 8),
+                child: _chronBox(),
+              )
+            : const SizedBox(width: double.infinity),
+      ),
     ]);
   }
 
-  Widget _chip(String text, {bool on = false, bool locked = false, bool hidden = false, VoidCallback? onTap}) {
-    if (hidden) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(right: 9),
-      child: GestureDetector(
-        onTap: onTap,
-        child: MouseRegion(
-          cursor: locked ? SystemMouseCursors.forbidden : SystemMouseCursors.click,
-          child: Opacity(
-            opacity: locked ? .3 : 1,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
-              color: on ? Pal.amber : Colors.transparent,
-              child: Text(text,
-                  style: T.h(19, c: on ? const Color(0xFF0A0500) : Pal.soft, ls: .06)),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _goButton(String label, {bool enabled = true}) {
-    return GestureDetector(
-      onTap: enabled ? _download : null,
-      child: MouseRegion(
-        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
-        child: Opacity(
-          opacity: enabled ? 1 : .35,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
-            decoration: BoxDecoration(
-              color: Pal.amber,
-              boxShadow: [BoxShadow(color: Pal.amber.withValues(alpha: .25), blurRadius: 16)],
-            ),
-            child: Text(label,
-                style: T.h(20, w: FontWeight.w700, c: const Color(0xFF0A0500), ls: .06)),
-          ),
-        ),
-      ),
-    );
+  void _measureChron() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !chronOn) return;
+      final chipCtx = _chronChipKey.currentContext;
+      final colCtx = _uiColumnKey.currentContext;
+      if (chipCtx == null || colCtx == null) return;
+      final chipBox = chipCtx.findRenderObject() as RenderBox?;
+      final colBox = colCtx.findRenderObject() as RenderBox?;
+      if (chipBox == null || colBox == null || !chipBox.attached) return;
+      final x = chipBox.localToGlobal(Offset.zero, ancestor: colBox).dx;
+      if ((x - _chronX).abs() > 0.5) setState(() => _chronX = x);
+    });
   }
 
   Widget _chronBox() {
@@ -889,42 +946,57 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         const SizedBox(width: 12),
         SizedBox(
           width: 130,
-          child: LedRow(
-              count: 8, filled: done ? 8 : (it.progress * 8).round().clamp(0, 8), cellHeight: 14, gap: 3),
+          child: AnimatedLedRow(
+              count: 8,
+              progress: done ? 1 : it.progress,
+              blinking: it.state == 'working',
+              cellHeight: 14,
+              gap: 3),
         ),
         const SizedBox(width: 8),
         if (it.state == 'working' || it.state == 'queued')
-          _actButton(const Icon(Icons.close, size: 13, color: Pal.soft), 'Отменить',
-              () => core?.cancel(it.id))
+          _actButton(const Icon(Icons.close, size: 13, color: Pal.soft),
+              'Отменить', false, () => core?.cancel(it.id))
         else if (done) ...[
-          _actButton(const FolderIcon(size: 14), 'Открыть папку', () {
+          _actButton(const FolderIcon(size: 14, color: Pal.amber),
+              'Открыть папку', true, () {
             if (it.files.isNotEmpty) {
               _openPath(File(it.files.first).parent.path);
             } else {
-              _openFolderButton();
+              _openPath(destFolder);
             }
           }),
           const SizedBox(width: 6),
-          _actButton(const TrashIcon(), 'Удалить (и файл с диска)', () => _trashRow(it)),
+          _actButton(const TrashIcon(), 'Удалить (и файл с диска)', false,
+              () => _trashRow(it)),
         ] else if (failed)
-          _actButton(const TrashIcon(), 'Убрать из списка', () => _trashRow(it)),
+          _actButton(const TrashIcon(), 'Убрать из списка', false,
+              () => _trashRow(it)),
       ]),
     );
   }
 
-  Widget _actButton(Widget child, String tooltip, VoidCallback onTap) {
+  Widget _actButton(
+      Widget child, String tooltip, bool glowOnHover, VoidCallback onTap) {
     return Tooltip(
       message: tooltip,
       child: GestureDetector(
         onTap: onTap,
         child: MouseRegion(
           cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _actHover = true),
+          onExit: (_) => setState(() => _actHover = false),
           child: SizedBox(
             width: 27,
             height: 27,
             child: CustomPaint(
-              foregroundPainter: const DashedBorderPainter(color: Color(0x73FFB000)),
-              child: Center(child: child),
+              foregroundPainter:
+                  const DashedBorderPainter(color: Color(0x73FFB000)),
+              child: Center(
+                child: glowOnHover && _actHover
+                    ? _GlowWrap(child: child)
+                    : child,
+              ),
             ),
           ),
         ),
@@ -1012,7 +1084,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             offset: const Offset(0, -23),
             child: Plate(
               tooltip: 'Папка загрузок',
-              onPressed: _openFolderButton,
+              onPressed: _chooseDestFolder,
               child: const FolderIcon(),
             ),
           ),
@@ -1021,7 +1093,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         Positioned(
           left: 0,
           right: 0,
-          top: 51,
+          top: 52,
           child: Transform.translate(
             offset: const Offset(0, -31),
             child: Center(
@@ -1160,6 +1232,171 @@ class _KvartalLogoState extends State<_KvartalLogo> {
           ]),
         ),
       ),
+    );
+  }
+}
+
+
+// Чип режима: ховер — мягкая светло-оранжевая заливка с тонким glow,
+// нажатие — лёгкий скейл. Открытие/закрытие анимированы.
+class _ModeChip extends StatefulWidget {
+  const _ModeChip({
+    super.key,
+    required this.label,
+    required this.on,
+    required this.locked,
+    required this.hidden,
+    required this.onTap,
+  });
+  final String label;
+  final bool on;
+  final bool locked;
+  final bool hidden;
+  final VoidCallback onTap;
+
+  @override
+  State<_ModeChip> createState() => _ModeChipState();
+}
+
+class _ModeChipState extends State<_ModeChip> {
+  bool hover = false;
+  bool pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.hidden) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(right: 9),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Listener(
+          onPointerDown: (_) => setState(() => pressed = true),
+          onPointerUp: (_) => setState(() => pressed = false),
+          onPointerCancel: (_) => setState(() => pressed = false),
+          child: MouseRegion(
+            cursor: widget.locked
+                ? SystemMouseCursors.forbidden
+                : SystemMouseCursors.click,
+            onEnter: (_) => setState(() => hover = true),
+            onExit: (_) => setState(() => hover = false),
+            child: Opacity(
+              opacity: widget.locked ? .3 : 1,
+              child: AnimatedScale(
+                scale: pressed ? .96 : 1,
+                duration: const Duration(milliseconds: 90),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOutCubic,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: widget.on
+                        ? Pal.amber
+                        : (hover
+                            ? Pal.amber.withValues(alpha: .14)
+                            : Colors.transparent),
+                    borderRadius: const BorderRadius.all(Radius.circular(2)),
+                    boxShadow: hover && !widget.on
+                        ? [BoxShadow(
+                            color: Pal.amber.withValues(alpha: .20),
+                            blurRadius: 12)]
+                        : null,
+                  ),
+                  child: Text(widget.label,
+                      style: T.h(19,
+                          c: widget.on
+                              ? const Color(0xFF0A0500)
+                              : Pal.soft,
+                          ls: .06)),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Кнопка СКАЧАТЬ: ховер усиливает золотое свечение, нажатие — скейл+сдвиг.
+class _GoButton extends StatefulWidget {
+  const _GoButton({required this.label, required this.enabled});
+  final String label;
+  final bool enabled;
+
+  @override
+  State<_GoButton> createState() => _GoButtonState();
+}
+
+class _GoButtonState extends State<_GoButton> {
+  bool hover = false;
+  bool pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: widget.enabled ? _onTap : null,
+      child: MouseRegion(
+        cursor: widget.enabled
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
+        onEnter: (_) => setState(() => hover = true),
+        onExit: (_) => setState(() => hover = false),
+        child: Listener(
+          onPointerDown: (_) => setState(() => pressed = true),
+          onPointerUp: (_) => setState(() => pressed = false),
+          onPointerCancel: (_) => setState(() => pressed = false),
+          child: AnimatedOpacity(
+            opacity: widget.enabled ? 1 : .35,
+            duration: const Duration(milliseconds: 180),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              curve: Curves.easeOutCubic,
+              transform: Matrix4.translationValues(0, pressed ? 1 : 0, 0),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+              decoration: BoxDecoration(
+                color: Pal.amber,
+                boxShadow: [
+                  BoxShadow(
+                      color: Pal.amber.withValues(
+                          alpha: hover ? .45 : .25),
+                      blurRadius: hover ? 22 : 16),
+                ],
+              ),
+              child: AnimatedScale(
+                scale: pressed ? .98 : 1,
+                duration: const Duration(milliseconds: 90),
+                child: Text(widget.label,
+                    style: T.h(20,
+                        w: FontWeight.w700,
+                        c: const Color(0xFF0A0500),
+                        ls: .06)),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _onTap() {
+    context
+        .findAncestorStateOfType<_KLoadScreenState>()
+        ?._download();
+  }
+}
+
+// Свечение иконки при ховере (для активных иконок в строках очереди).
+class _GlowWrap extends StatelessWidget {
+  const _GlowWrap({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return ImageFiltered(
+      imageFilter: ui.ImageFilter.blur(sigmaX: 2.2, sigmaY: 2.2),
+      child: Opacity(opacity: .8, child: child),
     );
   }
 }

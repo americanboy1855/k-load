@@ -30,6 +30,32 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 
+    // Мост для системных диалогов: выбор папки назначения (NSOpenPanel).
+    let channel = FlutterMethodChannel(
+        name: "kload/native",
+        binaryMessenger: flutterViewController.engine.binaryMessenger)
+    channel.setMethodCallHandler { call, result in
+        switch call.method {
+        case "chooseFolder":
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.canCreateDirectories = true
+            panel.message = "Выберите папку для загрузок K LOAD"
+            panel.prompt = "Выбрать"
+            panel.begin { response in
+                if response == .OK, let url = panel.urls.first {
+                    result(url.path)
+                } else {
+                    result(nil) // отменено
+                }
+            }
+        default:
+            result(FlutterMethodNotImplemented)
+        }
+    }
+
     super.awakeFromNib()
   }
 }
