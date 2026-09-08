@@ -280,8 +280,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   void _onProbe(KdProbeEvent p) {
     if (!mounted || rawText.isEmpty) return;
-    final link = p.link.isNotEmpty ? p.link : (p.resolved.isNotEmpty ? p.resolved : rawText);
-    final svc = serviceOf(link);
+    // Что реально будет качаться: для поиска по названию это resolved
+    // (SoundCloud и т.п.), а не сырой текст из поля.
+    final effective = (p.resolved.isNotEmpty ? p.resolved : p.link);
+    final svc = serviceOf(effective.startsWith('http') ? effective : rawText);
     setState(() {
       probe = p;
       phase = Phase.found;
@@ -309,22 +311,42 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     if (c == null) return;
     final secs = sectionsArg;
     final audio = mode == 'music';
+    // Ссылки, которые уже стоят в очереди — второй раз не ставим.
+    final busy = items
+        .where((it) => it.state == 'queued' || it.state == 'working')
+        .map((it) => it.link)
+        .toSet();
+    String targetLink(String fallback) {
+      final p = probe;
+      for (final candidate in [p?.resolved ?? '', p?.link ?? '']) {
+        if (candidate.startsWith('http')) return candidate;
+      }
+      return fallback;
+    }
+
     if (isBatch) {
-      c.enqueueBatch(batchLinks, audio: audio, sections: secs);
+      final fresh = batchLinks.where((l) => !busy.contains(l)).toList();
+      if (fresh.isEmpty) return;
+      c.enqueueBatch(fresh, audio: audio, sections: secs);
     } else {
       final p = probe;
       if (p == null || !p.ok) return;
       if (p.isPhoto) {
-        c.enqueuePhoto(p.link.isNotEmpty ? p.link : rawText);
+        final link = targetLink(rawText);
+        if (busy.contains(link)) return;
+        c.enqueuePhoto(link);
       } else if (p.isPlaylist) {
-        c.enqueueBatch([p.link], audio: audio, wholePlaylist: 1);
+        final link = p.link;
+        if (busy.contains(link)) return;
+        c.enqueueBatch([link], audio: audio, wholePlaylist: 1);
       } else if (p.isSearch) {
         // найденный по названию трек: файл называется запросом
-        final link = p.resolved.isNotEmpty ? p.resolved : p.link;
-        if (link.isEmpty) return;
+        final link = targetLink('');
+        if (link.isEmpty || busy.contains(link)) return;
         c.enqueueBatch([link], audio: audio, sections: secs, nameOverride: rawText);
       } else {
-        final link = p.link.isNotEmpty ? p.link : rawText;
+        final link = targetLink(rawText);
+        if (busy.contains(link)) return;
         c.enqueueBatch([link], audio: audio, sections: secs);
       }
     }
@@ -619,7 +641,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         ]),
       );
     }
-    final src = p.link.isNotEmpty ? p.link : (p.resolved.isNotEmpty ? p.resolved : rawText);
+    final src = _sourceUrl(p);
     return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
       _cover(p.thumbnail.isEmpty ? null : p.thumbnail, const Color(0xFF31415F)),
       const SizedBox(width: 15),
@@ -633,6 +655,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         ]),
       ),
     ]);
+  }
+
+  /// Источник «где нашлось» — первая настоящая ссылка из разбора.
+  String _sourceUrl(KdProbeEvent p) {
+    for (final candidate in [p.resolved, p.link, rawText]) {
+      if (candidate.startsWith('http')) return candidate;
+    }
+    return '';
   }
 
   String _durLine(KdProbeEvent p) {
@@ -837,7 +867,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     final done = it.state == 'done';
     final failed = it.state == 'failed';
     final stageColor = done ? Pal.amber : (failed ? Pal.error : Pal.dim);
-    final title = it.title.isEmpty ? it.link : it.title;
+    // Пока своего названия нет — показываем название из разбора, затем ссылку.
+    var title = it.title.isEmpty ? it.link : it.title;
+    if (title.isEmpty || title == it.link) {
+      final p = probe;
+      if (p != null && p.title.isNotEmpty && (p.resolved == it.link || p.link == it.link)) {
+        title = p.title;
+      }
+    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
       decoration: const BoxDecoration(
@@ -860,7 +897,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
               count: 8, filled: done ? 8 : (it.progress * 8).round().clamp(0, 8), cellHeight: 14, gap: 3),
         ),
         const SizedBox(width: 8),
-        if (it.state == 'working')
+        if (it.state == 'working' || it.state == 'queued')
           _actButton(const Icon(Icons.close, size: 13, color: Pal.soft), 'Отменить',
               () => core?.cancel(it.id))
         else if (done) ...[
@@ -873,7 +910,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           }),
           const SizedBox(width: 6),
           _actButton(const TrashIcon(), 'Удалить (и файл с диска)', () => _trashRow(it)),
-        ],
+        ] else if (failed)
+          _actButton(const TrashIcon(), 'Убрать из списка', () => _trashRow(it)),
       ]),
     );
   }

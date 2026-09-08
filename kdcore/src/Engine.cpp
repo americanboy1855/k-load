@@ -1316,6 +1316,22 @@ Probe Engine::probePinterestPhoto (const Str& link) const
 // Поиск трека по названию: прямой запрос к странице результатов YouTube —
 // одна загрузка вместо запуска целого процесса. yt-dlp остаётся запасным
 // путём на случай, если разметка поменяется; если и он пуст — SoundCloud.
+// Обложка из результата поиска: поле thumbnail, последняя из thumbnails[]
+// или artwork_url (SoundCloud) — что первое встретится.
+static Str searchThumb (const json& e)
+{
+    auto t = jtext (e, "thumbnail");
+    if (! t.empty()) return t;
+    const auto arr = dig (e, "thumbnails");
+    if (arr.is_array() && ! arr.empty())
+    {
+        const auto& last = arr[arr.size() - 1];
+        if (last.is_object()) t = jtext (last, "url");
+    }
+    if (t.empty()) t = jtext (e, "artwork_url");
+    return t;
+}
+
 Probe Engine::probeSearch (const Str& query) const
 {
     Probe p;
@@ -1383,7 +1399,7 @@ Probe Engine::probeSearch (const Str& query) const
                 p.title = jtext (e, "title", query);
                 p.uploader = jtext (e, "uploader");
                 p.duration = (int) jnum (e, "duration");
-                p.thumbnail = jtext (e, "thumbnail");
+                p.thumbnail = searchThumb (e);
             }
         }
     }
@@ -1409,7 +1425,8 @@ Probe Engine::probeSearch (const Str& query) const
                     p.title = jtext (e, "title", query);
                     p.uploader = jtext (e, "uploader");
                     p.duration = (int) jnum (e, "duration");
-                    p.thumbnail = jtext (e, "thumbnail");
+                    // artwork_url отдаётся 120×120 — просим крупнее.
+                    p.thumbnail = kd::replaceAll (searchThumb (e), "t120x120", "t500x500");
                 }
             }
         }

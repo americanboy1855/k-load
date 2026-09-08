@@ -65,6 +65,12 @@ static void testLinkLogic()
                                      "https://www.instagram.com/reel/DaikHQxo_Z3/,"
                                      " https://soundcloud.com/forss/flickermood");
     check (links.size() == 3, "splitLinks: 3 ссылки из свалки", std::to_string (links.size()));
+
+    // upToFirst: без маркера строка целиком — иначе однострочные ошибки
+    // yt-dlp терялись и человек видел безликое «не удалось».
+    check (kd::upToFirst ("ERROR: drm protected", "\n") == "ERROR: drm protected",
+        "upToFirst: маркера нет — строка целиком");
+    check (kd::upToFirst ("a\nb", "\n") == "a", "upToFirst: до маркера");
 }
 
 static void testNames()

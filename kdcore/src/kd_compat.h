@@ -83,10 +83,12 @@ inline Str fromLast (const Str& s, const Str& marker)
 }
 
 // Голова до первого вхождения marker (вхождение не включается).
+// Маркера нет — строка целиком: однострочная ошибка yt-dlp не должна
+// превращаться в пустоту (именно так «DRM protected» стал «не удалось»).
 inline Str upToFirst (const Str& s, const Str& marker)
 {
     const auto p = s.find (marker);
-    return p == Str::npos ? Str() : s.substr (0, p);
+    return p == Str::npos ? s : s.substr (0, p);
 }
 
 inline int indexOf (const Str& s, const Str& needle, size_t from = 0)
