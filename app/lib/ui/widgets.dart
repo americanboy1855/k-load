@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -346,25 +347,100 @@ class _BackdropPainter extends CustomPainter {
         colors: const [Color(0x0DFFECC8), Color(0x00FFECC8)],
       ).createShader(Offset.zero & size);
     canvas.drawRect(Offset.zero & size, sheen);
+
+    // Выпуклый кинескоп: мягкая тень по краям, гнущаяся внутрь по углам —
+    // стекло «обнимает» картинку, ничего не обрезая.
+    final edge = size.shortestSide;
+    final bend = Paint()
+      ..shader = RadialGradient(
+        center: Alignment.center,
+        radius: 0.72,
+        colors: const [
+          Color(0x00000000),
+          Color(0x2E000000),
+          Color(0x8C000000),
+        ],
+        stops: const [0.72, 0.94, 1],
+      ).createShader(Offset.zero & size);
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(
+            Offset.zero & size, Radius.circular(edge * 0.085)),
+        bend);
   }
 
   @override
   bool shouldRepaint(covariant _BackdropPainter old) => false;
 }
 
-// Вуаль над контентом: редкое слабое мерцание + аналоговый шум (почти
-// незаметные, читаемость не трогают).
-class GlassVeil extends StatelessWidget {
-  const GlassVeil({super.key, this.flicker = 0, this.noiseSeed = 0});
-  final double flicker; // 0..0.03
-  final int noiseSeed;
+// Вуаль над контентом: редкое слабое мерцание + аналоговый шум. Живёт сама:
+// экран не перестраивается из-за атмосферы. enabled=false — полностью статична.
+class GlassVeil extends StatefulWidget {
+  const GlassVeil({super.key, this.enabled = true});
+  final bool enabled;
+
+  @override
+  State<GlassVeil> createState() => _GlassVeilState();
+}
+
+class _GlassVeilState extends State<GlassVeil>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _flick = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 6500));
+  Timer? _noiseTimer;
+  int _seed = 1;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.enabled) _start();
+  }
+
+  void _start() {
+    _flick.repeat();
+    _noiseTimer = Timer.periodic(const Duration(milliseconds: 170), (_) {
+      if (mounted) setState(() => _seed = (_seed + 1) % 100000);
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant GlassVeil old) {
+    super.didUpdateWidget(old);
+    if (widget.enabled && !old.enabled) {
+      _start();
+    } else if (!widget.enabled && old.enabled) {
+      _flick.stop();
+      _noiseTimer?.cancel();
+      if (mounted) setState(() => _seed = 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _noiseTimer?.cancel();
+    _flick.dispose();
+    super.dispose();
+  }
+
+  double _flickerValue(double t) {
+    double pulse(double a, double b, double peak) {
+      if (t < a || t > b) return 0;
+      final k = (t - a) / (b - a);
+      return peak * (1 - (2 * k - 1).abs());
+    }
+    return pulse(0.46, 0.48, 0.028) + pulse(0.79, 0.81, 0.016);
+  }
 
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
-      child: CustomPaint(
-        size: Size.infinite,
-        painter: _VeilPainter(flicker, noiseSeed),
+      child: AnimatedBuilder(
+        animation: _flick,
+        builder: (context, _) => CustomPaint(
+          size: Size.infinite,
+          painter: _VeilPainter(
+              widget.enabled ? _flickerValue(_flick.value) : 0,
+              widget.enabled ? _seed : 0),
+        ),
       ),
     );
   }
@@ -377,23 +453,25 @@ class _VeilPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // аналоговый шум: редкие зёрна, меняются время от времени
-    final rnd = math.Random(noiseSeed);
-    for (var i = 0; i < 260; i++) {
-      final x = rnd.nextDouble() * size.width;
-      final y = rnd.nextDouble() * size.height;
-      final bright = rnd.nextBool();
-      canvas.drawRect(
-          Rect.fromLTWH(x, y, 2, 1),
-          Paint()
-            ..color = (bright ? Colors.white : Colors.black)
-                .withValues(alpha: .03));
+    if (noiseSeed > 0) {
+      final rnd = math.Random(noiseSeed);
+      for (var i = 0; i < 240; i++) {
+        final x = rnd.nextDouble() * size.width;
+        final y = rnd.nextDouble() * size.height;
+        final bright = rnd.nextBool();
+        canvas.drawRect(
+            Rect.fromLTWH(x, y, 2, 1),
+            Paint()
+              ..color = (bright ? Colors.white : Colors.black)
+                  .withValues(alpha: .028));
+      }
     }
     if (flicker > 0) {
       canvas.drawRect(
           Offset.zero & size,
           Paint()
-            ..color = Colors.white.withValues(alpha: flicker.clamp(0, .03)));
+            ..color =
+                Colors.white.withValues(alpha: flicker.clamp(0, .03)));
     }
   }
 
@@ -481,10 +559,9 @@ class BootBeamPainter extends CustomPainter {
 // ---- круглая «плашка» на корпусе (папка / доллар) ----
 
 class Plate extends StatefulWidget {
-  const Plate({super.key, required this.child, this.onPressed, this.tooltip});
+  const Plate({super.key, required this.child, this.onPressed});
   final Widget child;
   final VoidCallback? onPressed;
-  final String? tooltip;
 
   @override
   State<Plate> createState() => _PlateState();
@@ -521,7 +598,7 @@ class _PlateState extends State<Plate> {
               const BoxShadow(color: Color(0x1DFFFFFF), offset: Offset(0, 1), blurRadius: 0, spreadRadius: -1),
               if (hover)
                 BoxShadow(
-                    color: Pal.amber.withValues(alpha: .30), blurRadius: 18),
+                    color: Pal.amber.withValues(alpha: .18), blurRadius: 12),
             ],
           ),
           child: Center(
@@ -537,9 +614,6 @@ class _PlateState extends State<Plate> {
         ),
       ),
     );
-    if (widget.tooltip != null) {
-      plate = Tooltip(message: widget.tooltip!, child: plate);
-    }
     return Listener(
       onPointerDown: (_) => setState(() => pressed = true),
       onPointerUp: (_) => setState(() => pressed = false),

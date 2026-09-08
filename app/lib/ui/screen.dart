@@ -82,10 +82,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   bool beamStarted = false;
   late final AnimationController beamC =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
-  late final AnimationController flickC =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 6500));
   late final AnimationController trackC =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 1700));
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 3200));
   bool tracking = false;
   Timer? trackTimer;
 
@@ -111,7 +109,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   bool mediaMode = false; // в пачке чип ВИДЕО превращается в МЕДИА
   bool musicOnly = false; // музыкальный сервис: видео оттуда не скачать
   String mode = 'video'; // video | music
-  bool chronOn = false;
+  bool chronOn = false;   // режим активен — отрезок уйдёт в загрузку
+  bool chronOpen = false; // панель ОТ/ДО раскрыта (не влияет на режим)
   bool chronLocked = false;
   final chronFrom = TextEditingController(text: '0:00');
   final chronTo = TextEditingController(text: '0:10');
@@ -128,9 +127,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   // системный выбор папки
   static const _native = MethodChannel('kload/native');
 
-  // аналоговый шум: зерно меняется время от времени
-  int _noiseSeed = 1;
-
   bool _actHover = false;
 
   // хрон: позиция чипа, чтобы панель открывалась прямо под ним
@@ -145,18 +141,23 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   @override
   void initState() {
     super.initState();
-    flickC.repeat();
-    _scheduleTracking();
-    _scheduleNoise();
     _boot();
-    // Телевизор включается сам: без надписей, сразу луч кинескопа.
-    beamStarted = true;
-    beamC.addStatusListener((s) {
-      if (s == AnimationStatus.completed) _finishBoot();
-    });
-    Future.delayed(const Duration(milliseconds: 350), () {
-      if (mounted) beamC.forward(from: 0);
-    });
+    // reduced-motion: включение мгновенное, декоративные слои не запускаем.
+    final reduce = WidgetsBinding
+        .instance.platformDispatcher.accessibilityFeatures.disableAnimations;
+    if (reduce) {
+      booted = true;
+    } else {
+      // Телевизор включается сам: без надписей, ровно один луч кинескопа.
+      beamStarted = true;
+      beamC.addStatusListener((s) {
+        if (s == AnimationStatus.completed) _finishBoot();
+      });
+      Future.delayed(const Duration(milliseconds: 350), () {
+        if (mounted) beamC.forward(from: 0);
+      });
+      _scheduleTracking();
+    }
   }
 
   Future<void> _boot() async {
@@ -191,16 +192,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     }
   }
 
-  void _scheduleNoise() {
-    Timer(const Duration(milliseconds: 160), () {
-      if (!mounted) return;
-      setState(() => _noiseSeed = (_noiseSeed + 1) % 100000);
-      _scheduleNoise();
-    });
-  }
-
   void _scheduleTracking() {
-    trackTimer = Timer(Duration(milliseconds: 9000 + DateTime.now().millisecondsSinceEpoch % 5000), () {
+    // Полоса пробегает редко и медленно, как на старом телевизоре.
+    trackTimer = Timer(Duration(milliseconds: 18000 + DateTime.now().millisecondsSinceEpoch % 12000), () {
       if (!mounted) return;
       if (booted) {
         setState(() => tracking = true);
@@ -215,6 +209,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   // ---- boot ----
 
   void _finishBoot() {
+    if (booted) return;
     setState(() => booted = true);
     // VPN-плашка появляется через паузу, как в макете.
     Future.delayed(const Duration(seconds: 2), () {
@@ -237,6 +232,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         isBatch = false;
       }
       chronOn = false;
+      chronOpen = false;
     });
     debounce?.cancel();
     seekAnim?.cancel();
@@ -309,6 +305,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       mode = musicOnly ? 'music' : 'video';
       chronLocked = p.isPlaylist || p.isPhoto || !p.ok;
       chronOn = false;
+      chronOpen = false;
     });
   }
 
@@ -431,7 +428,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     seekAnim?.cancel();
     toastTimer?.cancel();
     beamC.dispose();
-    flickC.dispose();
     trackC.dispose();
     query.dispose();
     searchFocus.dispose();
@@ -444,7 +440,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   Widget build(BuildContext context) {
     // Телевизор занимает окно целиком: масштаб «каверкой» (щелей не бывает),
     // углы корпуса — под системный радиус окна, микрощели исключены.
-    if (chronOn) _measureChron();
+    if (chronOpen && chronOn) _measureChron();
     return Scaffold(
       backgroundColor: const Color(0xFF161413),
       body: LayoutBuilder(builder: (context, box) {
@@ -495,8 +491,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           child: Stack(fit: StackFit.expand, children: [
             const GlassBackdrop(),
             _ui(),
-            GlassVeil(
-                flicker: bootless ? 0 : flickValue(), noiseSeed: _noiseSeed),
+            GlassVeil(enabled: booted),
             if (tracking)
               AnimatedBuilder(
                   animation: trackC,
@@ -516,26 +511,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     );
   }
 
-  bool get bootless => !booted;
-
-  double flickValue() {
-    final t = flickC.value;
-    double v = 0;
-    double pulse(double a, double b, double peak) {
-      if (t < a || t > b) return 0;
-      final k = (t - a) / (b - a);
-      return peak * (1 - (2 * k - 1).abs());
-    }
-    v = pulse(0.46, 0.48, 0.028) + pulse(0.79, 0.81, 0.016);
-    return v;
-  }
-
   Widget _ui() {
     return GestureDetector(
       // Клик вне панели хрона закрывает её (дети перехватывают свои тапы).
       behavior: HitTestBehavior.translucent,
       onTap: () {
-        if (chronOn) setState(() => chronOn = false);
+        if (chronOpen) setState(() => chronOpen = false);
       },
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 22, 20, 14),
@@ -644,7 +625,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, crossAxisAlignment: CrossAxisAlignment.end, children: [
         Text('ПОИСК', style: T.h(17, c: Pal.soft, ls: .3)),
-        Text('$seekPct%', style: T.h(24, c: Pal.amber, glow: true)),
+        Text('$seekPct%', style: T.h(24, c: Pal.amber)),
       ]),
       const SizedBox(height: 9),
       LedRow(count: 16, filled: (seekPct / 6.25).round().clamp(0, 16)),
@@ -696,7 +677,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             Text(_drmTitle(p), style: T.h(26), maxLines: 2, overflow: TextOverflow.ellipsis),
             const SizedBox(height: 4),
             Text(p.error.toUpperCase(),
-                style: T.h(17, w: FontWeight.w600, c: Pal.error, ls: .06, glow: true)),
+                style: T.h(17, w: FontWeight.w600, c: Pal.error, ls: .06)),
           ]),
         ),
       ]);
@@ -709,7 +690,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           _badge(p.serviceTitle.toUpperCase(), src: src),
           const SizedBox(height: 8),
-          Text(p.title, style: T.h(26, glow: true),
+          Text(p.title, style: T.h(26),
               maxLines: 2, overflow: TextOverflow.ellipsis),
           const SizedBox(height: 4),
           Text(_durLine(p), style: T.h(17, w: FontWeight.w500, c: Pal.dim, ls: .06)),
@@ -824,7 +805,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             onTap: () => setState(() {
                   if (chronLocked) return;
                   chronOn = !chronOn;
-                  if (chronOn) _measureChron();
+                  chronOpen = chronOn;
+                  if (chronOpen) _measureChron();
                 })),
         const Spacer(),
         _GoButton(label: goLabel, enabled: canDownload),
@@ -835,7 +817,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         duration: const Duration(milliseconds: 240),
         curve: Curves.easeOutCubic,
         alignment: Alignment.topLeft,
-        child: chronOn && !chronLocked
+        child: chronOpen && chronOn && !chronLocked
             ? Padding(
                 padding: EdgeInsets.only(left: _chronX, top: 8),
                 child: _chronBox(),
@@ -847,7 +829,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   void _measureChron() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !chronOn) return;
+      if (!mounted || !chronOpen || !chronOn) return;
       final chipCtx = _chronChipKey.currentContext;
       final colCtx = _uiColumnKey.currentContext;
       if (chipCtx == null || colCtx == null) return;
@@ -939,8 +921,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                 style: T.h(20, c: Pal.soft), maxLines: 1, overflow: TextOverflow.ellipsis),
             const SizedBox(height: 3),
             Text(it.stage.toUpperCase(),
-                style: T.h(15, w: FontWeight.w500, c: stageColor,
-                    ls: .1, glow: done)),
+                style: T.h(15, w: FontWeight.w500, c: stageColor, ls: .1)),
           ]),
         ),
         const SizedBox(width: 12),
@@ -955,11 +936,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         ),
         const SizedBox(width: 8),
         if (it.state == 'working' || it.state == 'queued')
-          _actButton(const Icon(Icons.close, size: 13, color: Pal.soft),
-              'Отменить', false, () => core?.cancel(it.id))
+          _actButton((_) => const Icon(Icons.close, size: 13, color: Pal.soft),
+              () => core?.cancel(it.id))
         else if (done) ...[
-          _actButton(const FolderIcon(size: 14, color: Pal.amber),
-              'Открыть папку', true, () {
+          _actButton(
+              (hover) => FolderIcon(
+                  size: 14, color: hover ? Pal.soft : Pal.amber), () {
             if (it.files.isNotEmpty) {
               _openPath(File(it.files.first).parent.path);
             } else {
@@ -967,37 +949,32 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             }
           }),
           const SizedBox(width: 6),
-          _actButton(const TrashIcon(), 'Удалить (и файл с диска)', false,
+          _actButton(
+              (hover) => TrashIcon(size: 13, color: hover ? Pal.soft : Pal.amber),
               () => _trashRow(it)),
         ] else if (failed)
-          _actButton(const TrashIcon(), 'Убрать из списка', false,
+          _actButton(
+              (hover) =>
+                  TrashIcon(size: 13, color: hover ? Pal.soft : Pal.amber),
               () => _trashRow(it)),
       ]),
     );
   }
 
-  Widget _actButton(
-      Widget child, String tooltip, bool glowOnHover, VoidCallback onTap) {
-    return Tooltip(
-      message: tooltip,
-      child: GestureDetector(
-        onTap: onTap,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          onEnter: (_) => setState(() => _actHover = true),
-          onExit: (_) => setState(() => _actHover = false),
-          child: SizedBox(
-            width: 27,
-            height: 27,
-            child: CustomPaint(
-              foregroundPainter:
-                  const DashedBorderPainter(color: Color(0x73FFB000)),
-              child: Center(
-                child: glowOnHover && _actHover
-                    ? _GlowWrap(child: child)
-                    : child,
-              ),
-            ),
+  Widget _actButton(Widget Function(bool hover) build, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _actHover = true),
+        onExit: (_) => setState(() => _actHover = false),
+        child: SizedBox(
+          width: 27,
+          height: 27,
+          child: CustomPaint(
+            foregroundPainter:
+                const DashedBorderPainter(color: Color(0x73FFB000)),
+            child: Center(child: build(_actHover)),
           ),
         ),
       ),
@@ -1016,7 +993,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             const VpnIcon(),
             const SizedBox(width: 10),
             Text('Для лучшей работы загрузчика - включите VPN',
-                style: T.h(17, w: FontWeight.w500, c: Pal.soft, glow: true)),
+                style: T.h(17, w: FontWeight.w500, c: Pal.soft)),
             const SizedBox(width: 4),
             GestureDetector(
               onTap: () => setState(() => vpnDismissed = true),
@@ -1083,7 +1060,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           child: Transform.translate(
             offset: const Offset(0, -23),
             child: Plate(
-              tooltip: 'Папка загрузок',
               onPressed: _chooseDestFolder,
               child: const FolderIcon(),
             ),
@@ -1093,7 +1069,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         Positioned(
           left: 0,
           right: 0,
-          top: 52,
+          top: 55,
           child: Transform.translate(
             offset: const Offset(0, -31),
             child: Center(
@@ -1108,14 +1084,18 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           child: Transform.translate(
             offset: const Offset(0, -23),
             child: Plate(
-              tooltip: 'Поддержать на Boosty',
               onPressed: () => _openPath('https://boosty.to/kvartalrecords/donate'),
-              child: const Text('\$',
-                  style: TextStyle(
-                      fontFamily: T.chakra,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 20,
-                      height: 1)),
+              child: Builder(builder: (context) {
+                // \$ красится как иконка папки: тёмный, на ховере — фосфор.
+                final hover = PlateHover.of(context)?.hover ?? false;
+                return Text('\$',
+                    style: TextStyle(
+                        fontFamily: T.chakra,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 20,
+                        height: 1,
+                        color: hover ? Pal.amber : plateIconIdle));
+              }),
             ),
           ),
         ),
@@ -1220,7 +1200,7 @@ class _KvartalLogoState extends State<_KvartalLogo> {
                 ),
               ),
             ),
-            _copy(Colors.black, dy: -1, blur: .8, opacity: .6),
+            _copy(Colors.black, dy: -1, blur: .6, opacity: .45),
             _copy(const Color(0x17FFFFFF), dy: 1.2),
             TweenAnimationBuilder<Color?>(
               tween: ColorTween(
@@ -1237,8 +1217,8 @@ class _KvartalLogoState extends State<_KvartalLogo> {
 }
 
 
-// Чип режима: ховер — мягкая светло-оранжевая заливка с тонким glow,
-// нажатие — лёгкий скейл. Открытие/закрытие анимированы.
+// Чип режима: ховер — мягкая светло-оранжевая заливка с тонким свечением.
+// Только opacity/цвет: никаких скачков размеров и пересборок layout.
 class _ModeChip extends StatefulWidget {
   const _ModeChip({
     super.key,
@@ -1260,7 +1240,6 @@ class _ModeChip extends StatefulWidget {
 
 class _ModeChipState extends State<_ModeChip> {
   bool hover = false;
-  bool pressed = false;
 
   @override
   Widget build(BuildContext context) {
@@ -1269,46 +1248,40 @@ class _ModeChipState extends State<_ModeChip> {
       padding: const EdgeInsets.only(right: 9),
       child: GestureDetector(
         onTap: widget.onTap,
-        child: Listener(
-          onPointerDown: (_) => setState(() => pressed = true),
-          onPointerUp: (_) => setState(() => pressed = false),
-          onPointerCancel: (_) => setState(() => pressed = false),
-          child: MouseRegion(
-            cursor: widget.locked
-                ? SystemMouseCursors.forbidden
-                : SystemMouseCursors.click,
-            onEnter: (_) => setState(() => hover = true),
-            onExit: (_) => setState(() => hover = false),
-            child: Opacity(
-              opacity: widget.locked ? .3 : 1,
-              child: AnimatedScale(
-                scale: pressed ? .96 : 1,
-                duration: const Duration(milliseconds: 90),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  curve: Curves.easeOutCubic,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: widget.on
-                        ? Pal.amber
-                        : (hover
-                            ? Pal.amber.withValues(alpha: .14)
-                            : Colors.transparent),
-                    borderRadius: const BorderRadius.all(Radius.circular(2)),
-                    boxShadow: hover && !widget.on
-                        ? [BoxShadow(
-                            color: Pal.amber.withValues(alpha: .20),
-                            blurRadius: 12)]
-                        : null,
-                  ),
-                  child: Text(widget.label,
-                      style: T.h(19,
-                          c: widget.on
-                              ? const Color(0xFF0A0500)
-                              : Pal.soft,
-                          ls: .06)),
-                ),
+        child: MouseRegion(
+          cursor: widget.locked
+              ? SystemMouseCursors.forbidden
+              : SystemMouseCursors.click,
+          onEnter: (_) => setState(() => hover = true),
+          onExit: (_) => setState(() => hover = false),
+          child: AnimatedOpacity(
+            opacity: widget.locked ? .3 : 1,
+            duration: const Duration(milliseconds: 160),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+              decoration: BoxDecoration(
+                color: widget.on
+                    ? Pal.amber
+                    : (hover
+                        ? Pal.amber.withValues(alpha: .12)
+                        : Colors.transparent),
+                borderRadius: const BorderRadius.all(Radius.circular(2)),
+                boxShadow: hover && !widget.on
+                    ? [BoxShadow(
+                        color: Pal.amber.withValues(alpha: .16),
+                        blurRadius: 10)]
+                    : const [],
+              ),
+              child: AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                style: T.h(19,
+                    c: widget.on ? const Color(0xFF0A0500) : Pal.soft,
+                    ls: .06),
+                child: Text(widget.label),
               ),
             ),
           ),
@@ -1364,15 +1337,11 @@ class _GoButtonState extends State<_GoButton> {
                       blurRadius: hover ? 22 : 16),
                 ],
               ),
-              child: AnimatedScale(
-                scale: pressed ? .98 : 1,
-                duration: const Duration(milliseconds: 90),
-                child: Text(widget.label,
-                    style: T.h(20,
-                        w: FontWeight.w700,
-                        c: const Color(0xFF0A0500),
-                        ls: .06)),
-              ),
+              child: Text(widget.label,
+                  style: T.h(20,
+                      w: FontWeight.w700,
+                      c: const Color(0xFF0A0500),
+                      ls: .06)),
             ),
           ),
         ),
@@ -1387,16 +1356,3 @@ class _GoButtonState extends State<_GoButton> {
   }
 }
 
-// Свечение иконки при ховере (для активных иконок в строках очереди).
-class _GlowWrap extends StatelessWidget {
-  const _GlowWrap({required this.child});
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return ImageFiltered(
-      imageFilter: ui.ImageFilter.blur(sigmaX: 2.2, sigmaY: 2.2),
-      child: Opacity(opacity: .8, child: child),
-    );
-  }
-}
