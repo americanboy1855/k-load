@@ -46,7 +46,9 @@ KD_EXPORT char* kd_split_links (const char* text);
 // options_json — JSON:
 //   {"dest":"/path", "mode":"video"|"audio", "quality":"720"|"1080"|"2160"|"best",
 //    "audioFormat":"mp3"|"m4a"|"wav"|"flac", "wholePlaylist":-1|0|1,
-//    "nameOverride":"..."} — все поля необязательны.
+//    "nameOverride":"...", "sections":"10:00-10:20"} — все поля необязательны.
+// sections — ХРОН, отрезок «начало-конец» (таймкоды или секунды); действует
+// только на одиночные файлы, у плейлистов игнорируется.
 // Возвращает число поставленных заданий (0 — ничего не распознано).
 KD_EXPORT int kd_enqueue_batch (kd_engine* e, const char* links_json, const char* options_json);
 KD_EXPORT int kd_enqueue_photo (kd_engine* e, const char* link, const char* options_json);
@@ -64,7 +66,7 @@ KD_EXPORT void kd_probe_async (kd_engine* e, const char* text);
 // Состояние VPN: 0 — неизвестно, 1 — включён, 2 — выключен.
 KD_EXPORT int kd_vpn_state (kd_engine* e);
 
-// Папка назначения по умолчанию — JSON {"base":…,"folder":…,"subfolder":"K DWNLD"}.
+// Папка назначения по умолчанию — JSON {"base":…,"folder":…,"subfolder":"K LOAD"}.
 // Освободить kd_string_free.
 KD_EXPORT char* kd_default_dest (kd_engine* e);
 

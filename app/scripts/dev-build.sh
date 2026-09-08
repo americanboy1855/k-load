@@ -13,13 +13,13 @@ cd "$(dirname "$0")/.."
 
 flutter build macos --debug || true
 
-SRC="build/macos/Build/Products/Debug/kload.app"
+SRC="build/macos/Build/Products/Debug/K LOAD.app"
 if [ ! -d "$SRC" ]; then
   echo "бандл не собрался: $SRC" >&2
   exit 1
 fi
 
-DST="$HOME/Library/Application Support/K LOAD dev/kload.app"
+DST="$HOME/Library/Application Support/K LOAD dev/K LOAD.app"
 rm -rf "$DST"
 mkdir -p "$(dirname "$DST")"
 cp -R "$SRC" "$DST"

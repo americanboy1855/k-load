@@ -140,8 +140,12 @@ body{
     repeating-conic-gradient(rgba(255,176,0,.1) 0 25%,transparent 0 50%) 0 0/8px 8px,
     linear-gradient(150deg,#31415f,#131c2b)}
 .fmeta{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:8px}
+.badgerow{display:flex;align-items:center;gap:9px}
 .badge{align-self:flex-start;font:600 19px/1 'Handjet';letter-spacing:.14em;
   color:#0A0500;background:var(--amber);padding:2px 9px}
+.srclink{font:500 15px/1 'Handjet';letter-spacing:.08em;color:var(--dim);
+  text-decoration:none;cursor:pointer;white-space:nowrap}
+.srclink:hover{color:var(--amber);filter:drop-shadow(0 0 6px rgba(255,176,0,.45))}
 .ft{font:600 26px/1.1 'Handjet';color:var(--soft);letter-spacing:.02em}
 .fdur{font:500 17px 'Handjet';color:var(--dim);letter-spacing:.06em}
 .fcenter{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;
@@ -150,17 +154,23 @@ body{
 .fcenter .b2{font:500 16px/1.3 'Handjet';color:var(--dim)}
 
 /* ---- режимы + СКАЧАТЬ ---- */
-.modes{margin-top:18px;display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.modes{margin-top:18px;display:flex;gap:9px;align-items:center;flex-wrap:wrap;position:relative}
 .mode{font:600 19px/1 'Handjet';letter-spacing:.06em;color:var(--soft);
   border:1px dashed rgba(255,176,0,.45);padding:8px 15px;cursor:pointer;background:none;
   transition:all .15s ease}
 .mode.on{color:#0A0500;background:var(--amber);border-color:var(--amber)}
 .mode.lock{opacity:.3;cursor:not-allowed}
 .mode:active{transform:translateY(1px)}
-.range{display:none;gap:6px;align-items:center;font:500 17px 'Handjet';color:var(--dim)}
-.range.show{display:flex}
-.range input{width:58px;background:none;border:none;border-bottom:2px solid var(--dim);
-  color:var(--soft);font:600 18px 'Handjet';text-align:center;outline:none}
+/* ---- ХРОН: поповер с отрезком ---- */
+.chronbox{position:absolute;left:0;top:calc(100% + 10px);z-index:6;
+  background:rgba(7,4,0,.96);border:1px dashed rgba(255,176,0,.6);
+  padding:12px 14px;box-shadow:0 10px 26px rgba(0,0,0,.55),0 0 18px rgba(255,176,0,.08)}
+.chronbox .chrow{display:flex;align-items:center;gap:8px}
+.chronbox .lab{font:600 16px/1 'Handjet';letter-spacing:.14em;color:var(--soft)}
+.chronbox input{width:66px;background:none;border:none;border-bottom:2px solid var(--dim);
+  color:var(--amber);font:600 20px 'Handjet';text-align:center;outline:none;letter-spacing:.04em}
+.chronbox input:focus{border-bottom-color:var(--amber)}
+.chronbox .chhint{margin-top:9px;font:500 13px/1 'Handjet';letter-spacing:.1em;color:var(--dim);white-space:nowrap}
 .dl{margin-left:auto;font:700 20px/1 'Handjet';letter-spacing:.06em;color:#0A0500;
   background:var(--amber);border:none;padding:10px 22px;cursor:pointer;
   box-shadow:0 0 16px rgba(255,176,0,.25);transition:transform .06s,box-shadow .15s}
@@ -229,11 +239,11 @@ body{
 
 /* ---- нижняя рамка: папка · лого · Boosty (одна линия) ---- */
 .band{height:96px;flex:none;position:relative;padding:0 20px}
-.band .plate{position:absolute;top:40px;transform:translate(-50%,-50%)}
+.band .plate{position:absolute;top:48px;transform:translate(-50%,-50%)}
 #folder{left:22px;transform:translate(0,-50%)}
 .band .plate:active{transform:translate(0,calc(-50% + 1px))}
 .band .plate:active svg,.band .plate:active span{transform:translateY(1px)}
-.band a.plate{right:22px}
+.band a.plate{right:22px;transform:translate(0,-50%)}
 .plate{width:46px;height:46px;border-radius:50%;flex:none;cursor:pointer;
   border:1px solid var(--plastic-edge);
   background:radial-gradient(circle at 34% 28%,#413D39,#2A2724 52%,#1B1917);
@@ -246,7 +256,7 @@ body{
 .plate:hover svg,.plate:hover span{color:var(--amber);filter:drop-shadow(0 0 7px rgba(255,176,0,.55))}
 .plate .dollar{font:700 20px 'Chakra Petch',sans-serif;line-height:1;text-decoration:none}
 a.plate{text-decoration:none}
-.logo{position:absolute;left:50%;top:46px;transform:translate(-50%,-50%);text-decoration:none;color:#161412;
+.logo{position:absolute;left:50%;top:48px;transform:translate(-50%,-50%);text-decoration:none;color:#161412;
   filter:drop-shadow(0 1px 0 rgba(255,255,255,.075)) drop-shadow(0 -1px 1px rgba(0,0,0,.7));
   transition:color .25s,filter .25s}
 .logo svg{height:62px;width:auto;display:block}
@@ -318,7 +328,10 @@ a.plate{text-decoration:none}
       <div class="found hidden" id="found">
         <div class="cover" id="cover"></div>
         <div class="fmeta" id="fmeta">
-          <span class="badge" id="badge">SOUNDCLOUD</span>
+          <div class="badgerow">
+            <span class="badge" id="badge">SOUNDCLOUD</span>
+            <a class="srclink" id="srclink" href="#" title="Открыть источник в браузере">[Ссылка]</a>
+          </div>
           <div class="ft" id="ftitle">Forss — Flickermood</div>
           <div class="fdur" id="fdur">ХРОНОМЕТРАЖ · 3:42</div>
         </div>
@@ -333,8 +346,14 @@ a.plate{text-decoration:none}
         <button class="mode on" data-m="video">ВИДЕО</button>
         <button class="mode" data-m="music">МУЗЫКА</button>
         <button class="mode" data-m="chron" id="chron">ХРОН</button>
-        <span class="range hidden" id="range">от <input value="10:00" readonly> до <input value="10:10" readonly></span>
         <button class="dl" id="go">СКАЧАТЬ · 1</button>
+        <div class="chronbox hidden" id="chronbox">
+          <div class="chrow">
+            <span class="lab">ОТ</span><input id="ch-from" value="0:00" autocomplete="off" spellcheck="false">
+            <span class="lab">ДО</span><input id="ch-to" value="0:10" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="chhint">ОТРЕЗОК · ТОЛЬКО ОДИНОЧНЫЙ ФАЙЛ · М:СС</div>
+        </div>
       </div>
 
       <!-- ЗАГРУЗКИ -->
@@ -354,6 +373,8 @@ a.plate{text-decoration:none}
       <div class="vt">Для лучшей работы загрузчика - включите VPN</div>
       <button class="x" id="vpn-x" title="Скрыть">×</button>
     </div>
+
+    <div class="toast" id="toast"></div>
 
     <div class="boot" id="boot"><div class="beam"></div></div>
   </div>
@@ -505,6 +526,9 @@ function showCard(data){
   $('badge').textContent=data.badge;
   $('ftitle').textContent=data.title;
   $('fdur').textContent=data.dur;
+  const sl=$('srclink');
+  sl.href=data.src||'#';
+  sl.classList.toggle('hidden',!data.src);
   $('cover').className='cover'+(data.cls?' '+data.cls:'');
   $('cover').classList.toggle('hidden',!data.cover);
   $('fmeta').classList.toggle('hidden',!data.cover);
@@ -512,6 +536,9 @@ function showCard(data){
   applyModes(data.plates,data.lockChron);
   $('go').textContent=data.go;
 }
+$('srclink').addEventListener('click',e=>{
+  if($('srclink').getAttribute('href')==='#')e.preventDefault();
+});
 q.addEventListener('input',()=>{
   ph.classList.toggle('off',q.value.length>0);
   clearTimeout(searchT);clearInterval(seekT);hideFound();
@@ -552,14 +579,17 @@ function startFound(kind){
           plates:['media','music','chron'],lockChron:true,go:'СКАЧАТЬ · '+kind.count};
   } else if(kind.type==='music'){
     rowTitles=['Forss — Flickermood'];
+    mode='music'; // музыкальный сервис: видео оттуда не скачать — сразу плашка МУЗЫКА
     data={badge:kind.service.name,title:'Forss — Flickermood',
           dur:'ХРОНОМЕТРАЖ · 4:12 · ТОЛЬКО ЗВУК',cls:'cv-sc',cover:true,fcenter:false,
-          plates:['music','chron'],lockChron:false,go:'СКАЧАТЬ · 1'};
+          plates:['music','chron'],lockChron:false,go:'СКАЧАТЬ · 1',
+          src:'https://soundcloud.com/forss/flickermood'};
   } else if(kind.type==='photo'){
     rowTitles=['Настроение: осень'];
     data={badge:'PINTEREST',title:'Настроение: осень',
           dur:'ФОТОГРАФИЯ',cls:'cv-pin',cover:true,fcenter:false,
-          plates:['chron'],lockChron:true,go:'СКАЧАТЬ · 1'};
+          plates:['chron'],lockChron:true,go:'СКАЧАТЬ · 1',
+          src:q.value.trim()};
   } else if(kind.type==='nametrack'){
     rowTitles=['«'+q.value.trim()+'» — первый результат'];
     data={badge:'YOUTUBE',title:'«'+q.value.trim()+'» — первый результат',
@@ -569,14 +599,15 @@ function startFound(kind){
     rowTitles=[kind.service.title];
     data={badge:kind.service.name,title:kind.service.title,
           dur:kind.service.dur,cls:kind.service.cls,cover:true,fcenter:false,
-          plates:['video','music','chron'],lockChron:false,go:'СКАЧАТЬ · 1'};
+          plates:['video','music','chron'],lockChron:false,go:'СКАЧАТЬ · 1',
+          src:q.value.trim()};
   }
   currentData={titles:rowTitles};
   showCard(data);
 }
 let currentData=null;
 
-/* ---- режимы ---- */
+/* ---- режимы: хрон заперт у подборок — поповер тоже прячем ---- */
 function applyModes(plateList,lockChron){
   const shown = plateList || ['video','music','chron'];
   document.querySelectorAll('#modes .mode').forEach(b=>{
@@ -584,7 +615,7 @@ function applyModes(plateList,lockChron){
     if(m==='chron'){
       b.classList.toggle('lock',!!lockChron);
       b.classList.toggle('hidden',!shown.includes('chron'));
-      if(lockChron)b.classList.remove('on');
+      if(lockChron){b.classList.remove('on');chron=false;$('chronbox').classList.add('hidden');}
       return;
     }
     if(m==='video'){ // слот «ВИДЕО»: в пачках превращается в «МЕДИА»
@@ -604,11 +635,25 @@ function applyModes(plateList,lockChron){
 document.querySelectorAll('.mode').forEach(m=>m.onclick=()=>{
   if(m.classList.contains('lock'))return;
   if(m.dataset.m==='chron'){chron=!chron;m.classList.toggle('on',chron);
-    $('range').classList.toggle('show',chron);return;}
+    $('chronbox').classList.toggle('hidden',!chron);return;}
   document.querySelectorAll('.mode').forEach(x=>{if(x.dataset.m!=='chron')x.classList.remove('on')});
   m.classList.add('on'); mode=m.dataset.m;
 });
 let chron=false,mode='video';
+/* «10», «1:07», «1:02:03» → нормальный таймкод; мусор не трогаем */
+function normTC(v){
+  v=v.trim();if(!v||!/^[\d:]+$/.test(v))return '';
+  const p=v.split(':').map(Number);
+  if(p.length>3||p.some(n=>isNaN(n)))return '';
+  let s=0;for(const x of p)s=s*60+x;
+  const h=Math.floor(s/3600),m=Math.floor(s%3600/60),ss=String(s%60).padStart(2,'0');
+  const mm=String(m).padStart(2,'0');
+  return h>0? h+':'+mm+':'+ss : m+':'+ss;
+}
+['ch-from','ch-to'].forEach(id=>{
+  $(id).addEventListener('blur',e=>{const n=normTC(e.target.value);if(n)e.target.value=n;});
+  $(id).addEventListener('keydown',e=>{if(e.key==='Enter')e.target.blur();});
+});
 
 /* ---- скачать: очередь ---- */
 function addRow(title,cells){
@@ -629,11 +674,12 @@ function setBar(row,f){
 $('go').onclick=()=>{
   if(!currentData)return;
   const titles=currentData.titles;
+  const chronTag=chron? ' · ОТРЕЗОК '+$('ch-from').value+'–'+$('ch-to').value : '';
   titles.forEach((title,i)=>{
     const row=addRow(title,8);
     const st=row.querySelector('[data-st]'),acts=row.querySelector('[data-acts]');
     if(i===0){
-      st.textContent='СКАЧИВАЕТСЯ';
+      st.textContent='СКАЧИВАЕТСЯ'+chronTag;
       let p=0;
       const t=setInterval(()=>{
         p+=Math.random()*12+4;
@@ -653,20 +699,15 @@ dlists.addEventListener('click',e=>{
   if(t) t.closest('.ditem').remove();
 });
 
-/* ---- папка: подсказка пути ---- */
+/* ---- папка: подсказка пути (по умолчанию — Загрузки, внутри K LOAD) ---- */
 let toastT=null;
 $('folder').onclick=()=>{
+  toast.innerHTML='КАЧАЕМ В&nbsp;<b>~/Downloads/K LOAD</b>';
   toast.classList.add('show');clearTimeout(toastT);
   toastT=setTimeout(()=>toast.classList.remove('show'),2200);
 };
 
-/* ---- $: нажатие как у папки, затем Boosty ---- */
-const boosty=document.querySelector('a.plate[href*="boosty"]');
-boosty.addEventListener('click',e=>{
-  e.preventDefault();
-  boosty.classList.add('pressed');
-  setTimeout(()=>{boosty.classList.remove('pressed');window.open(boosty.href,'_blank');},200);
-});
+/* ---- $: вдавливание работает через .band .plate:active — ссылка просто открывается ---- */
 
 /* ---- состояния для галереи: #flow=seek|found|queue ---- */
 const flow=hash.get('flow');
@@ -679,13 +720,15 @@ if(flow==='seek'){
   q.value='https://youtu.be/jNQXAC9IVRw'; ph.classList.add('off');
   showCard({badge:'SOUNDCLOUD',title:'Forss — Flickermood',
     dur:'ХРОНОМЕТРАЖ · 3:42',cls:'cv-sc',cover:true,fcenter:false,
-    plates:['video','music','chron'],lockChron:false,go:'СКАЧАТЬ · 1'});
+    plates:['video','music','chron'],lockChron:false,go:'СКАЧАТЬ · 1',
+    src:'https://soundcloud.com/forss/flickermood'});
 } else if(flow==='queue'){
   q.value='https://youtu.be/jNQXAC9IVRw'; ph.classList.add('off');
   dlists.classList.remove('hidden');
   showCard({badge:'SOUNDCLOUD',title:'Forss — Flickermood',
     dur:'ХРОНОМЕТРАЖ · 3:42',cls:'cv-sc',cover:true,fcenter:false,
-    plates:['video','music','chron'],lockChron:false,go:'СКАЧАТЬ · 1'});
+    plates:['video','music','chron'],lockChron:false,go:'СКАЧАТЬ · 1',
+    src:'https://soundcloud.com/forss/flickermood'});
   const r1=addRow('Forss — Flickermood',8); setBar(r1,4);
   const r2=addRow('Заказала новый свет… reel',8);
   r2.querySelector('[data-st]').textContent='В ОЧЕРЕДИ'; r2.querySelector('[data-st]').classList.add('q');
@@ -693,6 +736,8 @@ if(flow==='seek'){
   r3.querySelector('[data-st]').textContent='ГОТОВО'; r3.querySelector('[data-st]').classList.add('done');
   setBar(r3,8); r3.querySelector('[data-acts]').classList.remove('hidden');
 }
+/* хрон-поповер для скриншотов: #flow=found&chron=1 */
+if(hash.get('chron')==='1'){$('chron').click();}
 
 /* ---- фокус строки и плейсхолдер ---- */
 search.addEventListener('click',()=>q.focus());

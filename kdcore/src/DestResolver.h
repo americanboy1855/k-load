@@ -1,7 +1,7 @@
 #pragma once
 
 // Куда складывать по умолчанию в приложении: «Загрузки», а внутри —
-// подпапка «K DWNLD», чтобы не сыпать файлы прямо в общую свалку.
+// подпапка «K LOAD», чтобы не сыпать файлы прямо в общую свалку.
 //
 // (Детектор свежего проекта DAW из прежнего ядра — забота этапа плагина:
 // вернём его туда, где он нужен.)
@@ -14,7 +14,7 @@ namespace DestResolver
 {
 
 // Подпапка, куда складывается скачанное.
-inline Str folderName() { return "K DWNLD"; }
+inline Str folderName() { return "K LOAD"; }
 
 inline fs::path homeDir()
 {
@@ -30,7 +30,7 @@ inline fs::path baseFolder()
     return kd::isDir (downloads) ? downloads : homeDir() / "Documents";
 }
 
-// Папка по умолчанию целиком: база + «K DWNLD».
+// Папка по умолчанию целиком: база + «K LOAD».
 inline fs::path defaultFolder()
 {
     return baseFolder() / folderName();

@@ -200,6 +200,17 @@ class KdProbeEvent extends KdEvent {
   String get title => json['title'] ?? '';
   String get serviceTitle => json['serviceTitle'] ?? '';
   String get error => json['error'] ?? '';
+  String get link => json['link'] ?? '';
+  String get resolved => json['resolved'] ?? '';
+  String get thumbnail => json['thumbnail'] ?? '';
+  String get uploader => json['uploader'] ?? '';
+  int get duration => (json['duration'] ?? 0) as int;
+  int get count => (json['count'] ?? 1) as int;
+  bool get isPlaylist => json['isPlaylist'] == true;
+  bool get hasPlaylist => json['hasPlaylist'] == true;
+  bool get isPhoto => json['isPhoto'] == true;
+  bool get isSearch => json['isSearch'] == true;
+  int get service => (json['service'] ?? 0) as int;
 }
 
 /// Снимок задания очереди из kd_snapshot.
@@ -281,7 +292,8 @@ class KdCore {
 
   int enqueueBatch(List<String> links,
       {String? dest, bool audio = false, String quality = 'best',
-       String audioFormat = 'mp3', int wholePlaylist = -1, String? nameOverride}) {
+       String audioFormat = 'mp3', int wholePlaylist = -1, String? nameOverride,
+       String? sections}) {
     final linksJson = jsonEncode(links).toNativeUtf8();
     final opts = jsonEncode({
       if (dest != null) 'dest': dest,
@@ -290,6 +302,7 @@ class KdCore {
       'audioFormat': audioFormat,
       'wholePlaylist': wholePlaylist,
       if (nameOverride != null) 'nameOverride': nameOverride,
+      if (sections != null && sections.isNotEmpty) 'sections': sections,
     }).toNativeUtf8();
     final n = _b._enqueueBatch(_engine, linksJson, opts);
     calloc

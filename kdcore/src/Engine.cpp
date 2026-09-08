@@ -200,6 +200,9 @@ void Engine::enqueueBatch (const StrVec& links, const Options& options)
                 : Detector::isCollection (link);
             item->cookieChain = chain;
             item->nameOverride = options.nameOverride;
+            // ХРОН имеет смысл только для одиночного файла: у подборки
+            // отрезок отрезал бы кусок каждой серии.
+            item->sections = item->wholePlaylist ? Str() : options.sections;
             item->dest = options.dest;
             item->batchIndex = total > 1 ? ++index : 0;
             item->batchTotal = total;
@@ -327,7 +330,7 @@ void Engine::processItem (const QueueItemPtr& item)
     fireChanged();
 
     // Автоматическая папка резолвится в момент старта: в приложении это
-    // Загрузки; внутри всегда «K DWNLD».
+    // Загрузки; внутри всегда «K LOAD».
     if (item->dest.empty())
         item->dest = DestResolver::defaultFolder();
     kd::ensureDir (item->dest);
@@ -680,6 +683,15 @@ void Engine::startNative (const QueueItemPtr& item)
             args.push_back ("%(title).120B.%(ext)s");
         }
 
+        // ХРОН: режем отрезок точно по кадровым границам. Только одиночный
+        // файл — у подборки отрезок портил бы каждую серию.
+        if (! item->sections.empty() && ! item->wholePlaylist)
+        {
+            args.push_back ("--download-sections");
+            args.push_back ("*" + item->sections);
+            args.push_back ("--force-keyframes-at-cuts");
+        }
+
         args.push_back (item->link);
 
         int code = -1;
@@ -840,6 +852,13 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
     }
     args.push_back ("--parse-metadata");
     args.push_back (safeName (track) + ":%(title)s");
+    // ХРОН для трека с музыкального сервиса: тот же отрезок, что и в UI.
+    if (! item->sections.empty())
+    {
+        args.push_back ("--download-sections");
+        args.push_back ("*" + item->sections);
+        args.push_back ("--force-keyframes-at-cuts");
+    }
     for (const auto& a : kd::splitWhitespace ("--ignore-errors --max-downloads 1")) args.push_back (a);
     // Пять кандидатов: первый результат бывает защищённым или недоступным.
     args.push_back (searchSite == Detector::Service::soundcloud

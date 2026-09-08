@@ -102,6 +102,7 @@ static json itemToJson (const QueueItem& i)
         { "maxHeight", i.maxHeight },
         { "audioFormat", audioFormatName (i.audioFormat) },
         { "wholePlaylist", i.wholePlaylist },
+        { "sections", i.sections },
         { "dest", kd::pathStr (i.dest) },
         { "isPhoto", i.isPhoto },
         { "cancelled", i.cancelled() },
@@ -188,6 +189,8 @@ static Engine::Options parseOptions (const char* options_json)
         o.wholePlaylistOverride = data["wholePlaylist"].get<int>();
     if (data.contains ("nameOverride") && data["nameOverride"].is_string())
         o.nameOverride = data["nameOverride"].get<std::string>();
+    if (data.contains ("sections") && data["sections"].is_string())
+        o.sections = data["sections"].get<std::string>();
     return o;
 }
 

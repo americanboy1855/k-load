@@ -94,7 +94,7 @@ static void testCAPIPure()
 
     auto dest = kd_default_dest (e);
     std::string destStr = dest;
-    check (destStr.find ("K DWNLD") != std::string::npos, "kd_default_dest внутри K DWNLD", destStr);
+    check (destStr.find ("K LOAD") != std::string::npos, "kd_default_dest внутри K LOAD", destStr);
     kd_string_free (dest);
 
     auto tools = kd_tools_status (e);
@@ -179,7 +179,7 @@ static void testLiveProbes (kd_engine* e)
 static void testLiveDownload (kd_engine* e)
 {
     std::cout << "живые скачивания\n";
-    const auto tmp = fs::temp_directory_path() / "kdcore-live" / "K DWNLD";
+    const auto tmp = fs::temp_directory_path() / "kdcore-live" / "K LOAD";
     fs::remove_all (fs::temp_directory_path() / "kdcore-live");
     fs::create_directories (tmp);
     const std::string dest = kd::pathStr (tmp);
@@ -229,6 +229,31 @@ static void testLiveDownload (kd_engine* e)
     char* snap = kd_snapshot (e);
     check (std::string (snap) == "[]", "clearFinished опустошил очередь");
     kd_string_free (snap);
+
+    // ХРОН: отрезок 0–2 секунды того же короткого ролика. Секции доезжают
+    // в задание и файл получается (многократно меньше полного).
+    links = "[\"https://www.youtube.com/watch?v=jNQXAC9IVRw\"]";
+    const std::string optsChron = "{\"dest\":\"" + dest
+        + "\",\"mode\":\"video\",\"sections\":\"0:00-0:02\"}";
+    check (kd_enqueue_batch (e, links.c_str(), optsChron.c_str()) == 1, "enqueue с sections");
+
+    char* snapChron = kd_snapshot (e);
+    check (std::string (snapChron).find ("\"sections\":\"0:00-0:02\"") != std::string::npos,
+        "sections видны в снапшоте", snapChron);
+    kd_string_free (snapChron);
+
+    const auto item5 = waitForState (e, 5, "done", "failed", 180);
+    check (item5.find ("\"state\":\"done\"") != std::string::npos, "хрон-отрезок скачан", item5.substr (0, 300));
+    std::uintmax_t fullSize = 0, cutSize = 0;
+    for (const auto& entry : fs::recursive_directory_iterator (tmp))
+        if (entry.is_regular_file() && entry.path().extension().string() == ".mp4")
+        {
+            const auto size = entry.file_size();
+            if (size > fullSize) { cutSize = fullSize == 0 ? cutSize : size; fullSize = size; }
+            else cutSize = std::max (cutSize, size);
+        }
+    check (cutSize > 0 && cutSize < fullSize, "отрезок меньше целого ролика",
+        std::to_string (cutSize) + " < " + std::to_string (fullSize));
 }
 
 int main (int argc, char** argv)
