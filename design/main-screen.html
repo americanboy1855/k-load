@@ -309,6 +309,65 @@ a.logo:hover .logo-deboss{color:var(--amber);
   .tracking{display:none}
   .vpn{transition:opacity .2s ease;animation:none}
 }
+
+/* ---- ПОИСК: LED-шкала и «НАЙДЕНО» ---- */
+.seek{margin-top:14px}
+.seek .cap{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:9px}
+.seek .word{font:500 17px 'Handjet';letter-spacing:.3em;color:var(--soft)}
+.seek .pct{font:600 24px/1 'Handjet';color:var(--amber);text-shadow:0 0 10px rgba(255,176,0,.5)}
+.leds{display:grid;grid-template-columns:repeat(16,1fr);gap:4px}
+.leds i{height:16px;background:#241A08;border-radius:1px}
+.leds i.f{background:var(--amber);box-shadow:0 0 9px rgba(255,176,0,.55)}
+
+.found{margin-top:16px;display:flex;gap:15px}
+.cover{width:124px;height:124px;flex:none;border:2px solid rgba(255,176,0,.45);
+  background:
+    repeating-conic-gradient(rgba(255,176,0,.1) 0 25%,transparent 0 50%) 0 0/8px 8px,
+    linear-gradient(150deg,#31415f,#131c2b)}
+.fmeta{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:8px}
+.badge{align-self:flex-start;font:600 19px/1 'Handjet';letter-spacing:.14em;
+  color:#0A0500;background:var(--amber);padding:2px 9px}
+.ft{font:600 24px/1.05 'Handjet';color:var(--soft);letter-spacing:.03em}
+.fdur{font:500 16px 'Handjet';color:var(--dim);letter-spacing:.06em}
+.fcenter{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;
+  border:1px dashed rgba(255,176,0,.35);min-height:124px;text-align:center;padding:12px}
+.fcenter .b1{font:600 26px/1 'Handjet';color:var(--soft)}
+.fcenter .b2{font:500 15px/1.3 'Handjet';color:var(--dim)}
+
+.modes{margin-top:16px;display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.mode{font:600 19px/1 'Handjet';letter-spacing:.06em;color:var(--soft);
+  border:1px solid rgba(255,176,0,.4);padding:8px 15px;cursor:pointer;background:rgba(255,176,0,.06)}
+.mode.on{color:#0A0500;background:var(--amber);border-color:var(--amber);
+  box-shadow:0 0 14px rgba(255,176,0,.4)}
+.mode.lock{opacity:.3;cursor:not-allowed}
+.range{display:none;gap:6px;align-items:center;font:500 17px 'Handjet';color:var(--dim)}
+.range.show{display:flex}
+.range input{width:58px;background:none;border:none;border-bottom:2px solid var(--dim);
+  color:var(--soft);font:600 18px 'Handjet';text-align:center;outline:none}
+.dl{margin-left:auto;font:700 20px/1 'Handjet';letter-spacing:.06em;color:#0A0500;
+  background:var(--amber);border:none;padding:10px 22px;cursor:pointer;
+  box-shadow:0 0 16px rgba(255,176,0,.25)}
+.dl:active{transform:translateY(1px);box-shadow:none}
+
+.dlists{margin-top:14px;border:1px dashed rgba(255,176,0,.5);flex:1;min-height:0;
+  overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--amber) transparent}
+.dlists::-webkit-scrollbar{width:5px}
+.dlists::-webkit-scrollbar-thumb{background:rgba(255,176,0,.5)}
+.ditem{padding:11px 14px;border-bottom:1px dashed rgba(255,176,0,.22);display:flex;gap:13px;align-items:center}
+.ditem:last-child{border-bottom:none}
+.dmain{flex:1;min-width:0}
+.d1{font:600 21px/1 'Handjet';color:var(--soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.d2{font:500 15px/1 'Handjet';color:var(--dim);margin-top:3px;letter-spacing:.1em}
+.d2.q{color:#8A6E38}
+.d2.done{color:var(--amber)}
+.dbars{display:grid;grid-template-columns:repeat(8,1fr);gap:3px;width:130px;flex:none}
+.dbars i{height:14px;background:#241A08;border-radius:1px}
+.dbars i.f{background:var(--amber);box-shadow:0 0 7px rgba(255,176,0,.5)}
+.acts{display:flex;gap:6px}
+.act{width:27px;height:27px;border:1px dashed rgba(255,176,0,.45);background:none;cursor:pointer;
+  color:var(--soft);display:flex;align-items:center;justify-content:center}
+.act:hover{background:rgba(255,176,0,.14)}
+
 </style>
 </head>
 <body>
@@ -327,6 +386,7 @@ a.logo:hover .logo-deboss{color:var(--amber);
 
   <!-- экран: монолитный корпус -->
     <div class="glass" id="glass">
+      <div class="ui">
 
       <!-- поисковая строка — квадратная линия, у верхнего края -->
       <div class="search-wrap">
@@ -341,11 +401,41 @@ a.logo:hover .logo-deboss{color:var(--amber);
           <input id="q" type="text" autocomplete="off" spellcheck="false" aria-label="Вставьте ссылку или напишите название того что нужно скачать">
           <label class="ph" for="q" id="ph">Вставьте ссылку или напишите название того что нужно скачать</label>
         </div>
-        <div class="state hidden" id="state">
-          <div class="row1"><span class="word" id="sw">ИЩУ…</span><span class="pct" id="sp">0%</span></div>
-          <div class="scan"><i id="si"></i></div>
-          <div class="note hidden" id="sn">меню разбора — следующий этап макета</div>
         </div>
+
+        <!-- ПОИСК -->
+        <div class="seek hidden" id="seek">
+          <div class="cap"><span class="word">ПОИСК</span><span class="pct" id="pct">0%</span></div>
+          <div class="leds" id="leds"></div>
+        </div>
+
+        <!-- НАЙДЕНО -->
+        <div class="found hidden" id="found">
+          <div class="cover" id="cover"></div>
+          <div class="fmeta" id="fmeta">
+            <span class="badge" id="badge">SOUNDCLOUD</span>
+            <div class="ft" id="ftitle">Forss — Flickermood</div>
+            <div class="fdur" id="fdur">ХРОНОМЕТРАЖ · 3:42</div>
+          </div>
+          <div class="fcenter hidden" id="fcenter">
+            <div class="b1" id="fcb1">7 ССЫЛОК · 4 СЕРВИСА</div>
+            <div class="b2">ОБЛОЖКИ НЕТ — КАЧАЕМ КАК ЕСТЬ</div>
+          </div>
+        </div>
+
+        <!-- РЕЖИМЫ -->
+        <div class="modes hidden" id="modes">
+          <button class="mode on" data-m="video">ВИДЕО</button>
+          <button class="mode" data-m="music">МУЗЫКА</button>
+          <button class="mode" data-m="chron" id="chron">ХРОН</button>
+          <span class="range" id="range">от <input value="10:00" readonly> до <input value="10:10" readonly></span>
+          <button class="dl" id="go">СКАЧАТЬ · 1</button>
+        </div>
+
+        <!-- ЗАГРУЗКИ -->
+        <div class="dlists hidden" id="dlists"></div>
+      </div>
+
       </div>
 
       <div class="tracking" id="tracking"></div>
@@ -401,20 +491,24 @@ a.logo:hover .logo-deboss{color:var(--amber);
   <span class="sep">|</span>
   <button id="d-replay">ПОВТОРИТЬ ВКЛЮЧЕНИЕ</button>
   <span class="sep">|</span>
+  <span class="sep">|</span>
+  <span>СЦЕНАРИЙ:</span>
+  <button class="on" data-sc="track">ТРЕК</button>
+  <button data-sc="playlist">ПЛЕЙЛИСТ</button>
+  <button data-sc="batch">ПАЧКА-МИКС</button>
   <span>масштаб: тяни угол ↘</span>
 </div>
 
 <script>
-const tv=document.getElementById('tv'),glass=document.getElementById('glass'),
-      boot=document.getElementById('boot'),vpn=document.getElementById('vpn'),
-      q=document.getElementById('q'),search=document.getElementById('search'),
-      ph=document.getElementById('ph'),
-      state=document.getElementById('state'),sw=document.getElementById('sw'),
-      sp=document.getElementById('sp'),si=document.getElementById('si'),sn=document.getElementById('sn'),
-      toast=document.getElementById('toast');
+const $=id=>document.getElementById(id);
+const tv=$('tv'),glass=$('glass'),boot=$('boot'),vpn=$('vpn'),
+      q=$('q'),search=$('search'),ph=$('ph'),
+      seek=$('seek'),leds=$('leds'),found=$('found'),modes=$('modes'),
+      dlists=$('dlists'),toast=$('toast'),scrim=$('scrim');
+for(let i=0;i<16;i++)leds.appendChild(document.createElement('i'));
 const hash=new URLSearchParams(location.hash.slice(1));
 
-/* ---- включение: точка → линия → раскрытие → вспышка ---- */
+/* ---- включение: точка → линия → раскрытие ---- */
 let booted=false;
 function finishBoot(){
   if(booted)return;booted=true;
@@ -426,60 +520,152 @@ else{
   boot.addEventListener('click',finishBoot);
   window.addEventListener('keydown',e=>{if(!booted&&(e.key==='Enter'||e.key===' '))finishBoot();});
   boot.addEventListener('animationend',finishBoot);
-  setTimeout(finishBoot,2600); // страховка, если событие анимации потерялось
+  setTimeout(finishBoot,2600);
 }
 
 /* ---- VPN ---- */
 let vpnDemoOff=true;
-const scrim=document.getElementById('scrim'),trk=document.getElementById('tracking');
 function showVpn(){vpn.classList.add('show');scrim.classList.add('show')}
 function hideVpn(){vpn.classList.remove('show');scrim.classList.remove('show')}
-document.getElementById('vpn-x').onclick=hideVpn;
+$('vpn-x').onclick=hideVpn;
 scrim.onclick=hideVpn;
-const bOff=document.getElementById('d-vpn-off'),bOn=document.getElementById('d-vpn-on');
+const bOff=$('d-vpn-off'),bOn=$('d-vpn-on');
 function setVpnDemo(off){
   vpnDemoOff=off;
   bOff.classList.toggle('on',off);bOn.classList.toggle('on',!off);
-  if(!off)hideVpn();
-  else if(booted)showVpn();
+  if(!off)hideVpn(); else if(booted)showVpn();
 }
 bOff.onclick=()=>setVpnDemo(true);
 bOn.onclick=()=>setVpnDemo(false);
 
 /* ---- повтор включения ---- */
-document.getElementById('d-replay').onclick=()=>{
+$('d-replay').onclick=()=>{
   booted=false;tv.classList.remove('booted');hideVpn();
   const b2=boot.querySelector('.beam');b2.style.animation='none';void b2.offsetWidth;b2.style.animation='';
   setTimeout(()=>{finishBoot();},1600);
 };
 
-/* ---- поиск: пауза в печати → ИЩУ… → НАЙДЕНО ---- */
-let timer=null,prog=null;
-function resetState(){clearInterval(prog);state.classList.add('hidden');si.style.width='0%';
-  ph.classList.toggle('off',q.value.length>0);}
-q.addEventListener('input',()=>{
-  clearTimeout(timer);ph.classList.toggle('off',q.value.length>0);
-  if(!q.value.trim()){resetState();return;}
-  timer=setTimeout(startSearch,600);
+/* ---- сценарии ---- */
+const scenarios={
+  track:{badge:'SOUNDCLOUD',title:'Forss — Flickermood',dur:'ХРОНОМЕТРАЖ · 3:42',cover:true,pl:false,batch:false,go:'СКАЧАТЬ · 1'},
+  playlist:{badge:'YOUTUBE',title:'Ночной синт — плейлист',dur:'14 ВИДЕО · 58 МИН',cover:true,pl:true,batch:false,go:'СКАЧАТЬ · 14'},
+  batch:{badge:'ПАЧКА',title:'7 ссылок · 4 сервиса',dur:'ВИДЕО + ФОТО + МУЗЫКА',cover:true,pl:false,batch:true,go:'СКАЧАТЬ · 7'},
+  nocover:{badge:'ПАЧКА',title:'7 ссылок · 4 сервиса',dur:'ВИДЕО + ФОТО + МУЗЫКА',cover:false,pl:false,batch:true,go:'СКАЧАТЬ · 7'}
+};
+let scenario='track',chron=false,mode='video';
+function applyScenario(){
+  const d=scenarios[scenario];
+  $('badge').textContent=d.badge;
+  $('ftitle').textContent=d.title;
+  $('fdur').textContent=d.dur;
+  $('cover').classList.toggle('hidden',!d.cover);
+  $('fmeta').classList.toggle('hidden',!d.cover);
+  $('fcenter').classList.toggle('hidden',d.cover);
+  $('chron').classList.toggle('lock',d.pl||d.batch);
+  if(d.pl||d.batch){chron=false;$('range').classList.remove('show');$('chron').classList.remove('on');}
+  const vm=document.querySelector('[data-m="video"]');
+  vm.textContent=d.batch?'МЕДИА':'ВИДЕО';
+  if(d.batch&&mode==='video')mode='media';
+  if(!d.batch&&mode==='media')mode='video';
+  vm.dataset.m=mode;
+  $('go').textContent=d.go;
+}
+document.querySelectorAll('.demo [data-sc]').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.demo [data-sc]').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); scenario=b.dataset.sc; applyScenario();
 });
-function startSearch(){
-  ph.classList.add('off');
-  state.classList.remove('hidden','found');sn.classList.add('hidden');
-  sw.textContent='ИЩУ…';
-  let p=0;clearInterval(prog);
-  prog=setInterval(()=>{
-    p+=Math.random()*9+3;if(p>=100){p=100;clearInterval(prog);found();}
-    sp.textContent=Math.floor(p)+'%';si.style.width=p*0.9+'%';
-  },110);
-}
-function found(){
-  state.classList.add('found');sw.textContent='НАЙДЕНО';sp.textContent='';
-  si.style.width='100%';sn.classList.remove('hidden');
-}
-if(hash.get('demo')==='found'){finishBoot();q.value='https://youtu.be/jNQXAC9IVRw';startSearch();}
-else if(hash.get('demo')==='search'){finishBoot();q.value='a-ha take on me';startSearch();}
+applyScenario();
 
-/* ---- $: нажатие как у папки, затем переход на Boosty ---- */
+/* ---- поиск: пауза в печати → ПОИСК → НАЙДЕНО ---- */
+let searchT=null,seekT=null;
+q.addEventListener('input',()=>{
+  ph.classList.toggle('off',q.value.length>0);
+  clearTimeout(searchT);clearInterval(seekT);
+  if(!q.value.trim()){seek.classList.add('hidden');hideFound();return;}
+  searchT=setTimeout(startSeek,600);
+});
+function startSeek(){
+  hideFound();
+  seek.classList.remove('hidden');
+  $('pct').textContent='0%';
+  const cells=leds.querySelectorAll('i');
+  let p=0;
+  clearInterval(seekT);
+  seekT=setInterval(()=>{
+    p+=Math.random()*7+3;
+    if(p>=100){p=100;clearInterval(seekT);showFound();return;}
+    $('pct').textContent=Math.floor(p)+'%';
+    cells.forEach((c,i)=>c.classList.toggle('f',i<Math.round(p/6.25)));
+  },70);
+}
+function hideFound(){found.classList.add('hidden');modes.classList.add('hidden');}
+function showFound(){
+  seek.classList.add('hidden');
+  const d=scenarios[scenario];
+  $('badge').textContent=d.badge;
+  $('ftitle').textContent=d.title;
+  $('fdur').textContent=d.dur;
+  $('cover').classList.toggle('hidden',!d.cover);
+  $('fmeta').classList.toggle('hidden',!d.cover);
+  $('fcenter').classList.toggle('hidden',d.cover);
+  found.classList.remove('hidden');
+  modes.classList.remove('hidden');
+}
+search.addEventListener('click',()=>q.focus());
+q.addEventListener('focus',()=>search.classList.add('focus'));
+q.addEventListener('blur',()=>search.classList.remove('focus'));
+
+/* ---- режимы ---- */
+document.querySelectorAll('.mode').forEach(m=>m.onclick=()=>{
+  if(m.classList.contains('lock'))return;
+  if(m.dataset.m==='chron'){chron=!chron;m.classList.toggle('on',chron);
+    $('range').classList.toggle('show',chron);return;}
+  document.querySelectorAll('.mode').forEach(x=>{if(x.dataset.m!=='chron')x.classList.remove('on')});
+  m.classList.add('on'); mode=m.dataset.m;
+});
+
+/* ---- скачать: очередь ---- */
+function addRow(title,cells){
+  const row=document.createElement('div'); row.className='ditem';
+  let bar=''; for(let i=0;i<cells;i++) bar+='<i></i>';
+  row.innerHTML='<div class="dmain"><div class="d1">'+title+'</div><div class="d2" data-st>СКАЧИВАЕТСЯ</div></div>'
+    +'<div class="dbars" data-bar>'+bar+'</div>'
+    +'<div class="acts hidden" data-acts>'
+    +'<button class="act" title="Открыть папку"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><path d="M2.5 5.5c0-.8.7-1.5 1.5-1.5h3.2c.4 0 .8.2 1.1.5l.9 1h7.3c.8 0 1.5.7 1.5 1.5v7.5c0 .8-.7 1.5-1.5 1.5H4c-.8 0-1.5-.7-1.5-1.5v-9z"></path></svg></button>'
+    +'<button class="act" title="Удалить"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 3.5h10M5.5 3.5V2h3v1.5M3.5 3.5l.8 8.5h5.4l.8-8.5"></path></svg></button>'
+    +'</div>';
+  dlists.appendChild(row);
+  return row;
+}
+function setBar(row,f){
+  row.querySelectorAll('[data-bar] i').forEach((c,i)=>c.classList.toggle('f',i<f));
+}
+$('go').onclick=()=>{
+  const d=scenarios[scenario];
+  const row=addRow(d.title,8);
+  let p=0;
+  const st=row.querySelector('[data-st]'),acts=row.querySelector('[data-acts]');
+  const t=setInterval(()=>{
+    p+=Math.random()*14+4;
+    if(p>=100){p=100;clearInterval(t);st.textContent='ГОТОВО';st.classList.add('done');
+      acts.classList.remove('hidden');setBar(row,8);return;}
+    setBar(row,Math.round(p/12.5));
+  },160);
+};
+/* мусорка: удалить строку (в приложении — и файл с диска) */
+dlists.addEventListener('click',e=>{
+  const t=e.target.closest('[title="Удалить"]');
+  if(t) t.closest('.ditem').remove();
+});
+
+/* ---- папка: подсказка пути ---- */
+let toastT=null;
+$('folder').onclick=()=>{
+  toast.classList.add('show');clearTimeout(toastT);
+  toastT=setTimeout(()=>toast.classList.remove('show'),2200);
+};
+
+/* ---- $: нажатие как у папки, затем Boosty ---- */
 const boosty=document.querySelector('a.plate[href*="boosty"]');
 boosty.addEventListener('click',e=>{
   e.preventDefault();
@@ -491,43 +677,6 @@ boosty.addEventListener('click',e=>{
 search.addEventListener('click',()=>q.focus());
 q.addEventListener('focus',()=>search.classList.add('focus'));
 q.addEventListener('blur',()=>search.classList.remove('focus'));
-
-/* ---- папка: терминальная подсказка ---- */
-let toastT=null;
-document.getElementById('folder').onclick=()=>{
-  toast.classList.add('show');clearTimeout(toastT);
-  toastT=setTimeout(()=>toast.classList.remove('show'),2200);
-};
-
-/* ---- масштаб: только по диагонали, всё содержимое пропорционально ---- */
-const grip=document.getElementById('grip');
-let sx,sy,s0,dragging=false,scaleCur=1;
-function setScale(v){
-  scaleCur=Math.min(1.4,Math.max(.85,v));
-  tv.style.setProperty('--s',scaleCur.toFixed(3));
-}
-grip.addEventListener('pointerdown',e=>{
-  dragging=true;sx=e.clientX;sy=e.clientY;s0=scaleCur;
-  grip.setPointerCapture(e.pointerId);e.preventDefault();
-});
-grip.addEventListener('pointermove',e=>{
-  if(!dragging)return;
-  const delta=((e.clientX-sx)+(e.clientY-sy))/2;
-  setScale(s0+delta/420);
-});
-grip.addEventListener('pointerup',()=>dragging=false);
-if(hash.get('scale'))setScale(parseFloat(hash.get('scale'))||1);
-
-
-/* ---- строка трекинга изредка проезжает ---- */
-function runTrack(){
-  if(booted && !matchMedia('(prefers-reduced-motion: reduce)').matches){
-    trk.classList.add('run');
-    setTimeout(()=>trk.classList.remove('run'),1750);
-  }
-  setTimeout(runTrack,9000+Math.random()*7000);
-}
-setTimeout(runTrack,4200);
 </script>
 </body>
 </html>
