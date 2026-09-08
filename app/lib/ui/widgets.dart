@@ -1,10 +1,27 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
 import 'theme.dart';
 
+// Цвет «нажатой в пластик» иконки на корпусе + ховер-состояние плашки.
+const plateIconIdle = Color(0xFF151312);
+
+class PlateHover extends InheritedWidget {
+  const PlateHover({super.key, required this.hover, required super.child});
+  final bool hover;
+
+  static PlateHover? of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<PlateHover>();
+
+  @override
+  bool updateShouldNotify(PlateHover old) => old.hover != hover;
+}
+
 // ---- иконки-стрелки из макета (тонкие, «пиксельные») ----
+// Внутри Plate (PlateHover) иконки тёмные, при наведении — янтарные со
+// свечением; вне плашки красятся своим color.
 
 class ChainIcon extends StatelessWidget {
   const ChainIcon({super.key, this.size = 19, this.color = Pal.amber});
@@ -12,52 +29,64 @@ class ChainIcon extends StatelessWidget {
   final Color color;
 
   @override
-  Widget build(BuildContext context) => CustomPaint(
-      size: Size.square(size),
-      painter: _StrokePainter((c, p, s) {
-        final sc = s.width / 19;
-        c.save();
-        c.translate(s.width / 2, s.height / 2);
-        c.rotate(-0.52);
-        for (final dx in [-3.6 * sc, 3.6 * sc]) {
-          c.drawRRect(
-              RRect.fromRectAndRadius(
-                  Rect.fromCenter(
-                      center: Offset(dx, 0),
-                      width: 8.2 * sc,
-                      height: 5.0 * sc),
-                  Radius.circular(2.5 * sc)),
-              p);
-        }
-        c.restore();
-      }, color));
+  Widget build(BuildContext context) {
+    final plate = PlateHover.of(context);
+    final c = plate != null
+        ? (plate.hover ? Pal.amber : plateIconIdle)
+        : color;
+    return CustomPaint(
+        size: Size.square(size),
+        painter: _StrokePainter((ctx, p, s) {
+          final sc = s.width / 19;
+          ctx.save();
+          ctx.translate(s.width / 2, s.height / 2);
+          ctx.rotate(-0.52);
+          for (final dx in [-3.6 * sc, 3.6 * sc]) {
+            ctx.drawRRect(
+                RRect.fromRectAndRadius(
+                    Rect.fromCenter(
+                        center: Offset(dx, 0),
+                        width: 8.2 * sc,
+                        height: 5.0 * sc),
+                    Radius.circular(2.5 * sc)),
+                p);
+          }
+          ctx.restore();
+        }, c, glow: plate?.hover ?? false));
+  }
 }
 
 class FolderIcon extends StatelessWidget {
-  const FolderIcon({super.key, this.size = 20, this.color = Pal.white});
+  const FolderIcon({super.key, this.size = 20, this.color = plateIconIdle});
   final double size;
   final Color color;
 
   @override
-  Widget build(BuildContext context) => CustomPaint(
-      size: Size.square(size),
-      painter: _FillPainter((c, p, s) {
-        final sc = s.width / 20;
-        final path = Path()
-          ..moveTo(2.5 * sc, 5.5 * sc)
-          ..relativeCubicTo(0, -0.8 * sc, 0.7 * sc, -1.5 * sc, 1.5 * sc, -1.5 * sc)
-          ..relativeLineTo(3.2 * sc, 0)
-          ..relativeCubicTo(0.4 * sc, 0, 0.8 * sc, 0.2 * sc, 1.1 * sc, 0.5 * sc)
-          ..relativeLineTo(0.9 * sc, 1.0 * sc)
-          ..relativeLineTo(7.3 * sc, 0)
-          ..relativeCubicTo(0.8 * sc, 0, 1.5 * sc, 0.7 * sc, 1.5 * sc, 1.5 * sc)
-          ..relativeLineTo(0, 7.5 * sc)
-          ..relativeCubicTo(0, 0.8 * sc, -0.7 * sc, 1.5 * sc, -1.5 * sc, 1.5 * sc)
-          ..lineTo(4 * sc, 16.5 * sc)
-          ..relativeCubicTo(-0.8 * sc, 0, -1.5 * sc, -0.7 * sc, -1.5 * sc, -1.5 * sc)
-          ..close();
-        c.drawPath(path, p);
-      }, color));
+  Widget build(BuildContext context) {
+    final plate = PlateHover.of(context);
+    final c = plate != null
+        ? (plate.hover ? Pal.amber : plateIconIdle)
+        : color;
+    return CustomPaint(
+        size: Size.square(size),
+        painter: _FillPainter((ctx, p, s) {
+          final sc = s.width / 20;
+          final path = Path()
+            ..moveTo(2.5 * sc, 5.5 * sc)
+            ..relativeCubicTo(0, -0.8 * sc, 0.7 * sc, -1.5 * sc, 1.5 * sc, -1.5 * sc)
+            ..relativeLineTo(3.2 * sc, 0)
+            ..relativeCubicTo(0.4 * sc, 0, 0.8 * sc, 0.2 * sc, 1.1 * sc, 0.5 * sc)
+            ..relativeLineTo(0.9 * sc, 1.0 * sc)
+            ..relativeLineTo(7.3 * sc, 0)
+            ..relativeCubicTo(0.8 * sc, 0, 1.5 * sc, 0.7 * sc, 1.5 * sc, 1.5 * sc)
+            ..relativeLineTo(0, 7.5 * sc)
+            ..relativeCubicTo(0, 0.8 * sc, -0.7 * sc, 1.5 * sc, -1.5 * sc, 1.5 * sc)
+            ..lineTo(4 * sc, 16.5 * sc)
+            ..relativeCubicTo(-0.8 * sc, 0, -1.5 * sc, -0.7 * sc, -1.5 * sc, -1.5 * sc)
+            ..close();
+          ctx.drawPath(path, p);
+        }, c, glow: plate?.hover ?? false));
+  }
 }
 
 class TrashIcon extends StatelessWidget {
@@ -66,23 +95,29 @@ class TrashIcon extends StatelessWidget {
   final Color color;
 
   @override
-  Widget build(BuildContext context) => CustomPaint(
-      size: Size.square(size),
-      painter: _StrokePainter((c, p, s) {
-        final sc = s.width / 14;
-        final path = Path()
-          ..moveTo(2 * sc, 3.5 * sc)
-          ..lineTo(12 * sc, 3.5 * sc)
-          ..moveTo(5.5 * sc, 3.5 * sc)
-          ..lineTo(5.5 * sc, 2 * sc)
-          ..lineTo(8.5 * sc, 2 * sc)
-          ..lineTo(8.5 * sc, 3.5 * sc)
-          ..moveTo(3.5 * sc, 3.5 * sc)
-          ..lineTo(4.3 * sc, 12 * sc)
-          ..lineTo(9.7 * sc, 12 * sc)
-          ..lineTo(10.5 * sc, 3.5 * sc);
-        c.drawPath(path, p);
-      }, color));
+  Widget build(BuildContext context) {
+    final plate = PlateHover.of(context);
+    final c = plate != null
+        ? (plate.hover ? Pal.amber : plateIconIdle)
+        : color;
+    return CustomPaint(
+        size: Size.square(size),
+        painter: _StrokePainter((ctx, p, s) {
+          final sc = s.width / 14;
+          final path = Path()
+            ..moveTo(2 * sc, 3.5 * sc)
+            ..lineTo(12 * sc, 3.5 * sc)
+            ..moveTo(5.5 * sc, 3.5 * sc)
+            ..lineTo(5.5 * sc, 2 * sc)
+            ..lineTo(8.5 * sc, 2 * sc)
+            ..lineTo(8.5 * sc, 3.5 * sc)
+            ..moveTo(3.5 * sc, 3.5 * sc)
+            ..lineTo(4.3 * sc, 12 * sc)
+            ..lineTo(9.7 * sc, 12 * sc)
+            ..lineTo(10.5 * sc, 3.5 * sc);
+          ctx.drawPath(path, p);
+        }, c));
+  }
 }
 
 class VpnIcon extends StatelessWidget {
@@ -92,35 +127,52 @@ class VpnIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) => CustomPaint(
       size: const Size(14, 16),
-      painter: _FillPainter((c, p, s) {
+      painter: _FillPainter((ctx, p, s) {
         final sc = s.width / 14;
-        c.drawRect(Rect.fromLTWH(6 * sc, 1 * sc, 3 * sc, 9 * sc), p);
-        c.drawRect(Rect.fromLTWH(6 * sc, 12 * sc, 3 * sc, 3 * sc), p);
+        ctx.drawRect(Rect.fromLTWH(6 * sc, 1 * sc, 3 * sc, 9 * sc), p);
+        ctx.drawRect(Rect.fromLTWH(6 * sc, 12 * sc, 3 * sc, 3 * sc), p);
       }, color));
 }
 
 class _FillPainter extends CustomPainter {
-  _FillPainter(this.painter, this.color);
+  _FillPainter(this.painter, this.color, {this.glow = false});
   final void Function(Canvas canvas, Paint paint, Size size) painter;
   final Color color;
+  final bool glow;
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (glow) {
+      final g = Paint()
+        ..color = Pal.amber.withValues(alpha: .55)
+        ..maskFilter = const MaskFilter.blur(ui.BlurStyle.normal, 4);
+      painter(canvas, g, size);
+    }
     final p = Paint()..color = color;
     painter(canvas, p, size);
   }
 
   @override
-  bool shouldRepaint(covariant _FillPainter old) => old.color != color;
+  bool shouldRepaint(covariant _FillPainter old) =>
+      old.color != color || old.glow != glow;
 }
 
 class _StrokePainter extends CustomPainter {
-  _StrokePainter(this.painter, this.color);
+  _StrokePainter(this.painter, this.color, {this.glow = false});
   final void Function(Canvas canvas, Paint paint, Size size) painter;
   final Color color;
+  final bool glow;
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (glow) {
+      final g = Paint()
+        ..color = Pal.amber.withValues(alpha: .55)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4
+        ..maskFilter = const MaskFilter.blur(ui.BlurStyle.normal, 4);
+      painter(canvas, g, size);
+    }
     final p = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
@@ -129,7 +181,8 @@ class _StrokePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _StrokePainter old) => old.color != color;
+  bool shouldRepaint(covariant _StrokePainter old) =>
+      old.color != color || old.glow != glow;
 }
 
 // ---- LED-полосы ----
@@ -224,7 +277,7 @@ class _GlassPainter extends CustomPainter {
   bool shouldRepaint(covariant _GlassPainter old) => old.flicker != flicker;
 }
 
-// ---- строка трекинга, изредка пробегает по экрану ----
+// ---- строка трекинга, изредка пробегает по экрану (узкая, как в ТВ) ----
 
 class TrackingBar extends StatelessWidget {
   const TrackingBar({super.key, required this.progress});
@@ -235,13 +288,13 @@ class TrackingBar extends StatelessWidget {
     return Align(
       alignment: Alignment(-1, -1 + progress * 2),
       child: Container(
-        height: 60,
+        height: 8,
         decoration: BoxDecoration(
           gradient: LinearGradient(colors: [
             Colors.white.withValues(alpha: 0),
-            Colors.white.withValues(alpha: .045),
-            Colors.white.withValues(alpha: .07),
-            Colors.white.withValues(alpha: .02),
+            Colors.white.withValues(alpha: .05),
+            Colors.white.withValues(alpha: .085),
+            Colors.white.withValues(alpha: .03),
             Colors.white.withValues(alpha: 0),
           ]),
         ),
@@ -347,13 +400,9 @@ class _PlateState extends State<Plate> {
             child: AnimatedScale(
               scale: pressed ? 0.97 : 1,
               duration: const Duration(milliseconds: 60),
-              child: IconTheme.merge(
-                data: IconThemeData(color: hover ? Pal.amber : const Color(0xFF151312)),
-                child: DefaultTextStyle.merge(
-                  style: T.h(20, w: FontWeight.w700,
-                      c: hover ? Pal.amber : const Color(0xFF151312)),
-                  child: widget.child,
-                ),
+              child: PlateHover(
+                hover: hover,
+                child: widget.child,
               ),
             ),
           ),

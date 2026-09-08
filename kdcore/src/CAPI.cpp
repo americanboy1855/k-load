@@ -217,7 +217,8 @@ static json probeToJson (const Probe& p, const Str& text)
         { "isPlaylist", p.isPlaylist },
         { "hasPlaylist", p.hasPlaylist },
         { "isPhoto", p.isPhoto },
-        { "isSearch", p.isSearch }
+        { "isSearch", p.isSearch },
+        { "drm", p.drm }
     };
     return out;
 }

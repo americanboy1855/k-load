@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -80,14 +81,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   bool beamStarted = false;
   late final AnimationController beamC =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
-  late final AnimationController swimC =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 9000));
   late final AnimationController flickC =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 6500));
   late final AnimationController trackC =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 1700));
   bool tracking = false;
-  Timer? bootAutoTimer, trackTimer;
+  Timer? trackTimer;
 
   // vpn
   int vpnState = 0; // 0 неизвестно, 1 вкл, 2 выкл
@@ -134,13 +133,13 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     flickC.repeat();
     _scheduleTracking();
     _boot();
-    if (!booted) {
-      bootAutoTimer = Timer(const Duration(milliseconds: 2600), () {
-        if (!booted) _finishBoot();
-      });
-    }
+    // Телевизор включается сам: без надписей, сразу луч кинескопа.
+    beamStarted = true;
     beamC.addStatusListener((s) {
       if (s == AnimationStatus.completed) _finishBoot();
+    });
+    Future.delayed(const Duration(milliseconds: 350), () {
+      if (mounted) beamC.forward(from: 0);
     });
   }
 
@@ -191,16 +190,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   // ---- boot ----
 
-  void _startBeam() {
-    if (booted || beamStarted) return;
-    setState(() => beamStarted = true);
-    beamC.forward(from: 0);
-  }
-
   void _finishBoot() {
-    bootAutoTimer?.cancel();
     setState(() => booted = true);
-    swimC.repeat();
     // VPN-плашка появляется через паузу, как в макете.
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) setState(() {});
@@ -399,13 +390,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   @override
   void dispose() {
     sub?.cancel();
-    bootAutoTimer?.cancel();
     trackTimer?.cancel();
     debounce?.cancel();
     seekAnim?.cancel();
     toastTimer?.cancel();
     beamC.dispose();
-    swimC.dispose();
     flickC.dispose();
     trackC.dispose();
     query.dispose();
@@ -417,17 +406,24 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
-    // Окно держат пропорции сами (contentAspectRatio) — масштаб по ширине.
+    // Телевизор занимает окно целиком: масштаб «каверкой» (щелей не бывает),
+    // углы корпуса — под системный радиус окна, микрощели исключены.
     return Scaffold(
-      backgroundColor: Pal.desk,
-      body: FittedBox(
-        fit: BoxFit.contain,
-        child: SizedBox(
-          width: tvW,
-          height: tvH,
-          child: _tv(),
-        ),
-      ),
+      backgroundColor: const Color(0xFF161413),
+      body: LayoutBuilder(builder: (context, box) {
+        final scale = (box.maxWidth / tvW) > (box.maxHeight / tvH)
+            ? box.maxWidth / tvW
+            : box.maxHeight / tvH;
+        return OverflowBox(
+          maxWidth: tvW * scale,
+          maxHeight: tvH * scale,
+          child: SizedBox(
+            width: tvW * scale,
+            height: tvH * scale,
+            child: FittedBox(fit: BoxFit.fill, child: SizedBox(width: tvW, height: tvH, child: _tv())),
+          ),
+        );
+      }),
     );
   }
 
@@ -435,16 +431,13 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     return Container(
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(26),
+        borderRadius: BorderRadius.circular(10.5),
         gradient: const LinearGradient(
           begin: Alignment(-0.6, -1),
           end: Alignment(0.7, 1),
           colors: [Color(0xFF2E2A27), Pal.plastic, Color(0xFF1D1B19), Color(0xFF161413)],
           stops: [0, 0.34, 0.78, 1],
         ),
-        boxShadow: const [
-          BoxShadow(color: Color(0x14000000), offset: Offset(1, 0), blurRadius: 0, spreadRadius: 0),
-        ],
       ),
       child: Column(children: [
         // верхняя рамка: родные кнопки светофора рисует macOS поверх
@@ -463,16 +456,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         child: Container(
           color: Pal.screenBg,
           child: Stack(fit: StackFit.expand, children: [
-            // содержимое плавает, как на живом кинескопе
-            AnimatedBuilder(
-              animation: swimC,
-              builder: (context, _) {
-                if (!booted) return _ui();
-                final t = swimC.value;
-                final dx = _swimOffset(t);
-                return Transform.translate(offset: Offset(dx, 0), child: _ui());
-              },
-            ),
+            _ui(),
             GlassOverlay(flicker: bootless ? 0 : flickValue()),
             if (tracking)
               AnimatedBuilder(
@@ -507,18 +491,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     return v;
   }
 
-  double _swimOffset(double t) {
-    const keys = [0.0, 0.12, 0.26, 0.40, 0.52, 0.64, 0.81, 1.0];
-    const dxs = [0.0, -1.0, 0.9, -0.5, 1.8, 0.6, -0.9, 0.0];
-    for (var i = 0; i < keys.length - 1; i++) {
-      if (t >= keys[i] && t <= keys[i + 1]) {
-        final k = (t - keys[i]) / (keys[i + 1] - keys[i]);
-        return dxs[i] + (dxs[i + 1] - dxs[i]) * k;
-      }
-    }
-    return 0;
-  }
-
   Widget _ui() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 22, 20, 14),
@@ -531,8 +503,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         if (cardVisible) ...[
           const SizedBox(height: 18),
           _foundCard(),
-          const SizedBox(height: 18),
-          _modesRow(),
+          if (!(probe?.drm ?? false)) ...[
+            const SizedBox(height: 18),
+            _modesRow(),
+          ],
         ],
         if (items.isNotEmpty) ...[
           const SizedBox(height: 14),
@@ -602,7 +576,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, crossAxisAlignment: CrossAxisAlignment.end, children: [
         Text('ПОИСК', style: T.h(17, c: Pal.soft, ls: .3)),
-        Text('$seekPct%', style: T.h(24, c: Pal.amber)),
+        Text('$seekPct%', style: T.h(24, c: Pal.amber, glow: true)),
       ]),
       const SizedBox(height: 9),
       LedRow(count: 16, filled: (seekPct / 6.25).round().clamp(0, 16)),
@@ -629,7 +603,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       ]);
     }
     if (p == null) return const SizedBox.shrink();
-    if (!p.ok) {
+    if (!p.ok && !p.drm) {
       return DashedBox(
         color: Pal.amber.withValues(alpha: .35),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -641,6 +615,24 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         ]),
       );
     }
+    if (p.drm) {
+      // Защищённая запись: карточка собирается из oEmbed, вместо режимов —
+      // объяснение, почему скачать нельзя.
+      return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+        _cover(p.thumbnail.isEmpty ? null : p.thumbnail, const Color(0xFF31415F)),
+        const SizedBox(width: 15),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _badge(p.serviceTitle.toUpperCase(), src: _sourceUrl(p)),
+            const SizedBox(height: 8),
+            Text(_drmTitle(p), style: T.h(26), maxLines: 2, overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 4),
+            Text(p.error.toUpperCase(),
+                style: T.h(17, w: FontWeight.w600, c: Pal.error, ls: .06, glow: true)),
+          ]),
+        ),
+      ]);
+    }
     final src = _sourceUrl(p);
     return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
       _cover(p.thumbnail.isEmpty ? null : p.thumbnail, const Color(0xFF31415F)),
@@ -649,12 +641,20 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           _badge(p.serviceTitle.toUpperCase(), src: src),
           const SizedBox(height: 8),
-          Text(p.title, style: T.h(26), maxLines: 2, overflow: TextOverflow.ellipsis),
+          Text(p.title, style: T.h(26, glow: true),
+              maxLines: 2, overflow: TextOverflow.ellipsis),
           const SizedBox(height: 4),
           Text(_durLine(p), style: T.h(17, w: FontWeight.w500, c: Pal.dim, ls: .06)),
         ]),
       ),
     ]);
+  }
+
+  /// «BALLISLIFE by INMYWHITEE» → название + исполнитель на карточке.
+  String _drmTitle(KdProbeEvent p) {
+    final t = p.title;
+    final by = t.indexOf(' by ');
+    return by > 0 ? t.substring(0, by) : t;
   }
 
   /// Источник «где нашлось» — первая настоящая ссылка из разбора.
@@ -672,8 +672,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       return '${p.count} ВИДЕО · $mins МИН';
     }
     final dur = p.duration > 0 ? ' · ${fmtDur(p.duration)}' : '';
-    final only = musicOnly ? ' · ТОЛЬКО ЗВУК' : '';
-    return 'ХРОНОМЕТРАЖ$dur$only';
+    return 'ХРОНОМЕТРАЖ$dur';
   }
 
   Widget _badge(String text, {String? src}) {
@@ -698,7 +697,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   Widget _cover(String? url, Color fallbackFrom) {
     return CustomPaint(
-      foregroundPainter: const DashedBorderPainter(),
+      foregroundPainter: const DashedBorderPainter(solid: true),
       child: SizedBox(
         width: 118,
         height: 118,
@@ -751,10 +750,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                   chronOn = !chronOn;
                 })),
         const Spacer(),
+        if (chronOn && !chronLocked) ...[
+          _chronBox(),
+          const SizedBox(width: 12),
+        ],
         _goButton(goLabel, enabled: canDownload),
       ]),
-      if (chronOn && !chronLocked)
-        Positioned(top: 40, left: 0, child: _chronBox()),
     ]);
   }
 
@@ -805,41 +806,35 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     return Container(
       decoration: const BoxDecoration(
         color: Color(0xF5070400),
-        boxShadow: [BoxShadow(color: Color(0x8C000000), offset: Offset(0, 10), blurRadius: 26)],
       ),
       child: DashedBox(
-        padding: const EdgeInsets.all(12),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Text('ОТ', style: T.h(16, ls: .14)),
-            const SizedBox(width: 8),
-            SizedBox(
-                width: 66,
-                child: TextField(
-                  controller: chronFrom,
-                  textAlign: TextAlign.center,
-                  cursorColor: Pal.amber,
-                  onSubmitted: (_) => FocusScope.of(context).unfocus(),
-                  style: T.h(20, c: Pal.amber, ls: .04),
-                  decoration: const InputDecoration(isCollapsed: true, border: InputBorder.none),
-                )),
-            const SizedBox(width: 8),
-            Text('ДО', style: T.h(16, ls: .14)),
-            const SizedBox(width: 8),
-            SizedBox(
-                width: 66,
-                child: TextField(
-                  controller: chronTo,
-                  textAlign: TextAlign.center,
-                  cursorColor: Pal.amber,
-                  onSubmitted: (_) => FocusScope.of(context).unfocus(),
-                  style: T.h(20, c: Pal.amber, ls: .04),
-                  decoration: const InputDecoration(isCollapsed: true, border: InputBorder.none),
-                )),
-          ]),
-          const SizedBox(height: 9),
-          Text('ОТРЕЗОК · ТОЛЬКО ОДИНОЧНЫЙ ФАЙЛ · М:СС',
-              style: T.h(13, w: FontWeight.w500, c: Pal.dim, ls: .1)),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text('ОТ', style: T.h(16, ls: .1)),
+          const SizedBox(width: 6),
+          SizedBox(
+              width: 56,
+              child: TextField(
+                controller: chronFrom,
+                textAlign: TextAlign.center,
+                cursorColor: Pal.amber,
+                onSubmitted: (_) => FocusScope.of(context).unfocus(),
+                style: T.h(20, c: Pal.amber, ls: .04),
+                decoration: const InputDecoration(isCollapsed: true, border: InputBorder.none),
+              )),
+          const SizedBox(width: 8),
+          Text('ДО', style: T.h(16, ls: .1)),
+          const SizedBox(width: 6),
+          SizedBox(
+              width: 56,
+              child: TextField(
+                controller: chronTo,
+                textAlign: TextAlign.center,
+                cursorColor: Pal.amber,
+                onSubmitted: (_) => FocusScope.of(context).unfocus(),
+                style: T.h(20, c: Pal.amber, ls: .04),
+                decoration: const InputDecoration(isCollapsed: true, border: InputBorder.none),
+              )),
         ]),
       ),
     );
@@ -887,7 +882,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                 style: T.h(20, c: Pal.soft), maxLines: 1, overflow: TextOverflow.ellipsis),
             const SizedBox(height: 3),
             Text(it.stage.toUpperCase(),
-                style: T.h(15, w: FontWeight.w500, c: stageColor, ls: .1)),
+                style: T.h(15, w: FontWeight.w500, c: stageColor,
+                    ls: .1, glow: done)),
           ]),
         ),
         const SizedBox(width: 12),
@@ -948,7 +944,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             const VpnIcon(),
             const SizedBox(width: 10),
             Text('Для лучшей работы загрузчика - включите VPN',
-                style: T.h(17, w: FontWeight.w500, c: Pal.soft)),
+                style: T.h(17, w: FontWeight.w500, c: Pal.soft, glow: true)),
             const SizedBox(width: 4),
             GestureDetector(
               onTap: () => setState(() => vpnDismissed = true),
@@ -995,21 +991,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   Widget _bootOverlay() {
     return Positioned.fill(
-      child: GestureDetector(
-        onTap: _startBeam,
-        behavior: HitTestBehavior.opaque,
-        child: Container(
-          color: Colors.black,
-          child: AnimatedBuilder(
-            animation: beamC,
-            builder: (context, _) => beamStarted
-                ? CustomPaint(painter: BootBeamPainter(beamC.value))
-                : Center(
-                    child: Text('НАЖМИ, ЧТОБЫ ВКЛЮЧИТЬ',
-                        style: T.h(16, w: FontWeight.w500, c: const Color(0xFF3A3428), ls: .3)),
-                  ),
-          ),
-        ),
+      child: AnimatedBuilder(
+        animation: beamC,
+        builder: (context, _) => CustomPaint(painter: BootBeamPainter(beamC.value)),
       ),
     );
   }
@@ -1033,23 +1017,15 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             ),
           ),
         ),
-        // логотип kvartal
+        // логотип kvartal: вдавлен в пластик, при наведении светится фосфором
         Positioned(
           left: 0,
           right: 0,
-          top: 48,
+          top: 51,
           child: Transform.translate(
             offset: const Offset(0, -31),
             child: Center(
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: GestureDetector(
-                  onTap: () => _openPath('https://kvartalrecords.ru'),
-                  child: SvgPicture.asset('assets/kvartal.svg',
-                      height: 62,
-                      colorFilter: const ColorFilter.mode(Color(0xFF161412), BlendMode.srcIn)),
-                ),
-              ),
+              child: _KvartalLogo(onOpen: () => _openPath('https://kvartalrecords.ru')),
             ),
           ),
         ),
@@ -1122,4 +1098,68 @@ class _GripPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _GripPainter old) => false;
+}
+
+
+/// kvartal: SVG тремя слоями — тёмная кромка сверху, светлая снизу (вдавлено
+/// в пластик), поверх — фосфорное свечение при наведении.
+class _KvartalLogo extends StatefulWidget {
+  const _KvartalLogo({required this.onOpen});
+  final VoidCallback onOpen;
+
+  @override
+  State<_KvartalLogo> createState() => _KvartalLogoState();
+}
+
+class _KvartalLogoState extends State<_KvartalLogo> {
+  bool hover = false;
+
+  Widget _copy(Color color, {double dy = 0, double blur = 0, double opacity = 1}) {
+    Widget svg = SvgPicture.asset('assets/kvartal.svg',
+        height: 62,
+        colorFilter: ColorFilter.mode(color, BlendMode.srcIn));
+    if (blur > 0) {
+      svg = ImageFiltered(
+          imageFilter: ui.ImageFilter.blur(sigmaX: blur, sigmaY: blur), child: svg);
+    }
+    if (opacity < 1) svg = Opacity(opacity: opacity, child: svg);
+    if (dy != 0) svg = Transform.translate(offset: Offset(0, dy), child: svg);
+    return svg;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => hover = true),
+      onExit: (_) => setState(() => hover = false),
+      child: GestureDetector(
+        onTap: widget.onOpen,
+        child: SizedBox(
+          width: 210,
+          height: 62,
+          child: Stack(children: [
+            Positioned.fill(
+              child: IgnorePointer(
+                child: AnimatedOpacity(
+                  opacity: hover ? 1 : 0,
+                  duration: const Duration(milliseconds: 250),
+                  child: _copy(Pal.amber, blur: 9),
+                ),
+              ),
+            ),
+            _copy(Colors.black, dy: -1, blur: .8, opacity: .6),
+            _copy(const Color(0x17FFFFFF), dy: 1.2),
+            TweenAnimationBuilder<Color?>(
+              tween: ColorTween(
+                  begin: const Color(0xFF161412),
+                  end: hover ? Pal.amber : const Color(0xFF161412)),
+              duration: const Duration(milliseconds: 250),
+              builder: (_, c, __) => _copy(c ?? const Color(0xFF161412)),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
 }

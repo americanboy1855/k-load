@@ -1232,6 +1232,9 @@ Probe Engine::probe (const Str& text) const
         Str out;
         if (! captureOut (args, out, &code) || code != 0 || out.empty())
         {
+            // DRM узнаём сразу при разборе, чтобы не доводить до плашки очереди.
+            if (kd::contains (kd::lower (out), "drm"))
+                return probeDrm (link, service);
             p.ok = false;
             if (Detector::cookieSensitive (service))
                 p.error = "Качаются только открытые материалы: запись скрыта или требует входа";
@@ -1330,6 +1333,30 @@ static Str searchThumb (const json& e)
     }
     if (t.empty()) t = jtext (e, "artwork_url");
     return t;
+}
+
+// DRM-запись: скачать нельзя, но карточку собираем из открытых данных —
+// у SoundCloud oEmbed работает без входа.
+Probe Engine::probeDrm (const Str& link, const Detector::Service service) const
+{
+    Probe p;
+    p.ok = false;
+    p.drm = true;
+    p.link = link;
+    p.service = service;
+    p.error = "Файл защищён DRM — скачать его невозможно";
+    if (service == Detector::Service::soundcloud)
+    {
+        const auto meta = fetch ("https://soundcloud.com/oembed?format=json&url="
+                                 + kd::urlEscape (link));
+        const auto data = json::parse (meta, nullptr, false);
+        if (! data.is_discarded() && data.is_object())
+        {
+            p.title = jtext (data, "title");
+            p.thumbnail = jtext (data, "thumbnail_url");
+        }
+    }
+    return p;
 }
 
 Probe Engine::probeSearch (const Str& query) const

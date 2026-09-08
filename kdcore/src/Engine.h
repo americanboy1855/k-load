@@ -91,6 +91,7 @@ struct Probe
     bool hasPlaylist = false;              // в ссылке есть list= — спросим, что качать
     bool isPhoto = false;                  // Pinterest-фотография
     bool isSearch = false;                 // искали по названию
+    bool drm = false;                      // запись защищена DRM — скачать нельзя
 };
 
 /// Один-единственный разбор ссылки: пока человек допечатывает, старые
@@ -219,6 +220,7 @@ private:
     bool downloadPinterestPhoto (const QueueItemPtr& item);
     Probe probePinterestPhoto (const Str& link) const;
     Probe probeSearch (const Str& query) const;
+    Probe probeDrm (const Str& link, Detector::Service service) const;
 
     // ---- аргументы yt-dlp ----
     StrVec baseArgs (const fs::path& dest, const Str& cookie) const;

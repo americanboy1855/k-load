@@ -210,6 +210,7 @@ class KdProbeEvent extends KdEvent {
   bool get hasPlaylist => json['hasPlaylist'] == true;
   bool get isPhoto => json['isPhoto'] == true;
   bool get isSearch => json['isSearch'] == true;
+  bool get drm => json['drm'] == true;
   int get service => (json['service'] ?? 0) as int;
 }
 

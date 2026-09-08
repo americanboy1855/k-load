@@ -14,7 +14,8 @@ class MainFlutterWindow: NSWindow {
     titlebarAppearsTransparent = true
     styleMask.insert(.fullSizeContentView)
     isOpaque = false
-    backgroundColor = NSColor(red: 0x0B/255.0, green: 0x0B/255.0, blue: 0x0D/255.0, alpha: 1)
+    // Пластик корпуса, не чёрный: на закруглённых углах окна микрощелей нет.
+    backgroundColor = NSColor(red: 0x16/255.0, green: 0x14/255.0, blue: 0x13/255.0, alpha: 1)
     // Во весь экран недоступно: зум-кнопка мертва и комбинация не срабатывает.
     standardWindowButton(.zoomButton)?.isEnabled = false
     collectionBehavior.insert(.fullScreenDisallowsTiling)

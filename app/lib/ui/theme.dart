@@ -27,25 +27,34 @@ class T {
   static const plex = 'IBM Plex Mono';
 
   static TextStyle h(double size,
-      {FontWeight w = FontWeight.w600, Color c = Pal.soft, double ls = 0}) {
+      {FontWeight w = FontWeight.w600, Color c = Pal.soft, double ls = 0,
+      bool glow = false}) {
     return TextStyle(
         fontFamily: handjet,
         fontSize: size,
         fontWeight: w,
         color: c,
         letterSpacing: ls,
-        height: 1.05);
+        height: 1.05,
+        shadows: glow
+            ? [Shadow(color: c.withValues(alpha: .5), blurRadius: 9)]
+            : null);
   }
 }
 
-// Пунктирная рамка — фирменный приём макета (все блоки на экране).
+// Пунктирная (или цельная — solid) рамка — фирменный приём макета.
 class DashedBorderPainter extends CustomPainter {
   const DashedBorderPainter(
-      {this.color = Pal.amberSoft, this.radius = 0, this.dash = 5, this.gap = 4});
+      {this.color = Pal.amberSoft,
+      this.radius = 0,
+      this.dash = 5,
+      this.gap = 4,
+      this.solid = false});
   final Color color;
   final double radius;
   final double dash;
   final double gap;
+  final bool solid;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -55,6 +64,10 @@ class DashedBorderPainter extends CustomPainter {
       ..color = color;
     final rrect = RRect.fromRectAndRadius(Offset.zero & size, Radius.circular(radius));
     final path = Path()..addRRect(rrect);
+    if (solid) {
+      canvas.drawPath(path, paint);
+      return;
+    }
     for (final metric in path.computeMetrics()) {
       var dist = 0.0;
       while (dist < metric.length) {
@@ -67,7 +80,7 @@ class DashedBorderPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant DashedBorderPainter old) =>
-      old.color != color || old.radius != radius;
+      old.color != color || old.radius != radius || old.solid != solid;
 }
 
 // Контейнер с пунктирной рамкой.
