@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf8">
+<title>K LOAD — вариант 2 · Табло</title>
+<style>
+@font-face{font-family:'Handjet';src:url('../assets/fonts/Handjet[ELGR,ELSH,wght].ttf');font-weight:100 900}
+@font-face{font-family:'Press Start 2P';src:url('../assets/fonts/PressStart2P-Regular.ttf')}
+@font-face{font-family:'DotGothic16';src:url('../assets/fonts/DotGothic16-Regular.ttf')}
+:root{--amber:#FFB000;--soft:#FFCF7A;--dim:rgba(255,176,0,.5);--white:#EDE8DC}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:radial-gradient(1200px 800px at 50% 20%,#111114,#0B0B0D 60%,#060607);
+  min-height:100vh;display:flex;align-items:center;justify-content:center;
+  font:16px/1.4 'DotGothic16',sans-serif;color:var(--white)}
+.tv{width:560px;height:670px;border-radius:26px;position:relative;overflow:hidden;
+  background:linear-gradient(155deg,#2E2A27,#262321 34%,#1D1B19 78%,#161413);
+  box-shadow:0 40px 90px rgba(0,0,0,.62);display:flex;flex-direction:column;user-select:none}
+.top{height:42px;flex:none;display:flex;align-items:center;padding:0 12px 0 16px}
+.lights{display:flex;gap:8px}
+.light{width:12px;height:12px;border-radius:50%;border:.5px solid rgba(0,0,0,.45)}
+.light.r{background:#FF5F57}.light.y{background:#FEBC2E}
+.light.g{background:#28C840;filter:saturate(.25) brightness(.62)}
+.glass{position:relative;flex:1;margin:16px 18px;border-radius:16px;overflow:hidden;
+  background:radial-gradient(ellipse 120% 95% at 50% 42%,#0C0805,#070402 52%,#030201);
+  box-shadow:0 0 0 6px rgba(0,0,0,.3),0 0 0 7px rgba(255,255,255,.045),
+    inset 0 3px 12px rgba(0,0,0,.92),inset 0 -2px 10px rgba(0,0,0,.7),
+    inset 2px 0 10px rgba(0,0,0,.5),inset -2px 0 10px rgba(0,0,0,.5),inset 0 0 60px rgba(0,0,0,.5)}
+.glass::before{content:"";position:absolute;inset:0;z-index:6;pointer-events:none;
+  background:radial-gradient(58% 46% at 50% 44%,rgba(255,236,200,.05),rgba(255,236,200,0) 60%),
+    radial-gradient(140% 118% at 50% 46%,rgba(0,0,0,0) 46%,rgba(0,0,0,.32) 78%,rgba(0,0,0,.6))}
+.glass::after{content:"";position:absolute;inset:0;z-index:5;pointer-events:none;
+  background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23g)' opacity='.5'/%3E%3C/svg%3E"),
+    repeating-linear-gradient(0deg,rgba(0,0,0,.2) 0 1px,transparent 1px 3px);opacity:.4}
+.ui{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;padding:20px 18px 14px}
+
+/* поиск */
+.search{position:relative;display:flex;align-items:center;gap:10px;min-height:54px;
+  border:1px dashed rgba(255,176,0,.55);padding:11px 14px;cursor:text;transition:all .25s}
+.search.focus{border-color:rgba(255,176,0,.85);box-shadow:0 0 22px rgba(255,176,0,.16)}
+.search .ic{color:var(--amber);display:flex}
+.search input{flex:1;background:none;border:none;outline:none;padding:0;
+  font:600 21px/1.2 'Handjet',sans-serif;letter-spacing:.03em;color:var(--soft);
+  caret-color:var(--amber);min-width:0;text-shadow:0 0 8px rgba(255,176,0,.35)}
+.search .ph{position:absolute;left:52px;right:14px;top:50%;transform:translateY(-50%);
+  font:500 18px/1.1 'Handjet',sans-serif;color:var(--dim);pointer-events:none;cursor:text;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.search .ph.off{display:none}
+
+/* ПОИСК: LED-блоки + Press Start % */
+.seek{margin-top:14px}
+.seek .cap{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:9px}
+.seek .word{font:400 15px 'DotGothic16';letter-spacing:.3em;color:var(--soft)}
+.seek .pct{font:400 15px 'Press Start 2P';color:var(--amber);text-shadow:0 0 10px rgba(255,176,0,.5)}
+.leds{display:grid;grid-template-columns:repeat(16,1fr);gap:4px}
+.leds i{height:16px;background:#241A08;border-radius:1px}
+.leds i.f{background:var(--amber);box-shadow:0 0 9px rgba(255,176,0,.55)}
+
+/* найдено */
+.found{margin-top:16px;display:flex;gap:15px}
+.cover{width:124px;height:124px;flex:none;position:relative;border:2px solid rgba(255,176,0,.45);
+  background:
+    repeating-conic-gradient(rgba(255,176,0,.1) 0 25%,transparent 0 50%) 0 0/8px 8px,
+    linear-gradient(150deg,#31415f,#131c2b)}
+.cover.pl::after{content:"";position:absolute;inset:7px 7px -7px 13px;border:2px solid rgba(255,176,0,.5);
+  background:#0c0805;z-index:-1}
+.fmeta{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:8px}
+.badge{align-self:flex-start;font:400 13px 'Handjet';letter-spacing:.14em;
+  color:#0A0500;background:var(--amber);padding:2px 9px}
+.ft{font:600 24px/1.05 'Handjet';color:var(--soft);text-shadow:0 0 8px rgba(255,176,0,.3)}
+.fdur{font:400 16px 'Handjet';color:var(--dim);letter-spacing:.06em}
+.fcenter{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;
+  border:1px dashed rgba(255,176,0,.35);min-height:124px;text-align:center;padding:12px}
+.fcenter .b1{font:600 26px/1 'Handjet';color:var(--soft)}
+.fcenter .b2{font:400 15px/1.3 'Handjet';color:var(--dim)}
+
+/* режимы: chunky LED-плашки */
+.modes{margin-top:16px;display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.mode{font:600 19px/1 'Handjet';letter-spacing:.06em;color:var(--soft);
+  border:1px solid rgba(255,176,0,.4);padding:8px 15px;cursor:pointer;background:rgba(255,176,0,.06)}
+.mode.on{color:#0A0500;background:var(--amber);border-color:var(--amber);
+  box-shadow:0 0 14px rgba(255,176,0,.4)}
+.mode.lock{opacity:.3;cursor:not-allowed}
+.range{display:none;gap:6px;align-items:center;font:500 17px 'Handjet';color:var(--dim)}
+.range.show{display:flex}
+.range input{width:58px;background:none;border:none;border-bottom:2px solid var(--dim);
+  color:var(--soft);font:600 18px 'Handjet';text-align:center;outline:none}
+.dl{margin-left:auto;font:700 20px/1 'Handjet';letter-spacing:.06em;color:#0A0500;
+  background:var(--amber);border:none;padding:10px 22px;cursor:pointer;
+  box-shadow:0 0 16px rgba(255,176,0,.25)}
+.dl:active{transform:translateY(1px);box-shadow:none}
+
+/* загрузки */
+.dlists{margin-top:14px;border:1px dashed rgba(255,176,0,.5);flex:1;min-height:0;
+  overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--amber) transparent}
+.dlists::-webkit-scrollbar{width:5px}
+.dlists::-webkit-scrollbar-thumb{background:rgba(255,176,0,.5)}
+.ditem{padding:11px 14px;border-bottom:1px dashed rgba(255,176,0,.22);display:flex;gap:13px;align-items:center}
+.ditem:last-child{border-bottom:none}
+.dmain{flex:1;min-width:0}
+.d1{font:600 21px/1 'Handjet';color:var(--soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.d2{font:500 15px/1 'Handjet';color:var(--dim);margin-top:3px;letter-spacing:.1em}
+.d2.q{color:#8A6E38}.d2.done{color:var(--amber)}
+.dbars{display:grid;grid-template-columns:repeat(8,1fr);gap:3px;width:130px;flex:none}
+.dbars i{height:14px;background:#241A08;border-radius:1px}
+.dbars i.f{background:var(--amber);box-shadow:0 0 7px rgba(255,176,0,.5)}
+.acts{display:flex;gap:6px}
+.act{width:27px;height:27px;border:1px dashed rgba(255,176,0,.45);background:none;cursor:pointer;
+  color:var(--soft);display:flex;align-items:center;justify-content:center}
+.act:hover{background:rgba(255,176,0,.14)}
+
+.band{height:96px;flex:none;position:relative;display:flex;align-items:center;justify-content:center;gap:26px}
+.band .plate{position:absolute;top:50%;transform:translateY(-50%)}
+#folder{left:22px}
+.band a.plate{right:22px}
+.band .plate:active{transform:translateY(calc(-50% + 1px))}
+
+.plate{width:46px;height:46px;border-radius:50%;border:1px solid #0C0B0A;cursor:pointer;
+  background:radial-gradient(circle at 34% 28%,#413D39,#2A2724 52%,#1B1917);
+  box-shadow:0 3px 5px rgba(0,0,0,.6),inset 0 1px 1px rgba(255,255,255,.11),inset 0 -3px 5px rgba(0,0,0,.55);
+  display:flex;align-items:center;justify-content:center;color:#151312;
+  transition:transform .06s,color .25s,filter .25s}
+.plate:active{transform:translateY(1px)}
+.plate:hover{color:var(--amber)}
+.plate:hover svg,.plate:hover span{color:var(--amber);filter:drop-shadow(0 0 7px rgba(255,176,0,.55))}
+.plate .dollar{font:700 20px 'Chakra Petch',sans-serif;line-height:1;text-decoration:none}
+a.plate{text-decoration:none}
+.logo{position:absolute;left:50%;top:41px;transform:translate(-50%,-50%);text-decoration:none;color:#161412;
+  filter:drop-shadow(0 1px 0 rgba(255,255,255,.075)) drop-shadow(0 -1px 1px rgba(0,0,0,.7));
+  transition:color .25s,filter .25s}
+.logo svg{height:62px;width:auto;display:block}
+.logo:hover{color:var(--amber);filter:drop-shadow(0 0 12px rgba(255,176,0,.4))}
+.hidden{display:none!important}
+.demo{position:fixed;left:12px;bottom:10px;display:flex;gap:8px;font:400 10.5px 'IBM Plex Mono';color:#6B6B70}
+.demo button{font:700 10px 'IBM Plex Mono';color:#9A9AA0;background:#131316;border:1px solid #26262B;border-radius:4px;padding:6px 9px;cursor:pointer}
+.demo button.on{color:#0A0500;background:var(--amber);border-color:var(--amber)}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+/* LED-ячейки шкалы */
+.dbars{display:grid;grid-template-columns:repeat(8,1fr);gap:4px;width:130px;flex:none}
+.dbars i{height:16px;background:#241A08;border-radius:1px}
+.dbars i.f{background:var(--amber);box-shadow:0 0 9px rgba(255,176,0,.55)}
+.d2.q{color:#8A6E38}
+.d2.done{color:var(--amber)}
+.dlists{scrollbar-width:thin}
+</style>
+</head>
+<body>
+<div class="tv" id="tv">
+  <div class="top">
+    <div class="lights"><div class="light r"></div><div class="light y"></div><div class="light g"></div></div>
+  </div>
+  <div class="glass">
+    <div class="ui">
+      <div class="search" id="search">
+        <span class="ic"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="miter" shape-rendering="crispEdges"><path d="M6.5 9.5l3-3"/><path d="M5 7L3.5 8.5a2 2 0 002.8 2.8L8 9.7"/><path d="M11 9l1.5-1.5a2 2 0 00-2.8-2.8L8 6.3"/></svg></span>
+        <input id="q" autocomplete="off" spellcheck="false" aria-label="Вставьте ссылку или напишите название того что нужно скачать">
+        <label class="ph" for="q" id="ph">Вставьте ссылку или напишите название того что нужно скачать</label>
+      </div>
+
+      <div class="seek hidden" id="seek">
+        <div class="cap"><span class="word">ПОИСК</span><span class="pct" id="pct">0%</span></div>
+        <div class="leds" id="leds"></div>
+      </div>
+
+      <div class="found" id="found">
+        <div class="cover" id="cover"></div>
+        <div class="fmeta" id="fmeta">
+          <span class="badge" id="badge">SOUNDCLOUD</span>
+          <div class="ft" id="ftitle">Forss — Flickermood</div>
+          <div class="fdur" id="fdur">ХРОНОМЕТРАЖ · 3:42</div>
+        </div>
+        <div class="fcenter hidden" id="fcenter">
+          <div class="b1" id="fcb1">7 ССЫЛОК · 4 СЕРВИСА</div>
+          <div class="b2">ОБЛОЖКИ НЕТ — КАЧАЕМ КАК ЕСТЬ</div>
+        </div>
+      </div>
+
+      <div class="modes" id="modes">
+        <button class="mode on" data-m="video">ВИДЕО</button>
+        <button class="mode" data-m="music">МУЗЫКА</button>
+        <button class="mode" data-m="chron" id="chron">ХРОН</button>
+        <span class="range" id="range">от <input value="10:00" readonly> до <input value="10:10" readonly></span>
+        <button class="dl" id="go">СКАЧАТЬ · 1</button>
+      </div>
+
+      <div class="dlists" id="dlists"></div>
+    </div>
+  </div>
+  <div class="band">
+    <button class="plate" id="folder" title="Выбрать папку загрузок">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M2.5 5.5c0-.8.7-1.5 1.5-1.5h3.2c.4 0 .8.2 1.1.5l.9 1h7.3c.8 0 1.5.7 1.5 1.5v7.5c0 .8-.7 1.5-1.5 1.5H4c-.8 0-1.5-.7-1.5-1.5v-9z"/></svg>
+    </button>
+    <a class="logo" href="https://kvartalrecords.ru" target="_blank" rel="noopener" title="kvartal">
+      <svg version="1.0" xmlns="http://www.w3.org/2000/svg" viewBox="0 14 1000 296" preserveAspectRatio="xMidYMid meet"><g transform="translate(0.000000,340.000000) scale(0.100000,-0.100000)" fill="currentColor" stroke="none"><path d="M1710 2937 c-60 -21 -62 -29 -62 -420 0 -194 0 -468 1 -609 1 -142 0 -262 -3 -267 -3 -5 -2 -80 3 -168 13 -204 1 -193 203 -193 198 0 208 5 209 98 1 37 2 123 3 191 l3 125 38 33 c49 42 73 39 99 -12 12 -22 37 -65 56 -95 20 -30 49 -80 65 -110 69 -133 109 -192 143 -212 50 -30 372 -26 407 4 38 33 32 55 -50 176 -41 61 -75 114 -75 118 0 3 -13 24 -28 47 -56 83 -100 153 -127 202 -15 28 -43 73 -62 102 -45 68 -55 105 -36 132 8 12 19 21 25 21 5 0 54 45 108 100 107 109 115 113 131 73 6 -16 18 -40 26 -55 8 -16 20 -49 28 -75 16 -58 41 -127 59 -168 31 -67 66 -161 66 -177 0 -9 4 -19 9 -22 5 -3 14 -27 20 -52 7 -26 34 -95 61 -155 28 -60 50 -112 50 -116 0 -4 11 -37 25 -73 36 -95 44 -98 244 -98 l163 0 39 39 c21 21 39 46 39 55 0 8 17 52 39 97 21 45 42 93 46 107 6 23 36 97 70 175 7 17 25 64 39 105 15 41 36 95 46 120 23 58 47 120 54 142 4 14 10 15 38 7 18 -5 53 -9 77 -9 25 0 70 -5 100 -11 79 -16 120 2 152 66 53 106 283 124 333 26 15 -28 22 -101 11 -101 -3 0 -38 -9 -78 -19 -39 -10 -112 -24 -162 -31 -354 -46 -509 -146 -545 -350 -31 -181 49 -332 216 -405 138 -60 422 -40 518 36 49 39 69 39 94 3 32 -48 61 -52 396 -52 l299 0 29 28 c27 28 28 32 29 137 3 357 9 521 19 548 40 105 153 172 300 177 l95 3 2 -230 c3 -294 14 -363 68 -465 26 -49 90 -119 120 -131 17 -7 41 -20 55 -28 35 -23 90 -41 125 -41 17 0 36 -5 42 -11 19 -19 227 -6 298 18 33 11 71 23 85 26 14 4 59 38 100 77 41 40 76 67 78 61 8 -23 63 -91 94 -114 71 -54 149 -72 313 -72 162 0 238 17 312 72 40 29 33 30 81 -17 l40 -40 183 -1 c101 -1 252 -1 334 0 202 2 194 -7 197 214 1 89 1 171 1 182 -1 11 -2 289 -3 617 l-1 598 -24 27 -23 28 -154 -1 c-173 -1 -201 -10 -212 -66 -3 -17 -6 -163 -6 -325 0 -194 -3 -292 -10 -288 -6 3 -10 14 -10 25 0 10 -21 45 -46 79 -93 123 -268 191 -495 191 -263 0 -455 -97 -535 -269 -60 -130 -45 -159 87 -166 46 -2 107 -9 135 -15 68 -14 95 -3 140 60 43 60 53 66 137 83 72 16 157 1 188 -31 19 -19 33 -101 21 -118 -7 -11 -120 -36 -267 -59 -178 -27 -323 -75 -366 -121 -34 -36 -39 -30 -39 39 0 95 -5 98 -183 102 -190 4 -178 18 -182 -202 -1 -92 -7 -179 -13 -193 -33 -83 -162 -98 -217 -26 -18 25 -20 46 -25 264 -3 130 -3 255 0 277 l5 40 246 5 c211 5 249 8 272 23 15 10 28 21 28 25 13 68 12 191 -2 219 -16 29 -61 34 -299 32 -107 -1 -207 -1 -222 0 l-28 1 0 175 0 175 -37 18 c-36 17 -155 21 -303 9 -72 -5 -81 -28 -81 -202 0 -72 -4 -136 -7 -141 -4 -5 -43 -9 -88 -9 -107 -1 -203 -38 -264 -101 -46 -48 -59 -49 -58 -4 2 67 -48 84 -229 78 -124 -5 -136 -7 -159 -29 -21 -20 -24 -30 -19 -58 8 -43 -4 -163 -16 -155 -5 3 -16 20 -24 37 -18 41 -67 92 -134 140 -170 122 -566 131 -753 17 -41 -25 -47 -25 -41 -2 10 39 -33 51 -188 51 -207 0 -245 -14 -255 -97 -5 -46 -22 -96 -89 -267 -26 -66 -50 -137 -54 -157 -5 -21 -13 -43 -18 -50 -5 -7 -18 -39 -28 -70 -11 -32 -23 -58 -27 -58 -14 0 -37 44 -47 90 -16 72 -60 201 -87 254 -13 28 -24 58 -24 68 0 11 -8 35 -19 56 -10 20 -28 70 -40 109 -13 40 -31 83 -41 95 l-18 23 -334 0 c-297 -1 -337 -3 -365 -18 -18 -10 -33 -22 -33 -27 0 -6 -45 -63 -99 -128 -154 -182 -168 -198 -177 -189 -4 4 -7 168 -7 365 0 197 -4 365 -9 375 -17 34 -74 47 -197 46 -64 0 -132 -5 -151 -12z"/></g></svg>
+    </a>
+    <a class="plate"  href="https://boosty.to/kvartalrecords/donate" target="_blank" rel="noopener" title="Поддержать на Boosty">
+      <span class="dollar">$</span>
+    </a>
+  </div>
+</div>
+
+<div class="demo">
+  <span>СЦЕНАРИЙ ·</span>
+  <button class="on" data-sc="track">ТРЕК</button>
+  <button data-sc="playlist">ПЛЕЙЛИСТ</button>
+  <button data-sc="batch">ПАЧКА-МИКС</button>
+  <button data-sc="nocover">БЕЗ ОБЛОЖКИ</button>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const q=$('q'),ph=$('ph'),search=$('search');
+const scenarios={
+  track:{badge:'SOUNDCLOUD',title:'Forss — Flickermood',dur:'ХРОНОМЕТРАЖ · 3:42',cover:true,pl:false,batch:false,go:'СКАЧАТЬ · 1'},
+  playlist:{badge:'YOUTUBE',title:'Ночной синт — плейлист',dur:'14 ВИДЕО · 58 МИН',cover:true,pl:true,batch:false,go:'СКАЧАТЬ · 14'},
+  batch:{badge:'ПАЧКА',title:'7 ссылок · 4 сервиса',dur:'ВИДЕО + ФОТО + МУЗЫКА',cover:true,pl:false,batch:true,go:'СКАЧАТЬ · 7'},
+  nocover:{badge:'ПАЧКА',title:'7 ссылок · 4 сервиса',dur:'ВИДЕО + ФОТО + МУЗЫКА',cover:false,pl:false,batch:true,go:'СКАЧАТЬ · 7'}
+};
+let sc=new URLSearchParams(location.hash.slice(1)).get('sc')||'track';
+if(!scenarios[sc])sc='track';
+let chron=false,mode='video';
+
+function applyScenario(){
+  const d=scenarios[sc];
+  $('badge').textContent=d.badge; $('ftitle').textContent=d.title; $('fdur').textContent=d.dur;
+  $('cover').classList.toggle('hidden',!d.cover); $('cover').classList.toggle('pl',d.pl);
+  $('fmeta').classList.toggle('hidden',!d.cover); $('fcenter').classList.toggle('hidden',d.cover);
+  $('chron').classList.toggle('lock',d.pl||d.batch);
+  if(d.pl||d.batch){chron=false;$('range').classList.remove('show');$('chron').classList.remove('on');}
+  const vm=$('modes').querySelector('[data-m="video"]');
+  vm.textContent=d.batch?'МЕДИА':'ВИДЕО';
+  if(d.batch&&mode==='video')mode='media';
+  if(!d.batch&&mode==='media')mode='video';
+  vm.dataset.m=mode;
+  $('go').textContent=d.go;
+}
+applyScenario();
+
+/* ---- очередь: предзаполнена для ревью ---- */
+function addRow(title,cellsTotal){
+  const row=document.createElement('div'); row.className='ditem';
+  const cells=Array.from({length:cellsTotal},()=>'<i></i>').join('');
+  row.innerHTML=`<div class="dmain"><div class="d1">${title}</div><div class="d2" data-st>СКАЧИВАЕТСЯ</div></div>
+    <div class="dbars" data-bar>${cells}</div>
+    <div class="acts hidden" data-acts>
+      <button class="act" title="Открыть папку"><svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><path d="M2.5 5.5c0-.8.7-1.5 1.5-1.5h3.2c.4 0 .8.2 1.1.5l.9 1h7.3c.8 0 1.5.7 1.5 1.5v7.5c0 .8-.7 1.5-1.5 1.5H4c-.8 0-1.5-.7-1.5-1.5v-9z"/></svg></button>
+      <button class="act" title="Удалить"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 3.5h10M5.5 3.5V2h3v1.5M3.5 3.5l.8 8.5h5.4l.8-8.5"/></svg></button>
+    </div>`;
+  $('dlists').appendChild(row);
+  return row;
+}
+function setBar(row,f){
+  row.querySelectorAll('[data-bar] i').forEach((c,i)=>c.classList.toggle('f',i<f));
+}
+
+(function seed(){
+  const total=8;
+  const r1=addRow(scenarios[sc].title,total);
+  setBar(r1,4);                                    // 47% ≈ 4 из 8
+  const r2=addRow('Заказала новый свет… reel',total);
+  r2.querySelector('[data-st]').textContent='В ОЧЕРЕДИ';
+  r2.querySelector('[data-st]').classList.add('q');
+  const r3=addRow('a-ha — Take On Me',total);
+  r3.querySelector('[data-st]').textContent='ГОТОВО';
+  r3.querySelector('[data-st]').classList.add('done');
+  setBar(r3,total);
+  r3.querySelector('[data-acts]').classList.remove('hidden');
+})();
+
+/* ---- режимы ---- */
+document.querySelectorAll('.mode').forEach(m=>m.onclick=()=>{
+  if(m.classList.contains('lock'))return;
+  if(m.dataset.m==='chron'){chron=!chron;m.classList.toggle('on',chron);
+    $('range').classList.toggle('show',chron);return;}
+  document.querySelectorAll('.mode').forEach(x=>{if(x.dataset.m!=='chron')x.classList.remove('on')});
+  m.classList.add('on'); mode=m.dataset.m;
+});
+
+/* ---- скачать: добавить в список с анимацией ---- */
+$('go').onclick=()=>{
+  const d=scenarios[sc];
+  const row=addRow(d.title+' (новая)',8);
+  let p=0;
+  const st=row.querySelector('[data-st]'),acts=row.querySelector('[data-acts]');
+  const t=setInterval(()=>{
+    p+=Math.random()*14+4;
+    if(p>=100){p=100;clearInterval(t);st.textContent='ГОТОВО';st.classList.add('done');
+      acts.classList.remove('hidden');setBar(row,8);return;}
+    setBar(row,Math.round(p/12.5));
+  },160);
+};
+</script>
+</body>
+</html>

@@ -121,9 +121,17 @@ body{
 /* ---- содержимое экрана ---- */
 .ui{position:absolute;inset:0;z-index:4;opacity:0}
 .booted .ui{opacity:1;transition:opacity .5s ease .05s}
-.booted .ui{animation:swim 11s ease-in-out infinite;will-change:transform}
+.booted .ui{animation:swim 9s ease-in-out infinite;will-change:transform}
 @keyframes swim{
   0%  {transform:translate(0,0)}
+  12% {transform:translate(-1px,.5px)}
+  26% {transform:translate(.9px,-.5px)}
+  40% {transform:translate(-.5px,.9px)}
+  52% {transform:translate(1.8px,.4px)}
+  64% {transform:translate(.6px,-.7px)}
+  81% {transform:translate(-.9px,.3px)}
+  100%{transform:translate(0,0)}
+}
   14% {transform:translate(.4px,-.3px)}
   31% {transform:translate(-.5px,.2px)}
   46% {transform:translate(.3px,.35px)}
@@ -250,6 +258,8 @@ body{
 .plate:hover svg,.plate:hover span{color:var(--amber);
   filter:drop-shadow(0 0 7px rgba(255,176,0,.55))}
 .plate .dollar{font:700 20px 'Chakra Petch',sans-serif;line-height:1;text-decoration:none}
+.plate.pressed{transform:translateY(1px);
+  box-shadow:0 1px 2px rgba(0,0,0,.55), inset 0 2px 5px rgba(0,0,0,.65), inset 0 1px 1px rgba(255,255,255,.05)}
 a.plate{text-decoration:none}
 
 /* выдавленный логотип — размером с кнопки, при наведении загорается янтарным */
@@ -365,8 +375,8 @@ a.logo:hover .logo-deboss{color:var(--amber);
         <path d="M2.5 5.5c0-.8.7-1.5 1.5-1.5h3.2c.4 0 .8.2 1.1.5l.9 1h7.3c.8 0 1.5.7 1.5 1.5v7.5c0 .8-.7 1.5-1.5 1.5H4c-.8 0-1.5-.7-1.5-1.5v-9z"/>
       </svg>
     </button>
-    <!-- TODO: заказчик пришлёт финальную ссылку — сейчас заглушка kvartalrecord.ru -->
-    <a class="logo" href="https://kvartalrecord.ru" target="_blank" rel="noopener" title="kvartal">
+    <!-- ссылка от заказчика: kvartalrecords.ru -->
+    <a class="logo" href="https://kvartalrecords.ru" target="_blank" rel="noopener" title="kvartal">
       <span class="logo-deboss">
         <svg version="1.0" xmlns="http://www.w3.org/2000/svg" viewBox="0 14 1000 296" preserveAspectRatio="xMidYMid meet">
           <g transform="translate(0.000000,340.000000) scale(0.100000,-0.100000)" fill="currentColor" stroke="none">
@@ -468,6 +478,14 @@ function found(){
 }
 if(hash.get('demo')==='found'){finishBoot();q.value='https://youtu.be/jNQXAC9IVRw';startSearch();}
 else if(hash.get('demo')==='search'){finishBoot();q.value='a-ha take on me';startSearch();}
+
+/* ---- $: нажатие как у папки, затем переход на Boosty ---- */
+const boosty=document.querySelector('a.plate[href*="boosty"]');
+boosty.addEventListener('click',e=>{
+  e.preventDefault();
+  boosty.classList.add('pressed');
+  setTimeout(()=>{boosty.classList.remove('pressed');window.open(boosty.href,'_blank');},200);
+});
 
 /* ---- фокус строки и плейсхолдер ---- */
 search.addEventListener('click',()=>q.focus());
