@@ -64,6 +64,21 @@ static Str fmtSeconds (int total)
     return buf;
 }
 
+// Диапазон ХРОНа для имени файла: «[00:00–00:10]», минуты с ведущими
+// нулями. Не время — пусто.
+static Str chronSuffix (const Str& sections)
+{
+    const auto parts = kd::splitTokens (sections, "-");
+    if (parts.size() < 2) return {};
+    const int from = Engine::parseTimecode (parts[0]);
+    const int to = Engine::parseTimecode (parts[1]);
+    if (from < 0 || to < 0 || to <= from) return {};
+    char buf[32] = {};
+    std::snprintf (buf, sizeof (buf), " [%02d:%02d\u2013%02d:%02d]",
+                   from / 60, from % 60, to / 60, to % 60);
+    return buf;
+}
+
 // «0:00», «1:07», «2:02:03», «90» -> секунды. Не время — -1: в ХРОНе
 // не должно быть ничего, кроме таймкодов и секунд.
 int Engine::parseTimecode (const Str& s)
@@ -240,14 +255,18 @@ void Engine::fireChanged()
 StrVec Engine::splitLinks (const Str& text)
 {
     StrVec links;
+    Str seen = "\n";
     for (const auto& token : kd::splitTokens (text, " \n\r\t,;"))
     {
         auto t = kd::trim (token);
         // Кавычки вокруг ссылки снимаем: копипаст из мессенджеров.
         while (! t.empty() && (t.front() == '"' || t.front() == '\'')) t.erase (t.begin());
         while (! t.empty() && (t.back() == '"' || t.back() == '\'')) t.pop_back();
-        if (! t.empty() && Detector::looksLikeLink (t))
-            links.push_back (t);
+        if (t.empty() || ! Detector::looksLikeLink (t)) continue;
+        // Повторы одной вставки в пачку не дублируются.
+        if (kd::contains (seen, "\n" + t + "\n")) continue;
+        seen += t + "\n";
+        links.push_back (t);
     }
     return links;
 }
@@ -291,8 +310,12 @@ void Engine::enqueueBatch (const StrVec& links, const Options& options)
             item->cookieChain = chain;
             item->nameOverride = options.nameOverride;
             // ХРОН имеет смысл только для одиночного файла: у подборки
-            // отрезок отрезал бы кусок каждой серии.
-            item->sections = item->wholePlaylist ? Str() : options.sections;
+            // отрезок отрезал бы кусок каждой серии. У каталогов (Spotify,
+            // Apple, Яндекс) ссылка на трек может содержать /album/ — это
+            // не плейлист, отрезок действует как у всех.
+            item->sections = item->wholePlaylist
+                             && ! Detector::needsResolve (item->service)
+                ? Str() : options.sections;
             item->playlistLimit = options.playlistLimit;
             item->container = options.container;
             item->imageFormat = options.imageFormat;
@@ -435,8 +458,11 @@ void Engine::processItem (const QueueItemPtr& item)
     startNative (item);
 
     // Pinterest часто оказывается фотографией, которую yt-dlp не видит.
+    // Запрошено аудио — фолбэк на фотографию не имеет смысла: человек
+    // не должен видеть «не удалось забрать фотографию» вместо звука.
     if (item->state == QueueItem::State::failed
         && item->service == Detector::Service::pinterest
+        && ! item->isAudio
         && item->files.empty()
         && ! item->cancelled())
     {
@@ -847,7 +873,9 @@ void Engine::startNative (const QueueItemPtr& item)
         if (! kd::containsVec (attempts, b))
             attempts.push_back (b);
 
-    for (size_t attempt = 0; attempt < attempts.size(); ++attempt)
+    // Одноразовый повтор без вшивания обложки после её сбоя.
+    bool dropThumb = false;
+    for (int attempt = 0; attempt < (int) attempts.size(); ++attempt)
     {
         if (item->cancelled() || quit.load (std::memory_order_relaxed)) break;
         if (attempt > 0)
@@ -855,15 +883,17 @@ void Engine::startNative (const QueueItemPtr& item)
 
         StrVec args = baseArgs (item->dest, attempts[attempt]);
 
-        if (item->isAudio)
+        if (item->isAudio && item->service != Detector::Service::pinterest)
         {
-            for (const auto& a : kd::splitWhitespace ("-f bestaudio/best -x")) args.push_back (a);
+            // Аудио: отдельная дорожка; если у записи её нет (например,
+            // Pinterest) — звук извлекается из лучшего полного потока.
+            for (const auto& a : kd::splitWhitespace ("-f bestaudio/bv*+ba/b")) args.push_back (a);
             args.push_back ("--audio-format");
             args.push_back (audioFormatName (item->audioFormat));
             for (const auto& a : kd::splitWhitespace ("--audio-quality 0 --embed-metadata")) args.push_back (a);
             // В WAV обложку не вшить: попытка заканчивается ошибкой, а рядом
             // с файлом остаются картинки.
-            if (item->audioFormat != AudioFormat::wav)
+            if (item->audioFormat != AudioFormat::wav && ! dropThumb)
                 args.push_back ("--embed-thumbnail");
         }
         else if (item->service == Detector::Service::instagram
@@ -927,16 +957,18 @@ void Engine::startNative (const QueueItemPtr& item)
             // «… (Official Video)». Титул в тегах тоже наш, не ютубовский.
             args.push_back ("--no-playlist");
             args.push_back ("-o");
-            args.push_back (safeName (item->nameOverride) + ".%(ext)s");
+            args.push_back (safeName (item->nameOverride) + chronSuffix (item->sections)
+                          + ".%(ext)s");
             args.push_back ("--parse-metadata");
             args.push_back (safeName (item->nameOverride) + ":%(title)s");
         }
         else
         {
             // Ролик, открытый внутри плейлиста, качаем как ролик.
+            // У фрагмента по ХРОНУ диапазон — часть имени файла.
             args.push_back ("--no-playlist");
             args.push_back ("-o");
-            args.push_back ("%(title).120B.%(ext)s");
+            args.push_back ("%(title).120B" + chronSuffix (item->sections) + ".%(ext)s");
         }
 
         // ХРОН: режем отрезок точно по кадровым границам. Только одиночный
@@ -1068,12 +1100,55 @@ void Engine::startNative (const QueueItemPtr& item)
             if (item->skipped > 0)
                 stage += " · уже было: " + std::to_string (item->skipped);
             item->progress = 1;
+            // Pinterest+МУЗЫКА: у HLS-потока звука дорожка не помечена —
+            // извлекаем её из скачанного видео сами.
+            if (item->isAudio && item->service == Detector::Service::pinterest
+                && item->files.size() == 1)
+            {
+                setStage (item, "Извлекаю звук…");
+                const auto tools = findToolsDir();
+                const auto src = fs::u8path (item->files.front());
+                auto out = src;
+                out.replace_extension (Str (".mp3"));
+                kd::ChildProcess ff;
+                const bool ran = ! tools.empty()
+                    && ff.start ({ kd::pathStr (tools / "ffmpeg"),
+                        "-y", "-v", "quiet", "-i", kd::pathStr (src),
+                        "-vn", "-acodec", "libmp3lame", "-q:a", "0",
+                        kd::pathStr (out) });
+                const int ffCode = ran ? ff.waitExitCode() : -1;
+                std::error_code ec;
+                if (ran && ffCode == 0 && kd::isFile (out))
+                {
+                    fs::remove (src, ec);
+                    item->files.clear();
+                    item->files.push_back (kd::pathStr (out));
+                    stage = "Готово";
+                }
+                else
+                {
+                    fs::remove (out, ec);
+                }
+            }
+            // В диспетчере фрагмент подписан именем файла с диапазоном.
+            if (! item->sections.empty() && item->files.size() == 1)
+                item->title = kd::stem (fs::u8path (item->files.front()));
             finish (item, QueueItem::State::done, stage);
             return;
         }
 
         // Ошибка. Открытые материалы качаются с первой попытки; для остальных
         // незаметно для человека пробуем следующий источник входа.
+        // Сбой вшивания обложки (бывает на фрагментах) — повтор той же
+        // попытки без обложки, загрузка не должна падать из-за картинки.
+        if (item->isAudio && ! dropThumb
+            && kd::contains (kd::lower (errTail), "thumbnail embedding"))
+        {
+            dropThumb = true;
+            attempt -= 1;
+            engineLog ("сбой вшивания обложки — повторяю без неё");
+            continue;
+        }
         const bool canRetry = retryWithCookies (errTail) && attempt < attempts.size() - 1;
         if (! canRetry) break;
         engineLog ("попытка без входа не удалась, перехожу к следующему источнику");
@@ -1197,11 +1272,81 @@ void Engine::startResolve (const QueueItemPtr& item)
         return;
     }
     item->progress = 1;
-    // Одиночный трек — просто «Готово», без счётчиков.
+    // Одиночный трек — просто «Готово», без счётчиков. Фрагмент подписан
+    // именем файла с диапазоном.
+    if (! item->sections.empty() && item->files.size() == 1)
+        item->title = kd::stem (fs::u8path (item->files.front()));
     finish (item, QueueItem::State::done,
             tracks.size() > 1
                 ? "Готово · треков: " + std::to_string (item->files.size())
                 : Str ("Готово"));
+}
+
+// Кандидат для точной сверки трека с каталога.
+struct VerifyCandidate
+{
+    Str title;
+    Str uploader;
+    Str url;
+    int duration = 0;
+};
+
+// Кандидаты со страницы выдачи YouTube — HTML-разбор стабильнее плоского
+// поиска yt-dlp, который сервис периодически глушит.
+static std::vector<VerifyCandidate> ytSearchCandidates (const Str& query)
+{
+    std::vector<VerifyCandidate> out;
+    const auto html = kd::http::fetch (
+        "https://www.youtube.com/results?search_query=" + kd::urlEscape (query));
+    const Str marker = "var ytInitialData = ";
+    const int a = kd::indexOf (html, marker);
+    if (a < 0) return out;
+    const auto body = html.substr ((size_t) a + marker.size());
+    const int b = kd::indexOf (body, ";</script>");
+    if (b < 0) return out;
+    const auto data = json::parse (body.substr (0, (size_t) b), nullptr, false);
+    for (const auto& v : findAllVideoRenderers (data))
+    {
+        VerifyCandidate c;
+        c.url = "https://www.youtube.com/watch?v=" + jtext (v, "videoId");
+        if (c.url.size() < 30) continue;
+        c.title = runsText (v["title"]);
+        c.uploader = runsText (v["ownerText"]);
+        for (const auto& part : kd::splitTokens (runsText (v["lengthText"]), ":"))
+            c.duration = c.duration * 60 + kd::getInt (part);
+        out.push_back (c);
+        if (out.size() >= 5) break;
+    }
+    return out;
+}
+
+// Кандидаты плоским поиском yt-dlp (запасной путь).
+static std::vector<VerifyCandidate> ytSearchCandidatesFlat (const Str& query)
+{
+    std::vector<VerifyCandidate> out;
+    Str outText;
+    int code = -1;
+    StrVec args { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
+                  "ytsearch5:" + query };
+    if (! captureOut (args, outText, &code) || code != 0 || outText.empty())
+        return out;
+    const auto data = json::parse (outText, nullptr, false);
+    const auto entries = data.is_object() ? data.find ("entries") : data.end();
+    if (entries == data.end() || ! entries->is_array()) return out;
+    for (const auto& e : *entries)
+    {
+        if (! e.is_object()) continue;
+        VerifyCandidate c;
+        c.url = jtext (e, "webpage_url");
+        if (c.url.empty()) c.url = jtext (e, "url");
+        if (c.url.empty()) continue;
+        c.title = jtext (e, "title");
+        c.uploader = jtext (e, "uploader");
+        c.duration = (int) jnum (e, "duration");
+        out.push_back (c);
+        if (out.size() >= 5) break;
+    }
+    return out;
 }
 
 void Engine::downloadTrack (const QueueItemPtr& item, const int index,
@@ -1229,7 +1374,8 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
             args.push_back (a);
         const auto name = safeName (query);
         args.push_back ("-o");
-        args.push_back (name + ".%(ext)s");
+        // У фрагмента по ХРОНУ диапазон — часть имени файла.
+        args.push_back (name + chronSuffix (item->sections) + ".%(ext)s");
         // Теги пишем свои: иначе в файл уедет название ролика с YouTube.
         // Двоеточие делит аргумент пополам, поэтому значения чистим.
         if (! artist.empty())
@@ -1251,57 +1397,25 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
 
     const auto before = item->files.size();
 
-    // 1) Точное сопоставление: плоский поиск отдаёт кандидатов с названиями
-    //    и длительностями — сверяем с тем, что записано в ссылке каталога.
-    //    Так «sped up»-версии и каверы не обходят настоящий трек.
-    //    Сначала ищем анонимно; если выдача пуста — тем же запросом через
-    //    вход из браузера пользователя: часть названий YouTube фильтрует
-    //    без входа, и тогда точного кандидата просто не видно.
+    // 1) Точное сопоставление: кандидаты выдачи сверяем с тем, что
+    //    записано в ссылке каталога. Так «sped up»-версии и каверы не
+    //    обходят настоящий трек. Только анонимный поиск: cookie браузера
+    //    здесь не подставляем — macOS запрашивает пароль ключницы, и
+    //    человек видит чужой диалог.
     StrVec verified;
     {
-        StrVec searchAttempts { Str() };
-        for (const auto& b : item->cookieChain)
-            if (! kd::containsVec (searchAttempts, b))
-                searchAttempts.push_back (b);
-
-        json parsed;
-        const json* entries = nullptr;
-        for (const auto& browser : searchAttempts)
+        auto candidates = ytSearchCandidates (query);
+        if (candidates.empty())
+            candidates = ytSearchCandidatesFlat (query);
+        for (const auto& c : candidates)
         {
-            StrVec args { "--ignore-config", "--no-warnings", "--flat-playlist", "-J" };
-            if (! browser.empty())
+            if (candidateMatches (c.title, c.duration, c.uploader,
+                                  artist, track, expectedDuration, strictMatch))
             {
-                args.push_back ("--cookies-from-browser");
-                args.push_back (browser);
-            }
-            args.push_back ("ytsearch5:" + query);
-            Str out;
-            int code = -1;
-            if (! captureOut (args, out, &code) || code != 0 || out.empty()) continue;
-            parsed = json::parse (out, nullptr, false);
-            if (parsed.is_object() && parsed.contains ("entries")
-                && parsed["entries"].is_array() && ! parsed["entries"].empty())
-            {
-                entries = &parsed["entries"];
-                break;
+                verified.push_back (c.url);
+                if (verified.size() >= 3) break;
             }
         }
-
-        if (entries != nullptr)
-            for (const auto& e : *entries)
-            {
-                if (! e.is_object()) continue;
-                auto url = jtext (e, "webpage_url");
-                if (url.empty()) url = jtext (e, "url");
-                if (url.empty()) continue;
-                if (candidateMatches (jtext (e, "title"), (int) jnum (e, "duration"),
-                                      jtext (e, "uploader"),
-                                      artist, track, expectedDuration, strictMatch))
-                {
-                    verified.push_back (url);
-                    if (verified.size() >= 3) break;
-                }
-            }
     }
 
     for (const auto& url : verified)

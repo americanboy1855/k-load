@@ -230,6 +230,11 @@ public:
     static Str cleanTrackName (const Str& raw);
     static Str safeName (const Str& s);
 
+public:
+    /// «0:00», «1:07», «90» -> секунды; не время — -1 (нужно и для имён
+    /// фрагментов).
+    static int parseTimecode (const Str& s);
+
 private:
     void workerLoop();
     void processItem (const QueueItemPtr& item);
@@ -301,8 +306,6 @@ private:
     // ---- аргументы yt-dlp ----
     StrVec baseArgs (const fs::path& dest, const Str& cookie) const;
 
-    /// «0:00», «1:07», «90» -> секунды; не время — -1.
-    static int parseTimecode (const Str& s);
     /// Длительность локального файла через ffprobe; не вышло — 0.
     double probeFileDuration (const fs::path& file) const;
 

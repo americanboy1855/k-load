@@ -124,8 +124,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   String? resultError; // причина, почему результат недоступен
   // одноразовый догруз хронометража для текущей ссылки
   bool durationRetried = false;
-  // высота панели результатов (не перекрывает диспетчер)
-  double resultsMaxHeight = 330;
+  // текстовый запрос в поиске: неопределённая шкала «ИЩЕМ...» вместо %
+  bool searchingNow = false;
   // качество видео: реальные высоты (дефолт 1080P); МАКСИМУМ убран
   String quality = '1080';
   bool qualityOpen = false;
@@ -176,6 +176,13 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   String get rawText => query.text.trim();
   bool get vpnVisible => booted && vpnState == 2;
   bool get cardVisible => phase == Phase.found;
+  bool get resultsOpen => showResultList && searchResults.isNotEmpty;
+
+  /// Похож ли текст на ссылку (зеркало Detector::looksLikeLink).
+  bool _looksLikeLink(String s) {
+    final t = s.trim();
+    return t.contains('.') && t.contains('/');
+  }
 
   @override
   void initState() {
@@ -390,6 +397,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       batchProcessed = 0;
       batchDuration = 0;
       durationRetried = false;
+      // Текстовый запрос ищем с неопределённой шкалой: честное «ИЩЕМ...»
+      // вместо процентов, которые добегают раньше выдачи.
+      searchingNow = !_looksLikeLink(rawText);
       if (links.length > 1) {
         isBatch = true;
         batchCount = links.length;
@@ -481,6 +491,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
               : p.error;
         }
         selectedResultUrl = null;
+        searchingNow = false;
       });
       _scheduleDurationRetry();
       return;
@@ -497,6 +508,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         phase = Phase.idle;
         probe = null;
         seekPct = 100;
+        searchingNow = false;
         searchResults = results;
         showResultList = results.isNotEmpty;
         resultError = results.isEmpty
@@ -514,6 +526,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       probe = p;
       phase = Phase.found;
       seekPct = 100;
+      searchingNow = false;
       mediaMode = false;
       // Список результатов обновляется только когда разбор его принёс:
       // переразбор ссылки не должен стирать открытую выдачу.
@@ -569,14 +582,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     core?.probeAsync(url);
   }
 
-  /// Очистить диспетчер: убирает все завершённые записи (готовые,
-  /// отменённые, ошибочные). Файлы на диске не трогаются.
-  void _clearQueue() {
-    core?.clearFinished();
-    setState(() => items = core?.snapshot() ?? items);
-    _scheduleDragZones();
-  }
-
   // ---- скачать ----
 
   String? get sectionsArg {
@@ -618,6 +623,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           durationHint: 0);
     } else {
       if (p == null || !p.ok) return;
+      // Pinterest-фотография звука не содержит: предупреждаем до запуска,
+      // а не ошибкой в диспетчере после.
+      if (audio && p.isPhoto) {
+        _showToast('ПО ССЫЛКЕ ФОТОГРАФИЯ — АУДИО НЕДОСТУПНО');
+        return;
+      }
       if (p.isPhoto) {
         final link = targetLink(rawText);
         if (busy.contains(link)) return;
@@ -742,8 +753,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     // Зоны drag-out зависят от раскладки: пересылаем после каждого кадра,
     // чтобы невидимые зоны никогда не оставались на устаревших местах.
     _scheduleDragZones();
-    // Окно результатов не должно налезать на диспетчер загрузок.
-    _measureResultsBounds();
     return Scaffold(
       backgroundColor: const Color(0xFF161413),
       body: LayoutBuilder(builder: (context, box) {
@@ -857,40 +866,43 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       },
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 22, 20, 14),
-        child: Stack(children: [
-          Column(
-            key: _uiColumnKey,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-        _searchRow(),
-        if (phase == Phase.seeking) ...[
-          const SizedBox(height: 14),
-          _seekBlock(),
-        ],
-        if (cardVisible) ...[
-          const SizedBox(height: 18),
-          _foundCard(),
-          if (!(probe?.drm ?? false)) ...[
-            const SizedBox(height: 18),
-            _modesRow(),
-          ],
-        ],
-            if (items.isNotEmpty) ...[
+        child: Column(
+          key: _uiColumnKey,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _searchRow(),
+            if (phase == Phase.seeking) ...[
               const SizedBox(height: 14),
-              Expanded(child: _queue()),
+              _seekBlock(),
+            ],
+            if (resultsOpen) ...[
+              // Открытая выдача занимает основную площадь экрана;
+              // диспетчер ужимается до двух последних плашек под ней.
+              const SizedBox(height: 14),
+              Expanded(child: _resultsPanel()),
+              if (items.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                _compactQueue(),
+              ],
+            ] else ...[
+              if (cardVisible) ...[
+                const SizedBox(height: 18),
+                _foundCard(),
+                if (!(probe?.drm ?? false)) ...[
+                  const SizedBox(height: 18),
+                  _modesRow(),
+                ],
+              ],
+              if (items.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                Expanded(child: _queue()),
+              ],
             ],
           ],
         ),
-        // Результаты поиска — отдельное окно в верхней части экрана:
-        // не раздвигает вёрстку, не выходит за границы, не накрывает
-        // диспетчер загрузок.
-        if (showResultList && searchResults.isNotEmpty)
-          _resultsPanel(),
-        ],
       ),
-    ),
-  );
-}
+    );
+  }
 
   // ---- поисковая строка ----
 
@@ -942,6 +954,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                             autocorrect: false,
                             enableSuggestions: false,
                             keyboardType: TextInputType.url,
+                            // Мультистрочность нужна пачкам: вставка
+                            // нескольких ссылок сохраняет переводы строк.
+                            maxLines: 3,
+                            minLines: 1,
                           ),
                           if (rawText.isEmpty)
                             Text(
@@ -966,6 +982,19 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   // ---- ПОИСК: LED-шкала ----
 
   Widget _seekBlock() {
+    // Текстовый запрос: честное неопределённое состояние — «ИЩЕМ...» и
+    // сегменты, плавно бегающие туда-обратно. Проценты не показываем:
+    // они добегают до 100 раньше настоящей выдачи.
+    if (searchingNow) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text('ПОИСК', style: T.ps(10, c: Pal.soft, ls: .2)),
+          Text('ИЩЕМ...', style: T.ps(14, c: Pal.amber)),
+        ]),
+        const SizedBox(height: 9),
+        const SweepLedRow(count: 16, cellHeight: 16),
+      ]);
+    }
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, crossAxisAlignment: CrossAxisAlignment.end, children: [
         Text('ПОИСК', style: T.ps(10, c: Pal.soft, ls: .2)),
@@ -1034,74 +1063,41 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     );
   }
 
-  // ---- окно результатов: отдельный список в верхней части экрана ----
+  // ---- окно результатов: занимает основную площадь экрана ----
 
   Widget _resultsPanel() {
     final rows = searchResults.take(20).toList();
-    return Positioned(
-      left: 0,
-      right: 0,
-      top: 84,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: resultsMaxHeight),
-        child: GlitchIn(
-          key: const ValueKey('panel-results'),
-          child: GestureDetector(
-            // Панель живёт своей жизнью: тап по ней не закрывает её же.
-            onTap: () {},
-            child: Container(
-              decoration: const BoxDecoration(color: Color(0xF5070400)),
-              child: DashedBox(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(children: [
-                        Text('РЕЗУЛЬТАТЫ · ${searchResults.length}',
-                            style: T.ps(8, c: Pal.soft)),
-                        const Spacer(),
-                        _panelClose(() =>
-                            setState(() => showResultList = false)),
-                      ]),
-                      const SizedBox(height: 6),
-                      Flexible(
-                        child: ListView.builder(
-                          padding: EdgeInsets.zero,
-                          shrinkWrap: true,
-                          itemCount: rows.length,
-                          itemBuilder: (context, i) => _resultRow(rows[i]),
-                        ),
-                      ),
-                    ]),
-              ),
-            ),
+    return GlitchIn(
+      key: const ValueKey('panel-results'),
+      child: GestureDetector(
+        // Панель живёт своей жизнью: тап по ней не закрывает её же.
+        onTap: () {},
+        child: Container(
+          decoration: const BoxDecoration(color: Color(0xF5070400)),
+          child: DashedBox(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Text('РЕЗУЛЬТАТЫ · ${searchResults.length}',
+                        style: T.ps(8, c: Pal.soft)),
+                    const Spacer(),
+                    _panelClose(() => setState(() => showResultList = false)),
+                  ]),
+                  const SizedBox(height: 6),
+                  Expanded(
+                    child: ListView.builder(
+                      padding: EdgeInsets.zero,
+                      itemCount: rows.length,
+                      itemBuilder: (context, i) => _resultRow(rows[i]),
+                    ),
+                  ),
+                ]),
           ),
         ),
       ),
     );
-  }
-
-  /// Верх диспетчера загрузок — нижняя граница окна результатов.
-  void _measureResultsBounds() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final ctx = _queueKey.currentContext;
-      final colCtx = _uiColumnKey.currentContext;
-      double limit = 330;
-      if (ctx != null && colCtx != null) {
-        final queueBox = ctx.findRenderObject() as RenderBox?;
-        final colBox = colCtx.findRenderObject() as RenderBox?;
-        if (queueBox != null && colBox != null && queueBox.attached) {
-          final top = queueBox.localToGlobal(Offset.zero, ancestor: colBox).dy;
-          limit = (top - 84 - 8).clamp(160.0, 330.0);
-        }
-      }
-      if ((limit - resultsMaxHeight).abs() > 0.5) {
-        setState(() => resultsMaxHeight = limit);
-      }
-    });
   }
 
   /// Крестик закрытия панели: ховер подсвечивает, геометрию не трогает.
@@ -1491,10 +1487,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       if (src != null && src.startsWith('http')) ...[
         const SizedBox(width: 9),
         GestureDetector(
+          // Открываем исходную каноническую ссылку выбранного контента.
           onTap: () => _openPath(src),
           child: MouseRegion(
             cursor: SystemMouseCursors.click,
-            child: Text(_canonicalShort(src),
+            child: Text('[ССЫЛКА]',
                 style: T.mono(10, c: Pal.dim, ls: .04)),
           ),
         ),
@@ -1716,20 +1713,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       child: CustomPaint(
         foregroundPainter: const DashedBorderPainter(color: Color(0x80FFB000)),
         child: Column(children: [
-          // Шапка диспетчера: подпись и метла — очистить все завершённые
-          // записи (готовые, отменённые, ошибочные). Файлы не трогаются.
-          Padding(
-            padding: const EdgeInsets.fromLTRB(13, 6, 13, 2),
-            child: Row(children: [
-              Text('ДИСПЕТЧЕР', style: T.ps(7, c: Pal.dim, ls: .12)),
-              const Spacer(),
-              _ActButton(
-                icon: (hover) => BroomIcon(
-                    size: 14, color: hover ? Pal.soft : Pal.amber),
-                onTap: _clearQueue,
-              ),
-            ]),
-          ),
+          _queueHeader(),
           Expanded(
             child: NotificationListener<ScrollNotification>(
               // Прокрутка двигает строки — зоны drag-out должны ехать следом.
@@ -1746,6 +1730,43 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           ),
         ]),
       ),
+    );
+  }
+
+  /// Компактный диспетчер под открытой выдачей: максимум две последние
+  /// плашки; после закрытия результатов диспетчер возвращается к обычной
+  /// высоте (см. _ui).
+  Widget _compactQueue() {
+    return SizedBox(
+      height: 138,
+      child: Container(
+        decoration: const BoxDecoration(
+          border: Border(top: BorderSide(color: Pal.amberFaint), bottom: BorderSide(color: Pal.amberFaint)),
+        ),
+        child: CustomPaint(
+          foregroundPainter:
+              const DashedBorderPainter(color: Color(0x80FFB000)),
+          child: Column(children: [
+            _queueHeader(),
+            Expanded(
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                itemCount: math.min(2, items.length),
+                itemBuilder: (context, i) => _queueRow(items[i]),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _queueHeader() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(13, 6, 13, 2),
+      child: Row(children: [
+        Text('ДИСПЕТЧЕР ЗАГРУЗОК', style: T.ps(9, c: Pal.soft, ls: .1)),
+      ]),
     );
   }
 
@@ -2310,6 +2331,7 @@ class _SmartCover extends StatefulWidget {
 class _SmartCoverState extends State<_SmartCover> {
   String? _file; // локальный файл из кэша ядра
   int _gen = 0;
+  bool _plasmaGone = false; // плазма глушится после проявления фото
 
   @override
   void initState() {
@@ -2323,6 +2345,7 @@ class _SmartCoverState extends State<_SmartCover> {
     if (old.url != widget.url) {
       _gen += 1;
       _file = null;
+      _plasmaGone = false;
       _load();
     }
   }
@@ -2338,6 +2361,13 @@ class _SmartCoverState extends State<_SmartCover> {
       if (!mounted || gen != _gen || path.isEmpty) return;
       if (!File(path).existsSync()) return;
       setState(() => _file = path);
+      // Анимация анимацией, но 90-миллисекундный таймер плазмы после
+      // проявления картинки только жрёт батарейку.
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (mounted && gen == _gen && !_plasmaGone) {
+          setState(() => _plasmaGone = true);
+        }
+      });
     } on Object catch (e) {
       debugPrint('превью $url: $e');
     }
@@ -2352,7 +2382,7 @@ class _SmartCoverState extends State<_SmartCover> {
         height: 118,
         child: ClipRect(
           child: Stack(fit: StackFit.expand, children: [
-            const _Plasma(),
+            if (!_plasmaGone) const _Plasma(),
             if (_file != null)
               TweenAnimationBuilder<double>(
                 // Плавная замена плазмы изображением, когда оно приехало.

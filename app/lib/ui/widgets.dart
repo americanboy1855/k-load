@@ -136,42 +136,77 @@ class VpnIcon extends StatelessWidget {
       }, color));
 }
 
-// Метла: «очистить диспетчер» — рукоять по диагонали + веер щетины.
-class BroomIcon extends StatelessWidget {
-  const BroomIcon({super.key, this.size = 14, this.color = Pal.amber});
-  final double size;
-  final Color color;
+// Метла удалена: очистка диспетчера будет переработана отдельно.
+
+// Бегущая туда-обратно LED-полоса: неопределённое состояние поиска.
+class SweepLedRow extends StatefulWidget {
+  const SweepLedRow(
+      {super.key, required this.count, this.cellHeight = 16, this.gap = 4});
+  final int count;
+  final int cellHeight;
+  final double gap;
 
   @override
-  Widget build(BuildContext context) => CustomPaint(
-      size: Size.square(size),
-      painter: _StrokePainter((ctx, p, s) {
-        final sc = s.width / 14;
-        // рукоять
-        ctx.drawPath(
-            Path()
-              ..moveTo(12.4 * sc, 1.6 * sc)
-              ..lineTo(7.4 * sc, 6.8 * sc),
-            p);
-        // головка: сужающийся веер
-        ctx.drawPath(
-            Path()
-              ..moveTo(8.8 * sc, 5.2 * sc)
-              ..lineTo(2.2 * sc, 8.4 * sc)
-              ..lineTo(5.6 * sc, 11.8 * sc)
-              ..close(),
-            p);
-        // щетина
-        ctx.drawPath(
-            Path()
-              ..moveTo(3.4 * sc, 9.6 * sc)
-              ..lineTo(1.4 * sc, 12.6 * sc)
-              ..moveTo(4.8 * sc, 10.9 * sc)
-              ..lineTo(3.4 * sc, 13.4 * sc)
-              ..moveTo(6.2 * sc, 11.6 * sc)
-              ..lineTo(5.8 * sc, 13.9 * sc),
-            p);
-      }, color));
+  State<SweepLedRow> createState() => _SweepLedRowState();
+}
+
+class _SweepLedRowState extends State<SweepLedRow>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 1700))
+        ..repeat();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const win = 5.0; // ширина бегущего окна в сегментах
+    return LayoutBuilder(builder: (context, box) {
+      final cell = (box.maxWidth - widget.gap * (widget.count - 1)) / widget.count;
+      return AnimatedBuilder(
+        animation: _c,
+        builder: (context, _) {
+          // Косинус: плавный разгон у краёв, без щелчков при развороте.
+          final k = (1 - math.cos(2 * math.pi * _c.value)) / 2;
+          final lead = k * (widget.count - win);          return Row(
+            children: [
+              for (var i = 0; i < widget.count; i++)
+                Builder(builder: (context) {
+                  final cellLit = i >= lead && i < lead + win;
+                  // Краевые сегменты окна подсвечены частично — движение
+                  // выглядит непрерывным, а не прыгающим по клеткам.
+                  final frac = (math.min(lead + win, i + 1.0) -
+                              math.max(lead, i.toDouble()))
+                          .clamp(0.0, 1.0)
+                          .toDouble();
+                  final a = cellLit ? frac : 0.0;
+                  return Container(
+                    width: cell,
+                    height: widget.cellHeight.toDouble(),
+                    margin: EdgeInsets.only(
+                        right: i == widget.count - 1 ? 0 : widget.gap),
+                    decoration: BoxDecoration(
+                      color: Color.lerp(Pal.ledOff, Pal.amber, a),
+                      borderRadius:
+                          const BorderRadius.all(Radius.circular(1)),
+                      boxShadow: a > 0
+                          ? [BoxShadow(
+                              color: Pal.amber.withValues(alpha: .55 * a),
+                              blurRadius: 9)]
+                          : null,
+                    ),
+                  );
+                }),
+            ],
+          );
+        },
+      );
+    });
+  }
 }
 
 class _FillPainter extends CustomPainter {
@@ -637,10 +672,6 @@ class _PlateState extends State<Plate> {
               BoxShadow(color: Colors.black.withValues(alpha: .6), offset: const Offset(0, 3), blurRadius: 5),
               BoxShadow(color: Colors.black.withValues(alpha: .5), offset: const Offset(0, 1), blurRadius: 2),
               const BoxShadow(color: Color(0x1DFFFFFF), offset: Offset(0, 1), blurRadius: 0, spreadRadius: -1),
-              // Список постоянной длины: затухание свечения плавное, без прыжка.
-              BoxShadow(
-                  color: Pal.amber.withValues(alpha: hover ? .18 : 0),
-                  blurRadius: hover ? 12 : 0),
             ],
           ),
           child: Center(
@@ -655,6 +686,25 @@ class _PlateState extends State<Plate> {
           ),
         ),
       ),
+    );
+    // Свечение — как у логотипа: непрерывная анимация значения (не скачок
+    // набора теней), медленный набор и такое же плавное затухание.
+    plate = TweenAnimationBuilder<double>(
+      tween: Tween(end: hover ? 1.0 : 0.0),
+      duration: const Duration(milliseconds: 450),
+      curve: Curves.easeOut,
+      builder: (context, t, child) => DecoratedBox(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          boxShadow: t > 0.001
+              ? [BoxShadow(
+                  color: Pal.amber.withValues(alpha: .18 * t),
+                  blurRadius: 3 + 11 * t)]
+              : const [],
+        ),
+        child: child,
+      ),
+      child: plate,
     );
     return Listener(
       onPointerDown: (_) => setState(() => pressed = true),
