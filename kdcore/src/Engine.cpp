@@ -203,6 +203,7 @@ void Engine::enqueueBatch (const StrVec& links, const Options& options)
             // ХРОН имеет смысл только для одиночного файла: у подборки
             // отрезок отрезал бы кусок каждой серии.
             item->sections = item->wholePlaylist ? Str() : options.sections;
+            item->playlistLimit = options.playlistLimit;
             item->dest = options.dest;
             item->batchIndex = total > 1 ? ++index : 0;
             item->batchTotal = total;
@@ -660,8 +661,14 @@ void Engine::startNative (const QueueItemPtr& item)
 
         if (item->wholePlaylist)
         {
-            // Подборка целиком складывается в свою папку, с нумерацией.
+            // Подборка складывается в свою папку, с нумерацией; лимит —
+            // только первые N роликов, если человек задал количество.
             args.push_back ("--yes-playlist");
+            if (item->playlistLimit > 0)
+            {
+                args.push_back ("--playlist-items");
+                args.push_back ("1:" + std::to_string (item->playlistLimit));
+            }
             args.push_back ("-o");
             args.push_back ("%(playlist_title).80B/%(playlist_index)02d - %(title).100B.%(ext)s");
         }
@@ -1154,13 +1161,13 @@ Str Engine::safeName (const Str& s)
 
 // MARK: - разбор ссылки для карточки
 
-Probe Engine::probe (const Str& text) const
+Probe Engine::probe (const Str& text, const Str& searchSite) const
 {
     auto build = [&]() -> Probe
     {
-        // Не ссылка — ищем трек по названию.
+        // Не ссылка — ищем трек по названию (сайт подсказывает карточка).
         if (! Detector::looksLikeLink (text))
-            return probeSearch (text);
+            return probeSearch (text, searchSite);
 
         const auto link = text;
         const auto service = Detector::serviceFor (link);
@@ -1269,6 +1276,11 @@ Probe Engine::probe (const Str& text) const
                 count = count > (int) entries->size() ? count : (int) entries->size();
             p.count = count > 1 ? count : 1;
             if (p.uploader.empty()) p.uploader = "подборка";
+            // Общий хронометраж плейлиста — сумма длительностей роликов.
+            if (entries != data.end() && entries->is_array())
+                for (const auto& e : *entries)
+                    if (e.is_object())
+                        p.duration += (int) jnum (e, "duration");
         }
         else
         {
@@ -1359,15 +1371,21 @@ Probe Engine::probeDrm (const Str& link, const Detector::Service service) const
     return p;
 }
 
-Probe Engine::probeSearch (const Str& query) const
+Probe Engine::probeSearch (const Str& query, const Str& site) const
 {
     Probe p;
     p.link = query;
     p.isSearch = true;
     p.service = Detector::Service::youtube;
 
-    const auto html = fetch ("https://www.youtube.com/results?search_query="
-                             + kd::urlEscape (query));
+    const auto wantYoutube = site.empty() || site == "youtube";
+    const auto wantSoundcloud = site.empty() || site == "soundcloud";
+
+    // YouTube: сначала разбор выдачи, затем запасной ytsearch.
+    const auto html = wantYoutube
+        ? fetch ("https://www.youtube.com/results?search_query="
+                 + kd::urlEscape (query))
+        : Str();
     const Str marker = "var ytInitialData = ";
     const int a = kd::indexOf (html, marker);
     if (a >= 0)
@@ -1412,7 +1430,7 @@ Probe Engine::probeSearch (const Str& query) const
     Str out;
     StrVec args { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
                   "ytsearch1:" + query };
-    if (captureOut (args, out, &code) && code == 0 && ! out.empty())
+    if (wantYoutube && captureOut (args, out, &code) && code == 0 && ! out.empty())
     {
         const auto data = json::parse (out, nullptr, false);
         if (! data.is_discarded())
@@ -1432,7 +1450,7 @@ Probe Engine::probeSearch (const Str& query) const
     }
 
     // На YouTube пусто — SoundCloud: там находятся ремиксы и малоизвестное.
-    if (! p.ok)
+    if (! p.ok && wantSoundcloud)
     {
         Str sc;
         StrVec scArgs { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",

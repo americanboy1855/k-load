@@ -63,6 +63,12 @@ flutter:
     - assets/kvartal.svg
 
   fonts:
+    - family: Press Start 2P
+      fonts:
+        - asset: assets/fonts/PressStart2P-Regular.ttf
+    - family: Departure Mono
+      fonts:
+        - asset: assets/fonts/DepartureMono-Regular.otf
     - family: Handjet
       fonts:
         - asset: assets/fonts/Handjet.ttf

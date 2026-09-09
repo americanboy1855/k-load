@@ -191,6 +191,8 @@ static Engine::Options parseOptions (const char* options_json)
         o.nameOverride = data["nameOverride"].get<std::string>();
     if (data.contains ("sections") && data["sections"].is_string())
         o.sections = data["sections"].get<std::string>();
+    if (data.contains ("playlistLimit") && data["playlistLimit"].is_number_integer())
+        o.playlistLimit = data["playlistLimit"].get<int>();
     return o;
 }
 
@@ -264,6 +266,16 @@ void kd_probe_async (kd_engine* e, const char* text)
     const Str t (text);
     e->engine->probeAsync (t, [e, t] (const Probe& p)
         { postToPort (e, probeToJson (p, t).dump()); });
+}
+
+// То же, но текстовый запрос ищется в заданном источнике (youtube/soundcloud).
+void kd_probe_async_source (kd_engine* e, const char* text, const char* source)
+{
+    if (e == nullptr || e->engine == nullptr || text == nullptr) return;
+    const Str t (text);
+    const Str src (source == nullptr ? "" : source);
+    e->engine->probeAsync (t, [e, t] (const Probe& p)
+        { postToPort (e, probeToJson (p, t).dump()); }, src);
 }
 
 int kd_vpn_state (kd_engine* e)

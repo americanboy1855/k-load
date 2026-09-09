@@ -19,12 +19,32 @@ class Pal {
   static const screenBg = Color(0xFF070402);
 }
 
-// Типографика макета: Handjet — все цифры и слова на экране,
-// IBM Plex Mono — только технический ×.
+// Типографика: Press Start 2P — акценты, кнопки, ярлыки (CAPS);
+// Departure Mono — второстепенный текст, метаданные, названия, ссылки.
+// Handjet и Chakra Petch остаются для логотипа-плашки и знака $.
 class T {
   static const handjet = 'Handjet';
   static const chakra = 'Chakra Petch';
   static const plex = 'IBM Plex Mono';
+  static const pixel = 'Press Start 2P';
+  static const departure = 'Departure Mono';
+
+  /// Акцентный CAPS-текст (кнопки, ярлыки, статусы).
+  static TextStyle ps(double size, {Color c = Pal.soft, double ls = 0}) {
+    return TextStyle(
+        fontFamily: pixel,
+        fontSize: size,
+        color: c,
+        letterSpacing: ls,
+        height: 1.45);
+  }
+
+  /// Второстепенный текст (названия, метаданные, ссылки, ввод).
+  static TextStyle mono(double size,
+      {Color c = Pal.soft, double ls = 0, double h = 1.25}) {
+    return TextStyle(
+        fontFamily: departure, fontSize: size, color: c, letterSpacing: ls, height: h);
+  }
 
   static TextStyle h(double size,
       {FontWeight w = FontWeight.w600, Color c = Pal.soft, double ls = 0,

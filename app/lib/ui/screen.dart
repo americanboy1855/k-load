@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -115,6 +116,30 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   final chronFrom = TextEditingController(text: '0:00');
   final chronTo = TextEditingController(text: '0:10');
 
+  // источник поиска текстового запроса: null/«auto» — автомат
+  String? searchSource;
+  // качество видео: 720/1080/2160/best (по умолчанию 1080P)
+  String quality = '1080';
+  // плейлист: сколько первых роликов качать; 0 — весь
+  int playlistLimit = 0;
+  final countCtrl = TextEditingController();
+
+  // раскрытая панель: '' | chron | count | quality | source
+  String openPanel = '';
+  final chipKeys = {
+    'chron': GlobalKey(),
+    'count': GlobalKey(),
+    'quality': GlobalKey(),
+    'source': GlobalKey(),
+  };
+  double panelX = 0;
+
+  // пачка: последовательный сбор метаданных (общий хронометраж)
+  bool batchProbing = false;
+  int batchIdx = 0;
+  int batchProcessed = 0;
+  int batchDuration = 0;
+
   // очередь
   List<KdItem> items = [];
   String destFolder = '';
@@ -127,10 +152,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   // системный выбор папки
   static const _native = MethodChannel('kload/native');
 
-  bool _actHover = false;
-
-  // хрон: позиция чипа, чтобы панель открывалась прямо под ним
-  final _chronChipKey = GlobalKey();
+  // позиция чипа, под которым раскрыта панель
   final _uiColumnKey = GlobalKey();
   double _chronX = 0;
 
@@ -186,6 +208,18 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         if (e.on) vpnDismissed = false;
       });
     } else if (e is KdProbeEvent) {
+      if (batchProbing) {
+        // Пачка: копим хронометраж и переходим к следующей ссылке.
+        var dur = 0;
+        if (e.ok && !e.isPlaylist) dur = e.duration;
+        setState(() {
+          batchProcessed += 1;
+          batchDuration += dur;
+          batchIdx += 1;
+        });
+        _probeNextBatchLink();
+        return;
+      }
       _onProbe(e);
     } else {
       setState(() => items = c.snapshot());
@@ -233,6 +267,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       }
       chronOn = false;
       chronOpen = false;
+      openPanel = '';
+      quality = '1080';
+      searchSource = null;
+      playlistLimit = 0;
+      countCtrl.clear();
+      batchProbing = false;
     });
     debounce?.cancel();
     seekAnim?.cancel();
@@ -246,6 +286,16 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     setState(() {
       seekPct = 0;
       phase = Phase.seeking;
+      openPanel = '';
+      chronOn = false;
+      chronOpen = false;
+      quality = '1080';
+      playlistLimit = 0;
+      countCtrl.clear();
+      batchProbing = false;
+      batchIdx = 0;
+      batchProcessed = 0;
+      batchDuration = 0;
       if (links.length > 1) {
         isBatch = true;
         batchCount = links.length;
@@ -256,11 +306,26 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     });
     if (isBatch) {
       // пачка разбирается локально: короткая анимация и карточка
-      _animateSeek(() => _showBatch());
+      _animateSeek(() {
+        _showBatch();
+        _probeNextBatchLink();
+      });
     } else {
       _animateSeek(null);
-      core?.probeAsync(rawText);
+      core?.probeAsync(rawText, source: searchSource);
     }
+  }
+
+  // Пачка: последовательно собираем длительности, очередь событий ядра
+  // возвращает разборы по одному.
+  void _probeNextBatchLink() {
+    if (!mounted || !isBatch) return;
+    if (batchIdx >= batchLinks.length) {
+      setState(() => batchProbing = false);
+      return;
+    }
+    batchProbing = true;
+    core?.probeAsync(batchLinks[batchIdx]);
   }
 
   void _animateSeek([VoidCallback? onDone]) {
@@ -278,6 +343,13 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     });
   }
 
+  /// Все ссылки пачки с одного сервиса — показываем его, смешанные — ПАЧКА.
+  String get batchBadge {
+    final ids = batchLinks.map((l) => serviceOf(l).id).toSet();
+    if (ids.length == 1) return serviceOf(batchLinks.first).name;
+    return 'ПАЧКА';
+  }
+
   void _showBatch() {
     setState(() {
       phase = Phase.found;
@@ -285,6 +357,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       musicOnly = false;
       chronLocked = true;
       chronOn = false;
+      openPanel = '';
       mode = 'video';
     });
   }
@@ -306,6 +379,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       chronLocked = p.isPlaylist || p.isPhoto || !p.ok;
       chronOn = false;
       chronOpen = false;
+      openPanel = '';
+      quality = '1080';
+      playlistLimit = 0;
     });
   }
 
@@ -336,30 +412,39 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       return fallback;
     }
 
+    final p = probe;
+    final playlist = !isBatch && (p?.isPlaylist ?? false);
+    final limit = playlist && playlistLimit > 0 ? playlistLimit : 0;
+
     if (isBatch) {
       final fresh = batchLinks.where((l) => !busy.contains(l)).toList();
       if (fresh.isEmpty) return;
-      c.enqueueBatch(fresh, audio: audio, sections: secs);
+      c.enqueueBatch(fresh, audio: audio, quality: quality);
     } else {
-      final p = probe;
       if (p == null || !p.ok) return;
       if (p.isPhoto) {
         final link = targetLink(rawText);
         if (busy.contains(link)) return;
         c.enqueuePhoto(link);
-      } else if (p.isPlaylist) {
+      } else if (playlist) {
         final link = p.link;
         if (busy.contains(link)) return;
-        c.enqueueBatch([link], audio: audio, wholePlaylist: 1);
+        c.enqueueBatch([link],
+            audio: audio, wholePlaylist: 1, playlistLimit: limit, quality: quality);
       } else if (p.isSearch) {
         // найденный по названию трек: файл называется запросом
         final link = targetLink('');
         if (link.isEmpty || busy.contains(link)) return;
-        c.enqueueBatch([link], audio: audio, sections: secs, nameOverride: rawText);
+        c.enqueueBatch([link],
+            audio: audio,
+            sections: secs,
+            nameOverride: rawText,
+            quality: quality);
       } else {
         final link = targetLink(rawText);
         if (busy.contains(link)) return;
-        c.enqueueBatch([link], audio: audio, sections: secs);
+        c.enqueueBatch([link],
+            audio: audio, sections: secs, quality: quality);
       }
     }
     setState(() => items = c.snapshot());
@@ -440,7 +525,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   Widget build(BuildContext context) {
     // Телевизор занимает окно целиком: масштаб «каверкой» (щелей не бывает),
     // углы корпуса — под системный радиус окна, микрощели исключены.
-    if (chronOpen && chronOn) _measureChron();
+    if (openPanel.isNotEmpty) _measurePanel(openPanel);
     return Scaffold(
       backgroundColor: const Color(0xFF161413),
       body: LayoutBuilder(builder: (context, box) {
@@ -516,7 +601,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       // Клик вне панели хрона закрывает её (дети перехватывают свои тапы).
       behavior: HitTestBehavior.translucent,
       onTap: () {
-        if (chronOpen) setState(() => chronOpen = false);
+        if (openPanel.isNotEmpty || chronOpen) {
+          setState(() {
+            openPanel = '';
+            chronOpen = false;
+          });
+        }
       },
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 22, 20, 14),
@@ -590,8 +680,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                             focusNode: searchFocus,
                             onChanged: _onInputChanged,
                             cursorColor: Pal.amber,
-                            style: T.h(21,
-                                w: FontWeight.w500, c: Pal.amber, ls: .045),
+                            style: T.mono(14, c: Pal.amber, ls: .04),
                             decoration: const InputDecoration(
                                 isCollapsed: true,
                                 border: InputBorder.none),
@@ -602,7 +691,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                           if (rawText.isEmpty)
                             Text(
                               'Вставьте ссылку или напишите название того что нужно скачать',
-                              style: T.h(18, w: FontWeight.w500, c: Pal.dim),
+                              style: T.mono(12, c: Pal.dim),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -624,8 +713,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   Widget _seekBlock() {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, crossAxisAlignment: CrossAxisAlignment.end, children: [
-        Text('ПОИСК', style: T.h(17, c: Pal.soft, ls: .3)),
-        Text('$seekPct%', style: T.h(24, c: Pal.amber)),
+        Text('ПОИСК', style: T.ps(10, c: Pal.soft, ls: .2)),
+        Text('$seekPct%', style: T.ps(14, c: Pal.amber)),
       ]),
       const SizedBox(height: 9),
       LedRow(count: 16, filled: (seekPct / 6.25).round().clamp(0, 16)),
@@ -637,16 +726,17 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   Widget _foundCard() {
     final p = probe;
     if (isBatch) {
+      // Пачка: бейдж по общему сервису, вместо категорий — живой хронометраж.
       return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        _cover(null, const Color(0xFF5A4A2A)),
+        _SmartCover(url: null),
         const SizedBox(width: 15),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            _badge('ПАЧКА', src: null),
+            _badge(batchBadge, src: null, dropdown: false),
             const SizedBox(height: 8),
-            Text('$batchCount ССЫЛОК', style: T.h(26)),
-            const SizedBox(height: 4),
-            Text('ВИДЕО + ФОТО + МУЗЫКА', style: T.h(17, w: FontWeight.w500, c: Pal.dim, ls: .06)),
+            Text('$batchCount ССЫЛОК', style: T.ps(13, c: Pal.soft)),
+            const SizedBox(height: 6),
+            Text(_batchDurLine(), style: T.mono(11, c: Pal.dim, ls: .04)),
           ]),
         ),
       ]);
@@ -657,10 +747,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         color: Pal.amber.withValues(alpha: .35),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         child: Column(children: [
-          Text('РАЗБОР НЕ УДАЛСЯ', style: T.h(26)),
+          Text('РАЗБОР НЕ УДАЛСЯ', style: T.ps(12, c: Pal.soft)),
           const SizedBox(height: 6),
           Text(p.error.isEmpty ? 'Проверь ссылку или сеть' : p.error,
-              style: T.h(16, w: FontWeight.w500, c: Pal.dim), textAlign: TextAlign.center),
+              style: T.mono(11, c: Pal.dim), textAlign: TextAlign.center),
         ]),
       );
     }
@@ -668,35 +758,94 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       // Защищённая запись: карточка собирается из oEmbed, вместо режимов —
       // объяснение, почему скачать нельзя.
       return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        _cover(p.thumbnail.isEmpty ? null : p.thumbnail, const Color(0xFF31415F)),
+        _SmartCover(url: p.thumbnail.isEmpty ? null : p.thumbnail),
         const SizedBox(width: 15),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             _badge(p.serviceTitle.toUpperCase(), src: _sourceUrl(p)),
             const SizedBox(height: 8),
-            Text(_drmTitle(p), style: T.h(26), maxLines: 2, overflow: TextOverflow.ellipsis),
+            Text(_drmTitle(p), style: T.mono(15), maxLines: 2, overflow: TextOverflow.ellipsis),
             const SizedBox(height: 4),
             Text(p.error.toUpperCase(),
-                style: T.h(17, w: FontWeight.w600, c: Pal.error, ls: .06)),
+                style: T.ps(9, c: Pal.error, ls: .04)),
           ]),
         ),
       ]);
     }
     final src = _sourceUrl(p);
     return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-      _cover(p.thumbnail.isEmpty ? null : p.thumbnail, const Color(0xFF31415F)),
+      _SmartCover(url: p.thumbnail.isEmpty ? null : p.thumbnail),
       const SizedBox(width: 15),
       Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _badge(p.serviceTitle.toUpperCase(), src: src),
+          _badge(p.serviceTitle.toUpperCase(),
+              src: src,
+              dropdown: p.isSearch, // выбор источника — только для запроса
+              badgeKey: chipKeys['source']),
+          // Выпадающий источник для текстового запроса.
+          AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topLeft,
+            child: openPanel == 'source'
+                ? Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: GlitchIn(
+                      key: const ValueKey('panel-source'),
+                      child: _sourceBox(),
+                    ),
+                  )
+                : const SizedBox(width: double.infinity),
+          ),
           const SizedBox(height: 8),
-          Text(p.title, style: T.h(26),
+          Text(p.title, style: T.mono(15),
               maxLines: 2, overflow: TextOverflow.ellipsis),
           const SizedBox(height: 4),
-          Text(_durLine(p), style: T.h(17, w: FontWeight.w500, c: Pal.dim, ls: .06)),
+          Text(_durLine(p), style: T.mono(11, c: Pal.dim, ls: .04)),
         ]),
       ),
     ]);
+  }
+
+  /// Источники поиска для текстового запроса; выбранная строка подсвечена.
+  Widget _sourceBox() {
+    final options = <(String, String)>[
+      ('АВТО', 'auto'),
+      ('YOUTUBE', 'youtube'),
+      ('SOUNDCLOUD', 'soundcloud'),
+    ];
+    final current = (searchSource == null || searchSource == 'auto')
+        ? 'auto'
+        : searchSource!;
+    return _darkPanel(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        for (final opt in options)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: GestureDetector(
+              onTap: () {
+                setState(() {
+                  searchSource = opt.$2 == 'auto' ? null : opt.$2;
+                  openPanel = '';
+                });
+                _startSeek(); // переразбор запроса в выбранном источнике
+              },
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 140),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  color: current == opt.$2 ? Pal.amberFaint : Colors.transparent,
+                  child: Text(opt.$1,
+                      style: T.ps(8,
+                          c: current == opt.$2 ? Pal.amber : Pal.soft)),
+                ),
+              ),
+            ),
+          ),
+      ]),
+    );
   }
 
   /// «BALLISLIFE by INMYWHITEE» → название + исполнитель на карточке.
@@ -714,59 +863,70 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     return '';
   }
 
+  String _batchDurLine() {
+    if (batchProbing || batchProcessed < batchLinks.length) {
+      return 'ОБРАБОТАНО $batchProcessed ИЗ ${batchLinks.length}';
+    }
+    if (batchDuration > 0) {
+      return 'ХРОНОМЕТРАЖ · ${fmtLongDur(batchDuration)}';
+    }
+    return 'ХРОНОМЕТРАЖ —';
+  }
+
   String _durLine(KdProbeEvent p) {
     if (p.isPhoto) return 'ФОТОГРАФИЯ';
     if (p.isPlaylist) {
-      final mins = (p.duration * p.count / 60).round();
-      return '${p.count} ВИДЕО · $mins МИН';
+      return '${p.count} ВИДЕО · ХРОНОМЕТРАЖ · ${fmtLongDur(p.duration)}';
     }
     final dur = p.duration > 0 ? ' · ${fmtDur(p.duration)}' : '';
     return 'ХРОНОМЕТРАЖ$dur';
   }
 
-  Widget _badge(String text, {String? src}) {
+  /// 3725 -> '1:02:05', 754 -> '12:34'.
+  String fmtLongDur(int totalSec) {
+    if (totalSec <= 0) return '—';
+    final h = totalSec ~/ 3600, m = (totalSec % 3600) ~/ 60, sec = totalSec % 60;
+    final mm = m.toString().padLeft(2, '0'), ss = sec.toString().padLeft(2, '0');
+    return h > 0 ? '$h:$mm:$ss' : '$m:$ss';
+  }
+
+  Widget _badge(String text,
+      {String? src, bool dropdown = false, Key? badgeKey}) {
+    final badge = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+      color: Pal.amber,
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Text(text, style: T.ps(8, c: const Color(0xFF0A0500), ls: .04)),
+        if (dropdown) ...[
+          const SizedBox(width: 6),
+          const Icon(Icons.expand_more,
+              size: 10, color: Color(0xFF0A0500)),
+        ],
+      ]),
+    );
     return Row(children: [
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
-        color: Pal.amber,
-        child: Text(text, style: T.h(19, c: const Color(0xFF0A0500), ls: .14)),
-      ),
+      dropdown
+          ? GestureDetector(
+              key: badgeKey,
+              onTap: () => setState(() =>
+                  openPanel = openPanel == 'source' ? '' : 'source'),
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: badge,
+              ),
+            )
+          : badge,
       if (src != null && src.startsWith('http')) ...[
         const SizedBox(width: 9),
         GestureDetector(
           onTap: () => _openPath(src),
           child: MouseRegion(
             cursor: SystemMouseCursors.click,
-            child: Text('[Ссылка]', style: T.h(15, w: FontWeight.w500, c: Pal.dim, ls: .08)),
+            child: Text('[Ссылка]', style: T.mono(10, c: Pal.dim, ls: .04)),
           ),
         ),
       ],
     ]);
-  }
-
-  Widget _cover(String? url, Color fallbackFrom) {
-    return CustomPaint(
-      foregroundPainter: const DashedBorderPainter(solid: true),
-      child: SizedBox(
-        width: 118,
-        height: 118,
-        child: url != null
-            ? Image.network(url,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => _coverPlaceholder(fallbackFrom))
-            : _coverPlaceholder(fallbackFrom),
-      ),
-    );
-  }
-
-  Widget _coverPlaceholder(Color from) {
-    // шахматка «обложки нет» + тёмная заливка
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [from, Colors.black]),
-      ),
-      child: CustomPaint(painter: _CheckerPainter()),
-    );
   }
 
   // ---- режимы + СКАЧАТЬ ----
@@ -774,17 +934,23 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   Widget _modesRow() {
     final p = probe;
     final photo = !isBatch && (p?.isPhoto ?? false);
-    final goLabel = isBatch
-        ? 'СКАЧАТЬ · $batchCount'
-        : p != null && p.isPlaylist
-            ? 'СКАЧАТЬ · ${p.count}'
-            : 'СКАЧАТЬ · 1';
-    final canDownload = isBatch || (p != null && p.ok);
+    final playlist = !isBatch && (p?.isPlaylist ?? false);
+    final hasHeights = !isBatch && (p?.heights.isNotEmpty ?? false);
+
+    // Ярлык СКАЧАТЬ: пачка — количество ссылок, плейлист — выбранное
+    // количество роликов (или весь плейлист), одиночное — 1.
+    final goCount = isBatch
+        ? batchCount
+        : playlist
+            ? (playlistLimit > 0 ? playlistLimit : (p?.count ?? 1))
+            : 1;
+    final goLabel = 'СКАЧАТЬ · $goCount';
+    final canDownload = isBatch || (p != null && p.ok && !p.drm);
     final videoLabel = mediaMode ? 'МЕДИА' : 'ВИДЕО';
+
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         _ModeChip(
-            key: const ValueKey('video'),
             label: videoLabel,
             on: mode == 'video' && !musicOnly,
             locked: false,
@@ -796,44 +962,92 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             locked: false,
             hidden: photo,
             onTap: () => setState(() => mode = 'music')),
-        _ModeChip(
-            key: _chronChipKey,
-            label: 'ХРОН',
-            on: chronOn,
-            locked: chronLocked,
-            hidden: false,
-            onTap: () => setState(() {
-                  if (chronLocked) return;
-                  chronOn = !chronOn;
-                  chronOpen = chronOn;
-                  if (chronOpen) _measureChron();
-                })),
+        if (!playlist)
+          _ModeChip(
+              key: chipKeys['chron'],
+              label: 'ХРОН',
+              on: chronOn,
+              locked: chronLocked,
+              hidden: false,
+              onTap: () => setState(() {
+                    if (chronLocked) return;
+                    chronOn = !chronOn;
+                    chronOpen = chronOn;
+                    openPanel = chronOpen ? 'chron' : '';
+                    if (chronOpen) _measurePanel('chron');
+                  })),
+        if (playlist)
+          _ModeChip(
+              key: chipKeys['count'],
+              label: 'КОЛ-ВО',
+              on: openPanel == 'count',
+              locked: false,
+              hidden: false,
+              onTap: () => setState(() {
+                    openPanel = openPanel == 'count' ? '' : 'count';
+                    if (openPanel == 'count') _measurePanel('count');
+                  })),
+        // Качество: одиночное видео с известными высотами — выбор;
+        // видео без списка высот — подпись МАКС (качаем лучшее).
+        if (mode == 'video' && !photo)
+          hasHeights
+              ? _ModeChip(
+                  key: chipKeys['quality'],
+                  label: quality == 'best' ? 'МАКС' : '$quality P',
+                  on: openPanel == 'quality',
+                  locked: false,
+                  hidden: false,
+                  onTap: () => setState(() {
+                        openPanel = openPanel == 'quality' ? '' : 'quality';
+                        if (openPanel == 'quality') _measurePanel('quality');
+                      }))
+              : _ModeChip(
+                  label: 'МАКС',
+                  on: false,
+                  locked: true,
+                  hidden: false,
+                  onTap: () {}),
         const Spacer(),
         _GoButton(label: goLabel, enabled: canDownload),
       ]),
-      // Панель хрона открывается прямо под чипом и плавно раздвигает
-      // следующий контент (очередь уезжает вниз, ничего не перекрывается).
+      // Панели открываются под своим чипом и плавно раздвигают контент.
       AnimatedSize(
         duration: const Duration(milliseconds: 240),
         curve: Curves.easeOutCubic,
         alignment: Alignment.topLeft,
-        child: chronOpen && chronOn && !chronLocked
-            ? Padding(
-                padding: EdgeInsets.only(left: _chronX, top: 8),
-                child: _chronBox(),
-              )
-            : const SizedBox(width: double.infinity),
+        child: _panelBelow(),
       ),
     ]);
   }
 
-  void _measureChron() {
+  Widget _panelBelow() {
+    final showChron = chronOpen && chronOn && !chronLocked;
+    final showCount = openPanel == 'count';
+    final showQuality = openPanel == 'quality';
+    if (!showChron && !showCount && !showQuality) {
+      return const SizedBox(width: double.infinity);
+    }
+    return Padding(
+      padding: EdgeInsets.only(left: _chronX, top: 8),
+      child: GlitchIn(
+        key: ValueKey('panel-$openPanel-${showChron ? 'c' : (showCount ? 'n' : 'q')}'),
+        child: showChron
+            ? _chronBox()
+            : showCount
+                ? _countBox()
+                : _qualityBox(),
+      ),
+    );
+  }
+
+  void _measurePanel(String which) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !chronOpen || !chronOn) return;
-      final chipCtx = _chronChipKey.currentContext;
+      if (!mounted || openPanel != which) return;
+      if (which == 'chron' && !(chronOpen && chronOn)) return;
+      final ctx = chipKeys[which]?.currentContext;
       final colCtx = _uiColumnKey.currentContext;
-      if (chipCtx == null || colCtx == null) return;
-      final chipBox = chipCtx.findRenderObject() as RenderBox?;
+      if (ctx == null || colCtx == null) return;
+      final chipBox = ctx.findRenderObject() as RenderBox?;
       final colBox = colCtx.findRenderObject() as RenderBox?;
       if (chipBox == null || colBox == null || !chipBox.attached) return;
       final x = chipBox.localToGlobal(Offset.zero, ancestor: colBox).dx;
@@ -841,40 +1055,107 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     });
   }
 
+  /// КОЛ-ВО: сколько первых роликов плейлиста скачать; пусто — весь.
+  Widget _countBox() {
+    return _darkPanel(
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Text('КОЛ-ВО', style: T.ps(8, c: Pal.soft)),
+        const SizedBox(width: 8),
+        SizedBox(
+            width: 64,
+            child: TextField(
+              controller: countCtrl,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              textAlign: TextAlign.center,
+              cursorColor: Pal.amber,
+              onChanged: (v) =>
+                  setState(() => playlistLimit = int.tryParse(v) ?? 0),
+              onSubmitted: (_) => FocusScope.of(context).unfocus(),
+              style: T.mono(13, c: Pal.amber),
+              decoration: const InputDecoration(
+                  isCollapsed: true, border: InputBorder.none),
+            )),
+      ]),
+    );
+  }
+
+  /// Качество: известные высоты кадра + МАКСИМУМ.
+  Widget _qualityBox() {
+    final heights = probe?.heights ?? const <int>[];
+    final options = <(String, String)>[
+      ('МАКСИМУМ', 'best'),
+      for (final h in heights.take(4)) ('$h P', '$h'),
+    ];
+    return _darkPanel(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        for (final opt in options)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: GestureDetector(
+              onTap: () => setState(() {
+                quality = opt.$2;
+                openPanel = '';
+              }),
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 140),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  color: quality == opt.$2 ? Pal.amberFaint : Colors.transparent,
+                  child: Text(opt.$1,
+                      style: T.ps(8,
+                          c: quality == opt.$2 ? Pal.amber : Pal.soft)),
+                ),
+              ),
+            ),
+          ),
+      ]),
+    );
+  }
+
+  /// ХРОН: панель с ОТ/ДО.
   Widget _chronBox() {
+    return _darkPanel(
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Text('ОТ', style: T.ps(8, c: Pal.soft)),
+        const SizedBox(width: 6),
+        SizedBox(
+            width: 56,
+            child: TextField(
+              controller: chronFrom,
+              textAlign: TextAlign.center,
+              cursorColor: Pal.amber,
+              onSubmitted: (_) => FocusScope.of(context).unfocus(),
+              style: T.mono(13, c: Pal.amber),
+              decoration: const InputDecoration(
+                  isCollapsed: true, border: InputBorder.none),
+            )),
+        const SizedBox(width: 6),
+        Text('ДО', style: T.ps(8, c: Pal.soft)),
+        const SizedBox(width: 6),
+        SizedBox(
+            width: 56,
+            child: TextField(
+              controller: chronTo,
+              textAlign: TextAlign.center,
+              cursorColor: Pal.amber,
+              onSubmitted: (_) => FocusScope.of(context).unfocus(),
+              style: T.mono(13, c: Pal.amber),
+              decoration: const InputDecoration(
+                  isCollapsed: true, border: InputBorder.none),
+            )),
+      ]),
+    );
+  }
+
+  Widget _darkPanel({required Widget child}) {
     return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xF5070400),
-      ),
+      decoration: const BoxDecoration(color: Color(0xF5070400)),
       child: DashedBox(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Text('ОТ', style: T.h(16, ls: .1)),
-          const SizedBox(width: 6),
-          SizedBox(
-              width: 56,
-              child: TextField(
-                controller: chronFrom,
-                textAlign: TextAlign.center,
-                cursorColor: Pal.amber,
-                onSubmitted: (_) => FocusScope.of(context).unfocus(),
-                style: T.h(20, c: Pal.amber, ls: .04),
-                decoration: const InputDecoration(isCollapsed: true, border: InputBorder.none),
-              )),
-          const SizedBox(width: 8),
-          Text('ДО', style: T.h(16, ls: .1)),
-          const SizedBox(width: 6),
-          SizedBox(
-              width: 56,
-              child: TextField(
-                controller: chronTo,
-                textAlign: TextAlign.center,
-                cursorColor: Pal.amber,
-                onSubmitted: (_) => FocusScope.of(context).unfocus(),
-                style: T.h(20, c: Pal.amber, ls: .04),
-                decoration: const InputDecoration(isCollapsed: true, border: InputBorder.none),
-              )),
-        ]),
+        child: child,
       ),
     );
   }
@@ -918,10 +1199,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(title,
-                style: T.h(20, c: Pal.soft), maxLines: 1, overflow: TextOverflow.ellipsis),
+                style: T.mono(13, c: Pal.soft), maxLines: 1, overflow: TextOverflow.ellipsis),
             const SizedBox(height: 3),
             Text(it.stage.toUpperCase(),
-                style: T.h(15, w: FontWeight.w500, c: stageColor, ls: .1)),
+                style: T.ps(8, c: stageColor, ls: .04)),
           ]),
         ),
         const SizedBox(width: 12),
@@ -936,48 +1217,37 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         ),
         const SizedBox(width: 8),
         if (it.state == 'working' || it.state == 'queued')
-          _actButton((_) => const Icon(Icons.close, size: 13, color: Pal.soft),
-              () => core?.cancel(it.id))
+          _ActButton(
+            icon: (_) => const Icon(Icons.close, size: 13, color: Pal.soft),
+            onTap: () => core?.cancel(it.id),
+          )
         else if (done) ...[
-          _actButton(
-              (hover) => FolderIcon(
-                  size: 14, color: hover ? Pal.soft : Pal.amber), () {
-            if (it.files.isNotEmpty) {
-              _openPath(File(it.files.first).parent.path);
-            } else {
-              _openPath(destFolder);
-            }
-          }),
-          const SizedBox(width: 6),
-          _actButton(
-              (hover) => TrashIcon(size: 13, color: hover ? Pal.soft : Pal.amber),
-              () => _trashRow(it)),
-        ] else if (failed)
-          _actButton(
-              (hover) =>
-                  TrashIcon(size: 13, color: hover ? Pal.soft : Pal.amber),
-              () => _trashRow(it)),
-      ]),
-    );
-  }
-
-  Widget _actButton(Widget Function(bool hover) build, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _actHover = true),
-        onExit: (_) => setState(() => _actHover = false),
-        child: SizedBox(
-          width: 27,
-          height: 27,
-          child: CustomPaint(
-            foregroundPainter:
-                const DashedBorderPainter(color: Color(0x73FFB000)),
-            child: Center(child: build(_actHover)),
+          _ActButton(
+            icon: (hover) => FolderIcon(
+                size: 14,
+                color: hover ? Pal.soft : Pal.amber,
+                glow: hover),
+            onTap: () {
+              if (it.files.isNotEmpty) {
+                _openPath(File(it.files.first).parent.path);
+              } else {
+                _openPath(destFolder);
+              }
+            },
           ),
-        ),
-      ),
+          const SizedBox(width: 6),
+          _ActButton(
+            icon: (hover) => TrashIcon(
+                size: 13, color: hover ? Pal.soft : Pal.amber),
+            onTap: () => _trashRow(it),
+          ),
+        ] else if (failed)
+          _ActButton(
+            icon: (hover) => TrashIcon(
+                size: 13, color: hover ? Pal.soft : Pal.amber),
+            onTap: () => _trashRow(it),
+          ),
+      ]),
     );
   }
 
@@ -993,7 +1263,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             const VpnIcon(),
             const SizedBox(width: 10),
             Text('Для лучшей работы загрузчика - включите VPN',
-                style: T.h(17, w: FontWeight.w500, c: Pal.soft)),
+                style: T.mono(12, c: Pal.soft)),
             const SizedBox(width: 4),
             GestureDetector(
               onTap: () => setState(() => vpnDismissed = true),
@@ -1029,7 +1299,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           decoration: const BoxDecoration(color: Color(0xE6050300)),
           child: DashedBox(
             padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
-            child: Text(toastText!, style: T.h(15, w: FontWeight.w500, c: Pal.soft, ls: .04)),
+            child: Text(toastText!, style: T.mono(11, c: Pal.soft, ls: .02)),
           ),
         ),
       ),
@@ -1245,7 +1515,7 @@ class _ModeChipState extends State<_ModeChip> {
   Widget build(BuildContext context) {
     if (widget.hidden) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.only(right: 9),
+      padding: const EdgeInsets.only(right: 6),
       child: GestureDetector(
         onTap: widget.onTap,
         child: MouseRegion(
@@ -1261,7 +1531,7 @@ class _ModeChipState extends State<_ModeChip> {
               duration: const Duration(milliseconds: 180),
               curve: Curves.easeOut,
               padding:
-                  const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+                  const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
               decoration: BoxDecoration(
                 color: widget.on
                     ? Pal.amber
@@ -1278,9 +1548,8 @@ class _ModeChipState extends State<_ModeChip> {
               child: AnimatedDefaultTextStyle(
                 duration: const Duration(milliseconds: 180),
                 curve: Curves.easeOut,
-                style: T.h(19,
-                    c: widget.on ? const Color(0xFF0A0500) : Pal.soft,
-                    ls: .06),
+                style: T.ps(9,
+                    c: widget.on ? const Color(0xFF0A0500) : Pal.soft),
                 child: Text(widget.label),
               ),
             ),
@@ -1327,7 +1596,7 @@ class _GoButtonState extends State<_GoButton> {
               curve: Curves.easeOutCubic,
               transform: Matrix4.translationValues(0, pressed ? 1 : 0, 0),
               padding:
-                  const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               decoration: BoxDecoration(
                 color: Pal.amber,
                 boxShadow: [
@@ -1338,10 +1607,8 @@ class _GoButtonState extends State<_GoButton> {
                 ],
               ),
               child: Text(widget.label,
-                  style: T.h(20,
-                      w: FontWeight.w700,
-                      c: const Color(0xFF0A0500),
-                      ls: .06)),
+                  style: T.ps(10,
+                      c: const Color(0xFF0A0500), ls: .04)),
             ),
           ),
         ),
@@ -1356,3 +1623,286 @@ class _GoButtonState extends State<_GoButton> {
   }
 }
 
+
+
+/// Появление панели с коротким glitch: мягкое проявление, сдвиг на пару
+/// пикселей и редкие горизонтальные помехи. Один раз на открытие.
+class GlitchIn extends StatefulWidget {
+  const GlitchIn({super.key, required this.child});
+  final Widget child;
+
+  @override
+  State<GlitchIn> createState() => _GlitchInState();
+}
+
+class _GlitchInState extends State<GlitchIn>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 280))
+    ..forward();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (context, child) {
+        final t = Curves.easeOut.transform(_c.value);
+        // Лёгкое горизонтальное дрожание в первые кадры появления.
+        final dx = t < 1 ? math.sin(t * 21) * (1 - t) * 3 : 0.0;
+        return Opacity(
+          opacity: t.clamp(0, 1),
+          child: Transform.translate(
+            offset: Offset(dx, 0),
+            child: Stack(children: [
+              child!,
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: CustomPaint(
+                      painter: _GlitchLinesPainter(
+                          progress: t,
+                          seed: widget.key?.hashCode ?? 0)),
+                ),
+              ),
+            ]),
+          ),
+        );
+      },
+      child: widget.child,
+    );
+  }
+}
+
+class _GlitchLinesPainter extends CustomPainter {
+  _GlitchLinesPainter({required this.progress, required this.seed});
+  final double progress;
+  final int seed;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (progress >= 1) return;
+    final rnd = math.Random(seed);
+    final alpha = (1 - progress) * .5;
+    for (var i = 0; i < 3; i++) {
+      final y = rnd.nextDouble() * size.height;
+      final h = 1 + rnd.nextDouble() * 2;
+      final w = size.width * (.3 + rnd.nextDouble() * .5);
+      final x = rnd.nextDouble() * (size.width - w);
+      canvas.drawRect(
+          Rect.fromLTWH(x, y, w, h),
+          Paint()
+            ..color = Pal.amber.withValues(alpha: alpha));
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _GlitchLinesPainter old) =>
+      old.progress != progress;
+}
+
+
+
+/// Обложка: пока настоящей нет — живая тёплая плазма с дизером; когда
+/// картинка загрузилась — плавный кроссфейд. Без обложки плазма остаётся.
+class _SmartCover extends StatefulWidget {
+  const _SmartCover({required this.url});
+  final String? url;
+
+  @override
+  State<_SmartCover> createState() => _SmartCoverState();
+}
+
+class _SmartCoverState extends State<_SmartCover> {
+  bool _loaded = false;
+  bool _failed = false;
+  ImageStream? _stream;
+  ImageStreamListener? _listener;
+
+  @override
+  void didUpdateWidget(covariant _SmartCover old) {
+    super.didUpdateWidget(old);
+    if (old.url != widget.url) {
+      _loaded = false;
+      _failed = false;
+      _stream = null;
+    }
+  }
+
+  void _listen(ImageStream stream) {
+    _listener ??= ImageStreamListener((info, _) {
+      if (mounted && !_loaded) setState(() => _loaded = true);
+    }, onError: (_, __) {
+      if (mounted) setState(() => _failed = true);
+    });
+    stream.addListener(_listener!);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasArt = widget.url != null && widget.url!.isNotEmpty && !_failed;
+    return CustomPaint(
+      foregroundPainter: const DashedBorderPainter(solid: true),
+      child: SizedBox(
+        width: 118,
+        height: 118,
+        child: ClipRect(
+          child: Stack(fit: StackFit.expand, children: [
+            const _Plasma(),
+            if (hasArt)
+              AnimatedOpacity(
+                opacity: _loaded ? 1 : 0,
+                duration: const Duration(milliseconds: 450),
+                child: Image.network(
+                  widget.url!,
+                  fit: BoxFit.cover,
+                  frameBuilder: (context, child, frame, wasLoaded) {
+                    // Подписываемся на поток, чтобы узнать о завершении.
+                    if (!_loaded && (frame ?? 0) > 0) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted && !_loaded) setState(() => _loaded = true);
+                      });
+                    }
+                    return child;
+                  },
+                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                ),
+              ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+/// Тёплая дизер-плазма: низкоразрешённое поле значений + упорядоченный
+/// дизер по Байеру в три янтарных тона. Обновляется степами — «дышит».
+class _Plasma extends StatefulWidget {
+  const _Plasma();
+
+  @override
+  State<_Plasma> createState() => _PlasmaState();
+}
+
+class _PlasmaState extends State<_Plasma> {
+  double _t = 0;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(milliseconds: 90), (_) {
+      if (mounted) setState(() => _t = (_t + 0.09) % 1000);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(painter: _PlasmaPainter(_t));
+  }
+}
+
+class _PlasmaPainter extends CustomPainter {
+  _PlasmaPainter(this.t);
+  final double t;
+
+  // Упорядоченный дизер 4x4 (Байер): порог в пределах клетки.
+  static const _bayer = [
+    [0, 8, 2, 10],
+    [12, 4, 14, 6],
+    [3, 11, 1, 9],
+    [15, 7, 13, 5],
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const cell = 6.0; // крупное «зерно», пиксельная фактура
+    final cols = (size.width / cell).ceil();
+    final rows = (size.height / cell).ceil();
+    const tones = [
+      Color(0xFF241708),
+      Color(0xFF5A3A0C),
+      Color(0xFF96600E),
+      Color(0xFFD08A14),
+      Color(0xFFFFB000),
+    ];
+    final paint = Paint();
+    for (var gy = 0; gy < rows; gy++) {
+      for (var gx = 0; gx < cols; gx++) {
+        final nx = gx / 9, ny = gy / 9;
+        final v = math.sin(nx * 3.1 + t * .9) +
+            math.sin(ny * 2.7 - t * .7) +
+            math.sin((nx + ny) * 1.9 + t * .5) +
+            math.sin(math.sqrt(nx * nx + ny * ny) * 4.0 - t * 1.1);
+        // v в [-4;4] -> 0..1
+        var f = (v + 4) / 8;
+        f = (f * 1.25).clamp(0.0, 0.999);
+        final bayer = _bayer[gy % 4][gx % 4] / 16 - 0.5;
+        var level = (f * (tones.length - 1) + bayer * 0.9).round().clamp(0, tones.length - 1);
+        paint.color = tones[level];
+        canvas.drawRect(
+            Rect.fromLTWH(gx * cell, gy * cell, cell + .5, cell + .5), paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _PlasmaPainter old) => old.t != t;
+}
+
+
+/// Маленькая кнопка в строке очереди: ховер независим у каждой кнопки,
+/// цвет/свечение меняются только у наведённой, геометрия не трогается.
+class _ActButton extends StatefulWidget {
+  const _ActButton({required this.icon, required this.onTap});
+  final Widget Function(bool hover) icon;
+  final VoidCallback onTap;
+
+  @override
+  State<_ActButton> createState() => _ActButtonState();
+}
+
+class _ActButtonState extends State<_ActButton> {
+  bool hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => hover = true),
+        onExit: (_) => setState(() => hover = false),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          width: 27,
+          height: 27,
+          decoration: BoxDecoration(
+            borderRadius: const BorderRadius.all(Radius.circular(2)),
+            color:
+                hover ? Pal.amber.withValues(alpha: .10) : Colors.transparent,
+            boxShadow: hover
+                ? [BoxShadow(
+                    color: Pal.amber.withValues(alpha: .16), blurRadius: 8)]
+                : const [],
+          ),
+          child: CustomPaint(
+            foregroundPainter:
+                const DashedBorderPainter(color: Color(0x73FFB000)),
+            child: Center(child: widget.icon(hover)),
+          ),
+        ),
+      ),
+    );
+  }
+}

@@ -64,6 +64,8 @@ struct QueueItem
     /// ХРОН — отрезок «начало-конец» (таймкоды или секунды, как понимает
     /// yt-dlp). Пусто — качаем целиком. Только для одиночных файлов.
     Str sections;
+    /// Плейлист: только первые N роликов. 0 — плейлист целиком.
+    int playlistLimit = 0;
     /// Pinterest-фотография: качаем напрямую, без yt-dlp.
     bool isPhoto = false;
 
@@ -141,6 +143,8 @@ public:
         Str nameOverride;
         /// ХРОН: отрезок «начало-конец» для одиночного файла (не плейлиста).
         Str sections;
+        /// Плейлист: скачать только первые N роликов. 0 — целиком.
+        int playlistLimit = 0;
     };
 
     /// Все изменения очереди. Приезжает из рабочих потоков — интерфейсу
@@ -167,13 +171,17 @@ public:
 
     /// Разбор ссылки (или названия трека) для карточки. Блокирующий —
     /// вызывать из ProbeRunner, не с UI-потока и не из очереди загрузок.
-    Probe probe (const Str& text) const;
+    /// Разбор ссылки/названия. searchSite — «youtube»/«soundcloud»:
+    /// задаёт, где искать текстовый запрос (пусто — авто).
+    Probe probe (const Str& text, const Str& searchSite = {}) const;
 
     /// Фоновый разбор: старые запросы отменяются поколением, результат
     /// приезжает в onDone из потока разбора.
-    void probeAsync (const Str& text, std::function<void (const Probe&)> onDone)
+    void probeAsync (const Str& text, std::function<void (const Probe&)> onDone,
+                     const Str& searchSite = {})
     {
-        probes.start (text, [this] (const Str& t) { return probe (t); },
+        probes.start (text,
+                      [this, searchSite] (const Str& t) { return probe (t, searchSite); },
                       std::move (onDone));
     }
 
@@ -219,7 +227,7 @@ private:
     StrVec resolveOpenGraph (const Str& link) const;
     bool downloadPinterestPhoto (const QueueItemPtr& item);
     Probe probePinterestPhoto (const Str& link) const;
-    Probe probeSearch (const Str& query) const;
+    Probe probeSearch (const Str& query, const Str& site = {}) const;
     Probe probeDrm (const Str& link, Detector::Service service) const;
 
     // ---- аргументы yt-dlp ----

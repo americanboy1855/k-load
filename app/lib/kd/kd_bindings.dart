@@ -47,6 +47,9 @@ typedef _CStringDart = Pointer<Utf8> Function();
 typedef _StringEngineStringNative = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
 typedef _StringEngineString = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
 
+typedef _ProbeSourceNative = Void Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _ProbeSourceDart = void Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
+
 class KdBindings {
   KdBindings._(this.lib) {
     _attach = lib
@@ -87,6 +90,9 @@ class KdBindings {
         .asFunction();
     _probeAsync = lib
         .lookup<NativeFunction<_VoidEngineStringNative>>('kd_probe_async')
+        .asFunction();
+    _probeAsyncSource = lib
+        .lookup<NativeFunction<_ProbeSourceNative>>('kd_probe_async_source')
         .asFunction();
     _vpnState = lib
         .lookup<NativeFunction<_IntEngineNative>>('kd_vpn_state')
@@ -153,6 +159,7 @@ class KdBindings {
   late final _VoidEngineDart _clearFinished;
   late final _StringEngineString _probeBlocking;
   late final _VoidEngineStringDart _probeAsync;
+  late final _ProbeSourceDart _probeAsyncSource;
   late final _IntEngine _vpnState;
   late final _StringEngine _defaultDest;
   late final _StringEngine _toolsStatus;
@@ -210,6 +217,9 @@ class KdProbeEvent extends KdEvent {
   bool get hasPlaylist => json['hasPlaylist'] == true;
   bool get isPhoto => json['isPhoto'] == true;
   bool get isSearch => json['isSearch'] == true;
+  List<int> get heights => [
+    for (final h in (json['heights'] ?? []) as List) (h as num).toInt(),
+  ];
   bool get drm => json['drm'] == true;
   int get service => (json['service'] ?? 0) as int;
 }
@@ -294,7 +304,7 @@ class KdCore {
   int enqueueBatch(List<String> links,
       {String? dest, bool audio = false, String quality = 'best',
        String audioFormat = 'mp3', int wholePlaylist = -1, String? nameOverride,
-       String? sections}) {
+       String? sections, int playlistLimit = 0}) {
     final linksJson = jsonEncode(links).toNativeUtf8();
     final opts = jsonEncode({
       if (dest != null) 'dest': dest,
@@ -304,6 +314,7 @@ class KdCore {
       'wholePlaylist': wholePlaylist,
       if (nameOverride != null) 'nameOverride': nameOverride,
       if (sections != null && sections.isNotEmpty) 'sections': sections,
+      if (playlistLimit > 0) 'playlistLimit': playlistLimit,
     }).toNativeUtf8();
     final n = _b._enqueueBatch(_engine, linksJson, opts);
     calloc
@@ -322,9 +333,15 @@ class KdCore {
     return n;
   }
 
-  void probeAsync(String text) {
+  void probeAsync(String text, {String? source}) {
     final t = text.toNativeUtf8();
-    _b._probeAsync(_engine, t);
+    if (source == null || source.isEmpty || source == 'auto') {
+      _b._probeAsync(_engine, t);
+    } else {
+      final src = source.toNativeUtf8();
+      _b._probeAsyncSource(_engine, t, src);
+      calloc.free(src);
+    }
     calloc.free(t);
   }
 

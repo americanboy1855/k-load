@@ -46,6 +46,7 @@ KD_EXPORT char* kd_split_links (const char* text);
 // options_json — JSON:
 //   {"dest":"/path", "mode":"video"|"audio", "quality":"720"|"1080"|"2160"|"best",
 //    "audioFormat":"mp3"|"m4a"|"wav"|"flac", "wholePlaylist":-1|0|1,
+//    "playlistLimit":N (только первые N роликов плейлиста),
 //    "nameOverride":"...", "sections":"10:00-10:20"} — все поля необязательны.
 // sections — ХРОН, отрезок «начало-конец» (таймкоды или секунды); действует
 // только на одиночные файлы, у плейлистов игнорируется.
@@ -62,6 +63,10 @@ KD_EXPORT char* kd_probe_blocking (kd_engine* e, const char* text);
 
 // Фоновый разбор: результат приедет событием {"type":"probe", …}.
 KD_EXPORT void kd_probe_async (kd_engine* e, const char* text);
+
+// То же для текстового запроса с выбором источника поиска
+// («youtube» / «soundcloud»; пусто/NULL — авто).
+KD_EXPORT void kd_probe_async_source (kd_engine* e, const char* text, const char* source);
 
 // Состояние VPN: 0 — неизвестно, 1 — включён, 2 — выключен.
 KD_EXPORT int kd_vpn_state (kd_engine* e);
