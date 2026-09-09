@@ -1778,34 +1778,63 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
     }
 
     // На YouTube пусто — SoundCloud: там находятся ремиксы и малоизвестное.
+    // Быстрая выдача даёт 5 кандидатов; каждый первый проверяем на
+    // скачиваемость (полный -J): защищённые/закрытые треки в результаты
+    // не попадают — человек видит только то, что реально скачается.
     if (! p.ok && wantSoundcloud)
     {
         Str sc;
         StrVec scArgs { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
-                        "scsearch1:" + query };
+                        "scsearch5:" + query };
         if (captureOut (scArgs, sc, &code) && code == 0 && ! sc.empty())
         {
             const auto data = json::parse (sc, nullptr, false);
             if (! data.is_discarded())
             {
                 const auto entries = data.find ("entries");
-                if (entries != data.end() && entries->is_array() && ! entries->empty())
+                if (entries != data.end() && entries->is_array())
                 {
-                    const auto& e = (*entries)[0];
-                    p.ok = true;
-                    p.service = Detector::Service::soundcloud;
-                    p.resolved = jtext (e, "webpage_url");
-                    p.title = jtext (e, "title", query);
-                    p.uploader = jtext (e, "uploader");
-                    p.duration = (int) jnum (e, "duration");
-                    // artwork_url отдаётся 120×120 — просим крупнее.
-                    p.thumbnail = kd::replaceAll (searchThumb (e), "t120x120", "t500x500");
+                    int checked = 0;
+                    for (const auto& e : *entries)
+                    {
+                        if (! e.is_object() || checked >= 3) break;
+                        ++checked;
+                        auto url = jtext (e, "webpage_url");
+                        if (url.empty()) continue;
+
+                        StrVec jArgs { "--ignore-config", "--no-warnings",
+                                       "-J", "--no-playlist" };
+                        jArgs.push_back (url);
+                        Str jOut;
+                        int jCode = -1;
+                        if (! captureOut (jArgs, jOut, &jCode)
+                            || jCode != 0 || jOut.empty())
+                            continue; // DRM/закрытый — следующий кандидат
+                        const auto full = json::parse (jOut, nullptr, false);
+                        if (full.is_discarded() || ! full.is_object()) continue;
+                        const auto formats = full.find ("formats");
+                        if (formats == full.end() || ! formats->is_array()
+                            || formats->empty())
+                            continue; // качать нечем
+
+                        p.ok = true;
+                        p.service = Detector::Service::soundcloud;
+                        p.resolved = url;
+                        p.title = jtext (full, "title", query);
+                        p.uploader = jtext (full, "uploader");
+                        p.duration = (int) jnum (full, "duration");
+                        p.thumbnail = searchThumb (full);
+                        break;
+                    }
+                    if (! p.ok)
+                        p.error = "Найденные треки защищены от скачивания (DRM)"
+                                  " — попробуйте другой запрос или источник";
                 }
             }
         }
     }
 
-    if (! p.ok)
+    if (! p.ok && p.error.empty())
         p.error = "По этому названию ничего не нашлось ни на YouTube, ни на SoundCloud. Попробуйте добавить исполнителя";
     return p;
 }

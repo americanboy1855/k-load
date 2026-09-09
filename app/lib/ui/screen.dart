@@ -157,8 +157,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   String? toastText;
   Timer? toastTimer;
 
-  // системный выбор папки
+  // системный выбор папки + drag-out скачанных файлов
   static const _native = MethodChannel('kload/native');
+  final _rowKeys = <int, GlobalKey>{}; // строки очереди для drag-зон
 
   // позиция чипа, под которым раскрыта панель
   final _uiColumnKey = GlobalKey();
@@ -234,7 +235,36 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       _onProbe(e);
     } else {
       setState(() => items = c.snapshot());
+      _scheduleDragZones();
     }
+  }
+
+  /// Готовые файлы: сообщаем нативному слою прямоугольники строк, чтобы
+  /// зажатием на строке можно было перетащить сам файл в Finder/DAW.
+  void _scheduleDragZones() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final colCtx = _uiColumnKey.currentContext;
+      final colBox = colCtx?.findRenderObject() as RenderBox?;
+      if (colBox == null || !colBox.attached) return;
+      final zones = <Map<String, dynamic>>[];
+      for (final it in items) {
+        if (it.state != 'done' || it.files.isEmpty) continue;
+        final ctx = _rowKeys[it.id]?.currentContext;
+        if (ctx == null) continue;
+        final box = ctx.findRenderObject() as RenderBox?;
+        if (box == null || !box.attached) continue;
+        final topLeft = box.localToGlobal(Offset.zero, ancestor: colBox);
+        zones.add({
+          'path': it.files.first,
+          'x': topLeft.dx,
+          'y': topLeft.dy,
+          'w': box.size.width,
+          'h': box.size.height,
+        });
+      }
+      _native.invokeMethod('setDragZones', zones);
+    });
   }
 
   void _scheduleTracking() {
@@ -477,7 +507,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             audioFormat: audioFormat);
       }
     }
-    setState(() => items = c.snapshot());
+    setState(() {
+      items = c.snapshot();
+      _scheduleDragZones();
+    });
   }
 
   // ---- очередь: действия ----
@@ -531,6 +564,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     }
     core?.remove(it.id);
     setState(() => items = core?.snapshot() ?? items);
+    _scheduleDragZones();
   }
 
   // ---- build ----
@@ -917,7 +951,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       ]);
     }
 
-    // Видео: формат слева, качество справа (реальные высоты кадра).
+    // Видео: формат слева, качество справа (реальные высоты кадра);
+    // если высоты недоступны — подпись МАКСИМАЛЬНОЕ КАЧЕСТВО.
     final hasHeights = p.heights.isNotEmpty;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
@@ -929,10 +964,13 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         const SizedBox(width: 6),
         if (hasHeights)
           _dropChip(
-              label: quality == 'best' ? 'МАКС' : '$quality P',
+              label: '$quality P',
               open: openPanel == 'quality',
               onTap: () => setState(() =>
-                  openPanel = openPanel == 'quality' ? '' : 'quality')),
+                  openPanel = openPanel == 'quality' ? '' : 'quality'))
+        else
+          Text('· МАКСИМАЛЬНОЕ КАЧЕСТВО',
+              style: T.ps(7, c: Pal.dim, ls: .04)),
       ]),
       AnimatedSize(
         duration: const Duration(milliseconds: 220),
@@ -1050,7 +1088,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       ('APPLE MUSIC', 'apple'),
       ('SPOTIFY', 'spotify'),
       ('ЯНДЕКС МУЗЫКА', 'yandex'),
-      ('PINTEREST', 'pinterest'),
+      // Pinterest — только по прямой ссылке на пин (поиск закрыт сервисом).
     ];
     final current = (searchSource == null || searchSource == 'auto')
         ? 'auto'
@@ -1389,6 +1427,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   Widget _queueRow(KdItem it) {
     final done = it.state == 'done';
+    final rowKey = _rowKeys.putIfAbsent(it.id, () => GlobalKey());
     final failed = it.state == 'failed';
     final stageColor = done ? Pal.amber : (failed ? Pal.error : Pal.dim);
     // Пока своего названия нет — показываем название из разбора, затем ссылку.
@@ -1400,11 +1439,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       }
     }
     return Container(
+      key: rowKey,
       padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
       decoration: const BoxDecoration(
         border: Border(bottom: BorderSide(color: Color(0x38FFB000), style: BorderStyle.solid)),
       ),
-      child: Row(children: [
+      child: MouseRegion(
+        cursor: done ? SystemMouseCursors.grab : MouseCursor.defer,
+        child: Row(children: [
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(title,
@@ -1456,7 +1498,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                 size: 13, color: hover ? Pal.soft : Pal.amber),
             onTap: () => _trashRow(it),
           ),
-      ]),
+        ]),
+      ),
     );
   }
 

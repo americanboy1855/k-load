@@ -22,7 +22,7 @@ guard let srcImage = NSImage(contentsOf: faviconURL)?.cgImage(
     forProposedRect: nil, context: nil, hints: nil)
 else { fatalError("Фавикон.png не прочитался") }
 // Пиксельная K: ужимаем фавикон до грубой сетки и растягиваем ступеньками.
-let tinySide = 40
+let tinySide = 28
 let tinyCtx = CGContext(data: nil, width: tinySide, height: tinySide,
                         bitsPerComponent: 8, bytesPerRow: tinySide,
                         space: CGColorSpaceCreateDeviceGray(),
@@ -76,15 +76,16 @@ ctx.drawRadialGradient(
     endCenter: CGPoint(x: 430, y: 580), endRadius: 420, options: [])
 ctx.setBlendMode(.normal)
 
-// буква K из фавикона: клип по маске, белая — почти весь тайтл
-let kRect = CGRect(x: 32, y: 32, width: 880, height: 880)
+// буква K из фавикона: клип по маске, белая — до границ иконки
+let kRect = CGRect(x: 8, y: 8, width: 1008, height: 1008)
 ctx.clip(to: kRect, mask: kMask)
 ctx.setFillColor(rgb(0xFFFFFF))
 ctx.fill(kRect)
 ctx.restoreGState()
 
-// пиксельная стрелка вниз (оранжевая, без круга) в правом нижнем углу
-let cell: CGFloat = 56
+// пиксельная стрелка вниз (оранжевая, без круга) в правом нижнем углу:
+// тёмный пиксельный «вырез» под стрелкой, чтобы хвост K не мешал
+let cell: CGFloat = 72
 let pixelGrid: [[Int]] = [
     [0, 0, 1, 0, 0],
     [0, 0, 1, 0, 0],
@@ -95,9 +96,12 @@ let pixelGrid: [[Int]] = [
 ]
 let gridW = CGFloat(pixelGrid[0].count) * cell
 let gridH = CGFloat(pixelGrid.count) * cell
-let origin = CGPoint(x: 1024 - 64 - gridW, y: 64) // CG: y вверх, низ иконки
+let origin = CGPoint(x: 1024 - 24 - gridW, y: 24) // CG: y вверх, низ иконки
 ctx.saveGState()
-ctx.setShadow(offset: .zero, blur: 18, color: rgb(0xFFB000, 0.5))
+ctx.setFillColor(rgb(0x14110F))
+ctx.fill(CGRect(x: origin.x - 40, y: origin.y - 40,
+                width: gridW + 80, height: gridH + 80))
+ctx.setShadow(offset: .zero, blur: 20, color: rgb(0xFFB000, 0.55))
 ctx.setFillColor(rgb(0xFFB000))
 for (row, line) in pixelGrid.enumerated() {
     // ось Y у CGContext снизу вверх — переворачиваем строки сетки
