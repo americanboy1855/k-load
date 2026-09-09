@@ -136,6 +136,44 @@ class VpnIcon extends StatelessWidget {
       }, color));
 }
 
+// Метла: «очистить диспетчер» — рукоять по диагонали + веер щетины.
+class BroomIcon extends StatelessWidget {
+  const BroomIcon({super.key, this.size = 14, this.color = Pal.amber});
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => CustomPaint(
+      size: Size.square(size),
+      painter: _StrokePainter((ctx, p, s) {
+        final sc = s.width / 14;
+        // рукоять
+        ctx.drawPath(
+            Path()
+              ..moveTo(12.4 * sc, 1.6 * sc)
+              ..lineTo(7.4 * sc, 6.8 * sc),
+            p);
+        // головка: сужающийся веер
+        ctx.drawPath(
+            Path()
+              ..moveTo(8.8 * sc, 5.2 * sc)
+              ..lineTo(2.2 * sc, 8.4 * sc)
+              ..lineTo(5.6 * sc, 11.8 * sc)
+              ..close(),
+            p);
+        // щетина
+        ctx.drawPath(
+            Path()
+              ..moveTo(3.4 * sc, 9.6 * sc)
+              ..lineTo(1.4 * sc, 12.6 * sc)
+              ..moveTo(4.8 * sc, 10.9 * sc)
+              ..lineTo(3.4 * sc, 13.4 * sc)
+              ..moveTo(6.2 * sc, 11.6 * sc)
+              ..lineTo(5.8 * sc, 13.9 * sc),
+            p);
+      }, color));
+}
+
 class _FillPainter extends CustomPainter {
   _FillPainter(this.painter, this.color, {this.glow = false});
   final void Function(Canvas canvas, Paint paint, Size size) painter;

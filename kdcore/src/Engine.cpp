@@ -55,6 +55,54 @@ static Str audioFormatName (AudioFormat f)
          : "mp3";
 }
 
+// 136 -> «2:16» — хронометраж в человеческих сообщениях.
+static Str fmtSeconds (int total)
+{
+    if (total <= 0) return "0:00";
+    char buf[16] = {};
+    std::snprintf (buf, sizeof (buf), "%d:%02d", total / 60, total % 60);
+    return buf;
+}
+
+// «0:00», «1:07», «2:02:03», «90» -> секунды. Не время — -1: в ХРОНе
+// не должно быть ничего, кроме таймкодов и секунд.
+int Engine::parseTimecode (const Str& s)
+{
+    auto t = kd::trim (s);
+    if (t.empty()) return -1;
+    int total = 0;
+    for (const auto& part : kd::splitTokens (t, ":"))
+    {
+        if (part.empty() || ! kd::containsOnly (part, "0123456789")) return -1;
+        const int n = kd::getInt (part);
+        if (n < 0 || n > 359999) return -1;
+        total = total * 60 + n;
+    }
+    return total;
+}
+
+// Длительность локального файла через ffprobe (сек, дробью). Не вышло — 0.
+double Engine::probeFileDuration (const fs::path& file) const
+{
+    const auto tools = findToolsDir();
+    if (tools.empty() || ! kd::isFile (file)) return 0.0;
+    kd::ChildProcess probe;
+    if (! probe.start ({ kd::pathStr (tools / "ffprobe"), "-v", "quiet",
+                         "-show_entries", "format=duration",
+                         "-of", "csv=p=0", kd::pathStr (file) }))
+        return 0.0;
+    Str out;
+    char chunk[1024];
+    for (;;)
+    {
+        const int n = probe.read (chunk, (int) sizeof (chunk), 20);
+        if (n > 0) out.append (chunk, (size_t) n);
+        else if (n == 0) break;
+    }
+    probe.waitExitCode();
+    return kd::getDouble (kd::trim (out));
+}
+
 // ---- JSON-хелперы (в оригинале — juce::var) ----
 
 // Текст свойства как он есть: строкой; числа разворачиваются обратно.
@@ -151,6 +199,22 @@ static Str runsText (const json& d)
     return jtext (d, "simpleText");
 }
 
+// Обложка из результата поиска: поле thumbnail, последняя из thumbnails[]
+// или artwork_url (SoundCloud) — что первое встретится.
+static Str searchThumb (const json& e)
+{
+    auto t = jtext (e, "thumbnail");
+    if (! t.empty()) return t;
+    const auto arr = dig (e, "thumbnails");
+    if (arr.is_array() && ! arr.empty())
+    {
+        const auto& last = arr[arr.size() - 1];
+        if (last.is_object()) t = jtext (last, "url");
+    }
+    if (t.empty()) t = jtext (e, "artwork_url");
+    return t;
+}
+
 // ---- конструирование ----
 
 Engine::Engine()
@@ -232,6 +296,7 @@ void Engine::enqueueBatch (const StrVec& links, const Options& options)
             item->playlistLimit = options.playlistLimit;
             item->container = options.container;
             item->imageFormat = options.imageFormat;
+            item->durationHint = options.durationHint;
             item->dest = options.dest;
             item->batchIndex = total > 1 ? ++index : 0;
             item->batchTotal = total;
@@ -804,9 +869,22 @@ void Engine::startNative (const QueueItemPtr& item)
         else if (item->service == Detector::Service::instagram
                  || item->service == Detector::Service::pinterest)
         {
-            // По ссылке может лежать картинка — просить у неё высоту бессмысленно.
+            // По ссылке может лежать картинка — просить у неё высоту
+            // бессмысленно. Фильтров высоты нет: качаем максимум источника.
             args.push_back ("-f");
             args.push_back ("bestvideo*+bestaudio/best");
+            args.push_back ("--merge-output-format");
+            args.push_back (item->container.empty() ? Str ("mp4") : item->container);
+        }
+        else if (item->service == Detector::Service::tiktok)
+        {
+            // У TikTok прогрессивные потоки (видео+звук одним файлом) —
+            // берём лучший целиком, без принудительного понижения;
+            // раздельные потоки — запасной путь.
+            args.push_back ("-f");
+            args.push_back ("b/bv*+ba");
+            args.push_back ("--merge-output-format");
+            args.push_back (item->container.empty() ? Str ("mp4") : item->container);
         }
         else if (item->maxHeight > 0)
         {
@@ -865,9 +943,33 @@ void Engine::startNative (const QueueItemPtr& item)
         // файл — у подборки отрезок портил бы каждую серию.
         if (! item->sections.empty() && ! item->wholePlaylist)
         {
-            args.push_back ("--download-sections");
-            args.push_back ("*" + item->sections);
-            args.push_back ("--force-keyframes-at-cuts");
+            // Проверка отрезка до запуска: «0:00–0:10» — это секунды, без
+            // смешивания миллисекунд и таймстампов.
+            const auto parts = kd::splitTokens (item->sections, "-");
+            const int fromSec = parts.size() > 0 ? parseTimecode (parts[0]) : -1;
+            const int toSec = parts.size() > 1 ? parseTimecode (parts[1]) : -1;
+            if (fromSec < 0 || toSec < 0 || toSec <= fromSec)
+            {
+                finish (item, QueueItem::State::failed,
+                    "Непонятный отрезок — проверьте поля ОТ и ДО");
+                return;
+            }
+            if (item->durationHint > 0 && toSec > item->durationHint + 1)
+            {
+                finish (item, QueueItem::State::failed,
+                    "Выбранный отрезок длиннее записи (ХРОНОМЕТРАЖ · "
+                    + fmtSeconds (item->durationHint) + ")");
+                return;
+            }
+            // Pinterest отдаёт HLS со сдвинутыми внутренними метками —
+            // секции yt-dlp режет мимо (0:00–0:10 превращались в ~2 сек).
+            // Такой источник качаем целиком, режем ffmpeg'ом после.
+            if (item->service != Detector::Service::pinterest)
+            {
+                args.push_back ("--download-sections");
+                args.push_back ("*" + item->sections);
+                args.push_back ("--force-keyframes-at-cuts");
+            }
         }
 
         args.push_back (item->link);
@@ -883,6 +985,82 @@ void Engine::startNative (const QueueItemPtr& item)
 
         if (code == 0 || ! item->files.empty())
         {
+            // Pinterest: точная обрезка ffmpeg'ом по скачанному целиком
+            // файлу (см. комментарий выше про HLS и метки времени).
+            if (! item->sections.empty() && ! item->wholePlaylist
+                && item->service == Detector::Service::pinterest
+                && ! item->files.empty())
+            {
+                const auto parts = kd::splitTokens (item->sections, "-");
+                const int fromSec = parts.size() > 0 ? parseTimecode (parts[0]) : -1;
+                const int toSec = parts.size() > 1 ? parseTimecode (parts[1]) : -1;
+                const auto tools = findToolsDir();
+                if (fromSec >= 0 && toSec > fromSec && ! tools.empty())
+                {
+                    setStage (item, "Режу отрезок…");
+                    const auto src = fs::u8path (item->files.front());
+                    auto cut = src; cut.replace_extension (Str (".cut.mp4"));
+                    kd::ChildProcess ff;
+                    const bool ran = ff.start ({ kd::pathStr (tools / "ffmpeg"),
+                        "-y", "-v", "quiet", "-i", kd::pathStr (src),
+                        "-ss", std::to_string (fromSec),
+                        "-to", std::to_string (toSec),
+                        "-c:v", "libx264", "-preset", "veryfast",
+                        "-c:a", "aac", "-movflags", "+faststart",
+                        kd::pathStr (cut) });
+                    const int ffCode = ran ? ff.waitExitCode() : -1;
+                    std::error_code ec;
+                    const double got = (ran && ffCode == 0 && kd::isFile (cut))
+                        ? probeFileDuration (cut) : 0.0;
+                    const double want = (double) (toSec - fromSec);
+                    if (got >= want * 0.6)
+                    {
+                        fs::remove (src, ec);
+                        fs::rename (cut, src, ec);
+                        if (ec) fs::copy_file (cut, src,
+                            fs::copy_options::overwrite_existing, ec);
+                        fs::remove (cut, ec);
+                        item->files.clear();
+                        item->files.push_back (kd::pathStr (src));
+                    }
+                    else
+                    {
+                        fs::remove (cut, ec);
+                        fs::remove (src, ec);
+                        item->files.clear();
+                        finish (item, QueueItem::State::failed,
+                            "Обрезка не удалась: источник отдал короткий поток. "
+                            "Попробуйте скачать без ХРОНа");
+                        return;
+                    }
+                }
+            }
+            // Проверка отрезка после скачивания: итоговый файл должен быть
+            // примерно длиной с выбранный диапазон. Короткая огрызка —
+            // failed с причиной; битый файл не оставляем.
+            if (! item->sections.empty() && ! item->wholePlaylist
+                && item->service != Detector::Service::pinterest
+                && ! item->files.empty())
+            {
+                const auto parts = kd::splitTokens (item->sections, "-");
+                const int fromSec = parts.size() > 0 ? parseTimecode (parts[0]) : -1;
+                const int toSec = parts.size() > 1 ? parseTimecode (parts[1]) : -1;
+                const double want = fromSec >= 0 && toSec > fromSec
+                    ? (double) (toSec - fromSec) : 0.0;
+                const double got = probeFileDuration (fs::u8path (item->files.front()));
+                if (want > 0 && got > 0 && got < want * 0.6)
+                {
+                    std::error_code ec;
+                    fs::remove (fs::u8path (item->files.front()), ec);
+                    item->files.clear();
+                    finish (item, QueueItem::State::failed,
+                        "Обрезка не удалась: получился отрезок "
+                        + fmtSeconds ((int) (got + 0.5)) + " вместо "
+                        + fmtSeconds ((int) (want + 0.5))
+                        + " — источник отдаёт короткий поток, попробуйте без ХРОНа");
+                    return;
+                }
+            }
             const bool already = item->files.empty() && item->skipped > 0;
             Str stage = already ? Str ("Уже скачано") : Str ("Готово");
             if (item->files.size() > 1)
@@ -1076,31 +1254,54 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
     // 1) Точное сопоставление: плоский поиск отдаёт кандидатов с названиями
     //    и длительностями — сверяем с тем, что записано в ссылке каталога.
     //    Так «sped up»-версии и каверы не обходят настоящий трек.
+    //    Сначала ищем анонимно; если выдача пуста — тем же запросом через
+    //    вход из браузера пользователя: часть названий YouTube фильтрует
+    //    без входа, и тогда точного кандидата просто не видно.
     StrVec verified;
     {
-        Str out;
-        int code = -1;
-        StrVec args { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
-                      "ytsearch5:" + query };
-        if (captureOut (args, out, &code) && code == 0 && ! out.empty())
+        StrVec searchAttempts { Str() };
+        for (const auto& b : item->cookieChain)
+            if (! kd::containsVec (searchAttempts, b))
+                searchAttempts.push_back (b);
+
+        json parsed;
+        const json* entries = nullptr;
+        for (const auto& browser : searchAttempts)
         {
-            const auto data = json::parse (out, nullptr, false);
-            const auto entries = data.is_object() ? data.find ("entries") : data.end();
-            if (entries != data.end() && entries->is_array())
-                for (const auto& e : *entries)
-                {
-                    if (! e.is_object()) continue;
-                    auto url = jtext (e, "webpage_url");
-                    if (url.empty()) url = jtext (e, "url");
-                    if (url.empty()) continue;
-                    if (candidateMatches (jtext (e, "title"), (int) jnum (e, "duration"),
-                                          artist, track, expectedDuration, strictMatch))
-                    {
-                        verified.push_back (url);
-                        if (verified.size() >= 3) break;
-                    }
-                }
+            StrVec args { "--ignore-config", "--no-warnings", "--flat-playlist", "-J" };
+            if (! browser.empty())
+            {
+                args.push_back ("--cookies-from-browser");
+                args.push_back (browser);
+            }
+            args.push_back ("ytsearch5:" + query);
+            Str out;
+            int code = -1;
+            if (! captureOut (args, out, &code) || code != 0 || out.empty()) continue;
+            parsed = json::parse (out, nullptr, false);
+            if (parsed.is_object() && parsed.contains ("entries")
+                && parsed["entries"].is_array() && ! parsed["entries"].empty())
+            {
+                entries = &parsed["entries"];
+                break;
+            }
         }
+
+        if (entries != nullptr)
+            for (const auto& e : *entries)
+            {
+                if (! e.is_object()) continue;
+                auto url = jtext (e, "webpage_url");
+                if (url.empty()) url = jtext (e, "url");
+                if (url.empty()) continue;
+                if (candidateMatches (jtext (e, "title"), (int) jnum (e, "duration"),
+                                      jtext (e, "uploader"),
+                                      artist, track, expectedDuration, strictMatch))
+                {
+                    verified.push_back (url);
+                    if (verified.size() >= 3) break;
+                }
+            }
     }
 
     for (const auto& url : verified)
@@ -1282,6 +1483,7 @@ StrVec Engine::nameTokens (const Str& raw)
 }
 
 bool Engine::candidateMatches (const Str& foundTitle, const int foundDur,
+                               const Str& foundUploader,
                                const Str& artist, const Str& track,
                                const int expectedDur, const bool strict)
 {
@@ -1297,13 +1499,15 @@ bool Engine::candidateMatches (const Str& foundTitle, const int foundDur,
     const bool titleOk = hit * 10 >= (int) trackToks.size() * 6;
     if (! titleOk) return false;
 
-    // Исполнитель: хоть один значимый токен в названии ролика.
+    // Исполнитель: в названии ролика или в названии канала (у выдачи
+    // YouTube название часто без исполнителя, канал — с ним).
     bool artistOk = true;
     if (! artistToks.empty())
     {
+        const auto hay = title + " " + kd::lower (foundUploader);
         artistOk = false;
         for (const auto& t : artistToks)
-            if (kd::contains (title, t)) { artistOk = true; break; }
+            if (kd::contains (hay, t)) { artistOk = true; break; }
     }
 
     // Длительность: главный свидетель против «sped up» и каверов.
@@ -1747,8 +1951,12 @@ Probe Engine::probe (const Str& text, const Str& searchSite) const
 
     const auto probe = buildAndCache (text, searchSite);
     // Кэшируем только удачные разборы: сетевая неудача (например, VPN
-    // мигнул) не должна пять минут выдавать «ничего не нашлось».
-    if (probe.ok)
+    // мигнул) не должна пять минут выдавать «ничего не нашлось». Разборы
+    // без хронометража тоже не кэшимся — карточка переспросит и догрузит
+    // длительность без перезапуска.
+    const bool incomplete = probe.ok && probe.duration <= 0
+        && ! probe.isSearch && ! probe.isPhoto && ! probe.isPlaylist;
+    if (probe.ok && ! incomplete)
     {
         const std::lock_guard<std::mutex> lock (probeCacheMutex);
         if (probeCache.size() > 48) probeCache.clear(); // грубая гигиена
@@ -1902,6 +2110,15 @@ Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
                 count = count > (int) entries->size() ? count : (int) entries->size();
             p.count = count > 1 ? count : 1;
             if (p.uploader.empty()) p.uploader = "подборка";
+            // Обложка подборки: thumbnails[] или первая попавшаяся у роликов.
+            if (p.thumbnail.empty()) p.thumbnail = searchThumb (data);
+            if (p.thumbnail.empty() && entries != data.end() && entries->is_array())
+                for (const auto& e : *entries)
+                    if (e.is_object())
+                    {
+                        p.thumbnail = searchThumb (e);
+                        if (! p.thumbnail.empty()) break;
+                    }
             // Общий хронометраж плейлиста — сумма длительностей роликов.
             if (entries != data.end() && entries->is_array())
                 for (const auto& e : *entries)
@@ -1919,9 +2136,16 @@ Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
                     const int h = kd::getInt (jtext (f, "height"));
                     if (h > 0 && std::find (p.heights.begin(), p.heights.end(), h) == p.heights.end())
                         p.heights.push_back (h);
+                    // Верхнеуровневая длительность бывает пуста (Instagram) —
+                    // добираем из любого формата.
+                    if (p.duration <= 0)
+                        p.duration = (int) jnum (f, "duration");
                 }
             std::sort (p.heights.begin(), p.heights.end(), std::greater<int>());
         }
+        // TikTok/Instagram — единый простой вид: MP4/MP3 · МАКСИМАЛЬНОЕ.
+        p.shortVideo = service == Detector::Service::tiktok
+                    || service == Detector::Service::instagram;
         return p;
     };
     auto result = build();
@@ -1995,6 +2219,7 @@ Probe Engine::searchAppleMusicList (const Str& query) const
         sr.url = jtext (r, "trackViewUrl");
         if (sr.url.empty()) sr.url = jtext (r, "collectionViewUrl");
         sr.duration = kd::getInt (jtext (r, "trackTimeMillis")) / 1000;
+        sr.service = Detector::Service::appleMusic;
         if (sr.url.empty()) continue;
         p.results.push_back (sr);
     }
@@ -2061,6 +2286,7 @@ Probe Engine::searchSpotifyList (const Str& query) const
         sr.url = jtext (dig (t, "external_urls"), "spotify");
         if (sr.url.empty()) sr.url = jtext (t, "uri");
         sr.duration = (int) (jnum (t, "duration_ms") / 1000);
+        sr.service = Detector::Service::spotify;
         if (sr.url.empty()) continue;
         p.results.push_back (sr);
     }
@@ -2139,6 +2365,7 @@ Probe Engine::searchYandexList (const Str& query) const
             sr.title = jtext (t, "title");
             sr.uploader = artist;
             sr.duration = (int) (jnum (t, "durationMs") / 1000.0);
+            sr.service = Detector::Service::yandexMusic;
         }
         if (sr.title.empty()) sr.title = "Трек из Яндекс Музыки";
         p.results.push_back (sr);
@@ -2161,22 +2388,6 @@ Probe Engine::searchPinterest (const Str& query) const
     p.ok = false;
     p.error = "Pinterest закрыл автоматический поиск — вставьте ссылку на пин";
     return p;
-}
-
-// Обложка из результата поиска: поле thumbnail, последняя из thumbnails[]
-// или artwork_url (SoundCloud) — что первое встретится.
-static Str searchThumb (const json& e)
-{
-    auto t = jtext (e, "thumbnail");
-    if (! t.empty()) return t;
-    const auto arr = dig (e, "thumbnails");
-    if (arr.is_array() && ! arr.empty())
-    {
-        const auto& last = arr[arr.size() - 1];
-        if (last.is_object()) t = jtext (last, "url");
-    }
-    if (t.empty()) t = jtext (e, "artwork_url");
-    return t;
 }
 
 // DRM-запись: скачать нельзя, но карточку собираем из открытых данных —
@@ -2208,173 +2419,275 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
     Probe p;
     p.link = query;
     p.isSearch = true;
-    p.service = Detector::Service::youtube;
 
     const auto wantYoutube = site.empty() || site == "youtube";
     const auto wantSoundcloud = site.empty() || site == "soundcloud";
 
-    // YouTube: сначала разбор выдачи, затем запасной ytsearch.
-    const auto html = wantYoutube
-        ? fetch ("https://www.youtube.com/results?search_query="
-                 + kd::urlEscape (query))
-        : Str();
-    const Str marker = "var ytInitialData = ";
-    const int a = kd::indexOf (html, marker);
-    if (a >= 0)
+    // ---- YouTube: разбор выдачи, затем запасной ytsearch ----
+    Probe yt;
+    yt.link = query;
+    yt.isSearch = true;
+    yt.service = Detector::Service::youtube;
+    if (wantYoutube)
     {
-        const auto body = html.substr ((size_t) a + marker.size());
-        const int b = kd::indexOf (body, ";</script>");
-        if (b >= 0)
+        const auto html = fetch ("https://www.youtube.com/results?search_query="
+                                 + kd::urlEscape (query));
+        const Str marker = "var ytInitialData = ";
+        const int a = kd::indexOf (html, marker);
+        if (a >= 0)
         {
-            const auto data = json::parse (body.substr (0, (size_t) b), nullptr, false);
-
-            auto all = findAllVideoRenderers (data);
-            auto v = all.empty() ? json() : all.front();
-            if (v.is_object())
+            const auto body = html.substr ((size_t) a + marker.size());
+            const int b = kd::indexOf (body, ";</script>");
+            if (b >= 0)
             {
-                const auto id = jtext (v, "videoId");
-                int seconds = 0;
-                for (const auto& part : kd::splitTokens (runsText (v["lengthText"]), ":"))
-                    seconds = seconds * 60 + kd::getInt (part);
-
-                // Список результатов: все найденные videoRenderer (до 5).
-                for (const auto& item : all)
+                const auto data = json::parse (body.substr (0, (size_t) b), nullptr, false);
+                const auto all = findAllVideoRenderers (data);
+                if (! all.empty())
                 {
-                    const auto vid = jtext (item, "videoId");
-                    if (vid.empty()) continue;
-                    SearchResult sr;
-                    sr.title = runsText (item["title"]);
-                    if (sr.title.empty()) sr.title = query;
-                    sr.uploader = runsText (item["ownerText"]);
-                    sr.url = "https://www.youtube.com/watch?v=" + vid;
-                    int s2 = 0;
-                    for (const auto& part : kd::splitTokens (runsText (item["lengthText"]), ":"))
-                        s2 = s2 * 60 + kd::getInt (part);
-                    sr.duration = s2;
-                    p.results.push_back (sr);
-                    if (p.results.size() >= 5) break;
-                }
-                p.ok = true;
-                p.resolved = "https://www.youtube.com/watch?v=" + id;
-                p.title = runsText (v["title"]);
-                if (p.title.empty()) p.title = "Без названия";
-                p.uploader = runsText (v["ownerText"]);
-                p.duration = seconds;
-                const auto th = v.find ("thumbnail");
-                if (th != v.end() && th->is_object())
-                {
-                    const auto arr = th->find ("thumbnails");
-                    if (arr != th->end() && arr->is_array() && ! arr->empty())
+                    // Список результатов: все найденные videoRenderer (до 8).
+                    for (const auto& item : all)
                     {
-                        const auto& last = (*arr)[arr->size() - 1];
-                        if (last.is_object()) p.thumbnail = jtext (last, "url");
+                        const auto vid = jtext (item, "videoId");
+                        if (vid.empty()) continue;
+                        SearchResult sr;
+                        sr.title = runsText (item["title"]);
+                        if (sr.title.empty()) sr.title = query;
+                        sr.uploader = runsText (item["ownerText"]);
+                        sr.url = "https://www.youtube.com/watch?v=" + vid;
+                        int s2 = 0;
+                        for (const auto& part : kd::splitTokens (runsText (item["lengthText"]), ":"))
+                            s2 = s2 * 60 + kd::getInt (part);
+                        sr.duration = s2;
+                        sr.service = Detector::Service::youtube;
+                        yt.results.push_back (sr);
+                        if (yt.results.size() >= 8) break;
+                    }
+                    if (! yt.results.empty())
+                    {
+                        const auto& v = all.front();
+                        yt.ok = true;
+                        yt.resolved = "https://www.youtube.com/watch?v=" + jtext (v, "videoId");
+                        yt.title = runsText (v["title"]);
+                        if (yt.title.empty()) yt.title = "Без названия";
+                        yt.uploader = runsText (v["ownerText"]);
+                        int seconds = 0;
+                        for (const auto& part : kd::splitTokens (runsText (v["lengthText"]), ":"))
+                            seconds = seconds * 60 + kd::getInt (part);
+                        yt.duration = seconds;
+                        const auto th = v.find ("thumbnail");
+                        if (th != v.end() && th->is_object())
+                        {
+                            const auto arr = th->find ("thumbnails");
+                            if (arr != th->end() && arr->is_array() && ! arr->empty())
+                            {
+                                const auto& last = (*arr)[arr->size() - 1];
+                                if (last.is_object()) yt.thumbnail = jtext (last, "url");
+                            }
+                        }
                     }
                 }
-                return p;
+            }
+        }
+
+        // Запасной путь: поиск через сам yt-dlp.
+        if (! yt.ok)
+        {
+            int code = -1;
+            Str out;
+            StrVec args { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
+                          "ytsearch8:" + query };
+            if (captureOut (args, out, &code) && code == 0 && ! out.empty())
+            {
+                const auto data = json::parse (out, nullptr, false);
+                if (! data.is_discarded())
+                {
+                    const auto entries = data.find ("entries");
+                    if (entries != data.end() && entries->is_array())
+                    {
+                        for (const auto& e : *entries)
+                        {
+                            if (! e.is_object()) continue;
+                            // В flat-выдаче YouTube ссылка лежит в url, не в webpage_url.
+                            auto url = jtext (e, "webpage_url");
+                            if (url.empty()) url = jtext (e, "url");
+                            if (url.empty()) continue;
+                            SearchResult r;
+                            r.title = jtext (e, "title", query);
+                            r.uploader = jtext (e, "uploader");
+                            r.url = url;
+                            r.duration = (int) jnum (e, "duration");
+                            r.service = Detector::Service::youtube;
+                            if (yt.results.empty()) yt.thumbnail = searchThumb (e);
+                            yt.results.push_back (r);
+                            if (yt.results.size() >= 8) break;
+                        }
+                        if (! yt.results.empty())
+                        {
+                            yt.ok = true;
+                            yt.resolved = yt.results.front().url;
+                            yt.title = yt.results.front().title;
+                            yt.duration = yt.results.front().duration;
+                        }
+                    }
+                }
             }
         }
     }
 
-    // Запасной путь: поиск через сам yt-dlp — сразу 5 результатов для списка.
-    int code = -1;
-    Str out;
-    StrVec args { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
-                  "ytsearch5:" + query };
-    if (wantYoutube && captureOut (args, out, &code) && code == 0 && ! out.empty())
+    // Выбранный каталог: единственный источник, как попросили.
+    if (! site.empty() && site != "youtube" && site != "soundcloud")
     {
-        const auto data = json::parse (out, nullptr, false);
-        if (! data.is_discarded())
+        if (site == "apple")          p = searchAppleMusicList (query);
+        else if (site == "spotify")   p = searchSpotifyList (query);
+        else if (site == "yandex")    p = searchYandexList (query);
+        else if (site == "pinterest") p = searchPinterest (query);
+        else                          p.error = "Такой источник поиска не поддерживается";
+        if (! p.ok && p.error.empty())
+            p.error = "По этому названию в выбранном каталоге ничего не нашлось";
+        return p;
+    }
+
+    // АВТО: агрегатор до 20 результатов из каталогов, где текстовый поиск
+    // и скачивание реально работают. Кто недоступен из сети — просто без
+    // своих строк, поиск не разваливается.
+    if (site.empty())
+    {
+        p.service = Detector::Service::youtube;
+        size_t total = 0;
+        auto append = [&] (const Probe& src, size_t cap)
         {
-            const auto entries = data.find ("entries");
-            if (entries != data.end() && entries->is_array())
+            size_t added = 0;
+            for (const auto& r : src.results)
             {
+                if (added >= cap || total >= 20) break;
+                p.results.push_back (r);
+                ++added;
+                ++total;
+            }
+        };
+
+        if (yt.ok) append (yt, 8);
+
+        // SoundCloud: быстрая выдача даёт кандидатов; скачиваемость
+        // конкретного трека проверяется при выборе результата.
+        if (wantSoundcloud)
+        {
+            Probe sc;
+            sc.link = query;
+            sc.isSearch = true;
+            sc.service = Detector::Service::soundcloud;
+            Str scOut;
+            StrVec scArgs { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
+                            "scsearch5:" + query };
+            int scCode = -1;
+            if (captureOut (scArgs, scOut, &scCode) && scCode == 0 && ! scOut.empty())
+            {
+                const auto data = json::parse (scOut, nullptr, false);
+                const auto entries = data.is_object() ? data.find ("entries") : data.end();
+                if (entries != data.end() && entries->is_array())
+                    for (const auto& e : *entries)
+                    {
+                        if (! e.is_object()) continue;
+                        const auto url = jtext (e, "webpage_url");
+                        if (url.empty()) continue;
+                        SearchResult r;
+                        r.title = jtext (e, "title", query);
+                        r.uploader = jtext (e, "uploader");
+                        r.url = url;
+                        r.duration = (int) jnum (e, "duration");
+                        r.service = Detector::Service::soundcloud;
+                        sc.results.push_back (r);
+                        if (sc.results.size() >= 5) break;
+                    }
+            }
+            if (! sc.results.empty()) append (sc, 5);
+        }
+
+        // Apple Music: официальный публичный iTunes Search API.
+        {
+            const auto am = searchAppleMusicList (query);
+            if (am.ok) append (am, 4);
+        }
+        // Spotify: анонимный токен веб-плеера; из сети без доступа — без строк.
+        {
+            const auto sp = searchSpotifyList (query);
+            if (sp.ok) append (sp, 4);
+        }
+        // Яндекс Музыка: страница выдачи + канонические данные по ID.
+        {
+            const auto ya = searchYandexList (query);
+            if (ya.ok) append (ya, 4);
+        }
+
+        if (p.results.empty())
+        {
+            p.ok = false;
+            p.error = "По этому названию ничего не нашлось. Часть каталогов могла "
+                      "быть недоступна из сети — попробуйте ещё раз";
+            return p;
+        }
+        p.ok = true;
+        const auto& first = p.results.front();
+        p.resolved = first.url;
+        p.title = first.title;
+        p.duration = first.duration;
+        p.service = first.service;
+        if (p.service == Detector::Service::youtube)
+        {
+            const auto vid = youtubeVideoId (p.resolved);
+            if (! vid.empty())
+                p.thumbnail = "https://i.ytimg.com/vi/" + vid + "/hqdefault.jpg";
+        }
+        return p;
+    }
+
+    // Явный youtube/soundcloud (один источник).
+    if (yt.ok)
+    {
+        p = yt;
+    }
+    else if (site == "soundcloud")
+    {
+        Probe sc;
+        sc.link = query;
+        sc.isSearch = true;
+        sc.service = Detector::Service::soundcloud;
+        Str scOut;
+        StrVec scArgs { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
+                        "scsearch5:" + query };
+        int scCode = -1;
+        if (captureOut (scArgs, scOut, &scCode) && scCode == 0 && ! scOut.empty())
+        {
+            const auto data = json::parse (scOut, nullptr, false);
+            const auto entries = data.is_object() ? data.find ("entries") : data.end();
+            if (entries != data.end() && entries->is_array())
                 for (const auto& e : *entries)
                 {
                     if (! e.is_object()) continue;
-                    // В flat-выдаче YouTube ссылка лежит в url, не в webpage_url.
-                    auto url = jtext (e, "webpage_url");
-                    if (url.empty()) url = jtext (e, "url");
+                    const auto url = jtext (e, "webpage_url");
                     if (url.empty()) continue;
                     SearchResult r;
                     r.title = jtext (e, "title", query);
                     r.uploader = jtext (e, "uploader");
                     r.url = url;
                     r.duration = (int) jnum (e, "duration");
-                    p.results.push_back (r);
-                    if (p.results.size() >= 5) break;
+                    r.service = Detector::Service::soundcloud;
+                    sc.results.push_back (r);
+                    if (sc.results.size() >= 5) break;
                 }
-                if (! p.results.empty())
-                {
-                    p.ok = true;
-                    p.resolved = p.results.front().url;
-                    p.title = p.results.front().title;
-                    p.duration = p.results.front().duration;
-                    const auto& e0 = (*entries)[0];
-                    if (e0.is_object()) p.thumbnail = searchThumb (e0);
-                }
-            }
-        }
-    }
-
-    // Выбранный каталог: Apple Music / Spotify / Яндекс Музыка / Pinterest.
-    if (! p.ok && ! site.empty() && site != "youtube" && site != "soundcloud")
-    {
-        if (site == "apple")        p = searchAppleMusicList (query);
-        else if (site == "spotify") p = searchSpotifyList (query);
-        else if (site == "yandex")  p = searchYandexList (query);
-        else if (site == "pinterest") p = searchPinterest (query);
-        return p;
-    }
-
-    // На YouTube пусто — SoundCloud: там находятся ремиксы и малоизвестное.
-    // Быстрая выдача даёт 5 кандидатов; каждый первый проверяем на
-    // скачиваемость (полный -J): защищённые/закрытые треки в результаты
-    // не попадают — человек видит только то, что реально скачается.
-    if (! p.ok && wantSoundcloud)
-    {
-        // Выдача: 5 кандидатов плоско; скачиваемость конкретного трека
-        // проверяем при выборе результата (полный -J по ссылке).
-        Str sc;
-        StrVec scArgs { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
-                        "scsearch5:" + query };
-        if (captureOut (scArgs, sc, &code) && code == 0 && ! sc.empty())
-        {
-            const auto data = json::parse (sc, nullptr, false);
-            if (! data.is_discarded())
+            if (! sc.results.empty())
             {
-                const auto entries = data.find ("entries");
-                if (entries != data.end() && entries->is_array())
-                {
-                    for (const auto& e : *entries)
-                    {
-                        if (! e.is_object()) continue;
-                        const auto url = jtext (e, "webpage_url");
-                        if (url.empty()) continue;
-                    SearchResult r;
-                    r.title = jtext (e, "title", query);
-                    r.uploader = jtext (e, "uploader");
-                    r.url = url;
-                    r.duration = (int) jnum (e, "duration");
-                    if (p.results.empty()) p.thumbnail = searchThumb (e);
-                    p.results.push_back (r);
-                    if (p.results.size() >= 5) break;
-                }
-                if (! p.results.empty())
-                {
-                    const auto& e = p.results.front();
-                    p.ok = true;
-                    p.service = Detector::Service::soundcloud;
-                    p.resolved = e.url;
-                    p.title = e.title;
-                    p.duration = e.duration;
-                }
-                }
+                sc.ok = true;
+                sc.resolved = sc.results.front().url;
+                sc.title = sc.results.front().title;
+                sc.duration = sc.results.front().duration;
             }
         }
+        p = sc;
     }
 
     if (! p.ok && p.error.empty())
-        p.error = "По этому названию ничего не нашлось ни на YouTube, ни на SoundCloud. Попробуйте добавить исполнителя";
+        p.error = "По этому названию ничего не нашлось. Попробуйте добавить исполнителя";
     return p;
 }
 

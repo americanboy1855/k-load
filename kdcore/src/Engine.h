@@ -74,6 +74,10 @@ struct QueueItem
     Str imageFormat;
     /// Pinterest-фотография: качаем напрямую, без yt-dlp.
     bool isPhoto = false;
+    /// Длительность записи из разбора (сек) — для проверки ХРОНа.
+    int durationHint = 0;
+    /// Итоговый файл короче ожидаемого отрезка — скачивание не засчитано.
+    Str sectionsWarning;
 
     std::shared_ptr<Flags> flags = std::make_shared<Flags>();
 
@@ -90,6 +94,7 @@ struct SearchResult
     Str uploader;                          // исполнитель/канал — отдельной строкой
     Str url;
     int duration = 0;
+    Detector::Service service = Detector::Service::unknown; // подпись источника в выдаче
 };
 
 /// Что увидели по ссылке до скачивания — содержимое карточки на экране.
@@ -109,7 +114,8 @@ struct Probe
     bool isPhoto = false;                  // Pinterest-фотография
     bool isSearch = false;                 // искали по названию
     bool drm = false;                      // запись защищена DRM — скачать нельзя
-    std::vector<SearchResult> results;     // варианты текстового поиска (до 5)
+    bool shortVideo = false;               // TikTok/Instagram: один MP4/MP3 без списков качества
+    std::vector<SearchResult> results;     // варианты текстового поиска (до 20)
 };
 
 /// Один-единственный разбор ссылки: пока человек допечатывает, старые
@@ -165,6 +171,8 @@ public:
         Str container;
         /// Формат изображения для Pinterest: jpg/png.
         Str imageFormat;
+        /// Длительность записи из разбора (сек) — проверка ХРОНа до запуска.
+        int durationHint = 0;
     };
 
     /// Все изменения очереди. Приезжает из рабочих потоков — интерфейсу
@@ -268,8 +276,10 @@ private:
     Probe searchYandexList (const Str& query) const;
 
     /// Сверка найденного на YouTube с тем, что записано в ссылке каталога:
-    /// значимые токены названия, исполнитель и длительность.
+    /// значимые токены названия, исполнитель (в названии или канале) и
+    /// длительность.
     static bool candidateMatches (const Str& foundTitle, int foundDur,
+                                  const Str& foundUploader,
                                   const Str& artist, const Str& track,
                                   int expectedDur, bool strict);
 
@@ -290,6 +300,11 @@ private:
 
     // ---- аргументы yt-dlp ----
     StrVec baseArgs (const fs::path& dest, const Str& cookie) const;
+
+    /// «0:00», «1:07», «90» -> секунды; не время — -1.
+    static int parseTimecode (const Str& s);
+    /// Длительность локального файла через ffprobe; не вышло — 0.
+    double probeFileDuration (const fs::path& file) const;
 
     mutable std::mutex mutex;
     std::vector<QueueItemPtr> items;   // новые сверху; работаем снизу (по порядку)

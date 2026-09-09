@@ -194,6 +194,8 @@ static Engine::Options parseOptions (const char* options_json)
         o.sections = data["sections"].get<std::string>();
     if (data.contains ("playlistLimit") && data["playlistLimit"].is_number_integer())
         o.playlistLimit = data["playlistLimit"].get<int>();
+    if (data.contains ("durationHint") && data["durationHint"].is_number_integer())
+        o.durationHint = data["durationHint"].get<int>();
     return o;
 }
 
@@ -222,6 +224,7 @@ static json probeToJson (const Probe& p, const Str& text)
         { "isPhoto", p.isPhoto },
         { "isSearch", p.isSearch },
         { "drm", p.drm },
+        { "shortVideo", p.shortVideo },
         { "results", [&]
           {
               json arr = json::array();
@@ -229,7 +232,8 @@ static json probeToJson (const Probe& p, const Str& text)
                   arr.push_back ({ { "title", r.title },
                                    { "uploader", r.uploader },
                                    { "url", r.url },
-                                   { "duration", r.duration } });
+                                   { "duration", r.duration },
+                                   { "service", (int) r.service } });
               return arr;
           }() }
     };

@@ -228,7 +228,26 @@ class KdProbeEvent extends KdEvent {
     for (final h in (json['heights'] ?? []) as List) (h as num).toInt(),
   ];
   bool get drm => json['drm'] == true;
+  bool get shortVideo => json['shortVideo'] == true;
   int get service => (json['service'] ?? 0) as int;
+}
+
+/// Подпись источника в строке результатов поиска.
+String serviceLabel(int code) {
+  switch (code) {
+    case 0: return 'YOUTUBE';
+    case 1: return 'YT MUSIC';
+    case 2: return 'INSTAGRAM';
+    case 3: return 'TIKTOK';
+    case 4: return 'PINTEREST';
+    case 5: return 'ВКОНТАКТЕ';
+    case 6: return 'SPOTIFY';
+    case 7: return 'APPLE MUSIC';
+    case 8: return 'ЯНДЕКС МУЗЫКА';
+    case 9: return 'ВК МУЗЫКА';
+    case 10: return 'SOUNDCLOUD';
+    default: return 'САЙТ';
+  }
 }
 
 /// Снимок задания очереди из kd_snapshot.
@@ -312,7 +331,7 @@ class KdCore {
       {String? dest, bool audio = false, String quality = 'best',
        String audioFormat = 'mp3', int wholePlaylist = -1, String? nameOverride,
        String? sections, int playlistLimit = 0, String container = 'mp4',
-       String imageFormat = 'jpg'}) {
+       String imageFormat = 'jpg', int durationHint = 0}) {
     final linksJson = jsonEncode(links).toNativeUtf8();
     final opts = jsonEncode({
       if (dest != null) 'dest': dest,
@@ -325,6 +344,7 @@ class KdCore {
       if (playlistLimit > 0) 'playlistLimit': playlistLimit,
       'container': container,
       'imageFormat': imageFormat,
+      if (durationHint > 0) 'durationHint': durationHint,
     }).toNativeUtf8();
     final n = _b._enqueueBatch(_engine, linksJson, opts);
     calloc
@@ -393,7 +413,6 @@ class KdCore {
   void remove(int id) => _b._remove(_engine, id);
   void clearFinished() => _b._clearFinished(_engine);
   int vpnState() => _b._vpnState(_engine);
-
   Map<String, dynamic> defaultDest() =>
       jsonDecode(_b._take(_b._defaultDest(_engine))) as Map<String, dynamic>;
 
