@@ -227,6 +227,7 @@ static json probeToJson (const Probe& p, const Str& text)
               json arr = json::array();
               for (const auto& r : p.results)
                   arr.push_back ({ { "title", r.title },
+                                   { "uploader", r.uploader },
                                    { "url", r.url },
                                    { "duration", r.duration } });
               return arr;
@@ -286,6 +287,13 @@ void kd_probe_async_source (kd_engine* e, const char* text, const char* source)
     const Str src (source == nullptr ? "" : source);
     e->engine->probeAsync (t, [e, t] (const Probe& p)
         { postToPort (e, probeToJson (p, t).dump()); }, src);
+}
+
+char* kd_thumb_path (kd_engine* e, const char* url)
+{
+    (void) e; // превью живут в общем кэше ядра, движок не нужен
+    if (url == nullptr || url[0] == '\0') return dupString ("");
+    return dupString (Engine::cachedThumbnail (url, 8000));
 }
 
 int kd_vpn_state (kd_engine* e)

@@ -87,6 +87,7 @@ using QueueItemPtr = std::shared_ptr<QueueItem>;
 struct SearchResult
 {
     Str title;
+    Str uploader;                          // исполнитель/канал — отдельной строкой
     Str url;
     int duration = 0;
 };
@@ -208,6 +209,12 @@ public:
     /// Журнал движка: без него жалоба «не качает» не диагностируема.
     static void engineLog (const Str& line);
 
+    // ---- превью: общий дисковый кэш (кэшируется и метаданными ссылки) ----
+    /// Локальный файл превью; при первом вызове скачивает (блокирующе).
+    static Str cachedThumbnail (const Str& url, int timeoutMs = 8000);
+    /// Фоновая подкачка превью параллельно с полным разбором ссылки.
+    static void prefetchThumbnail (const Str& url);
+
     /// Где лежат yt-dlp и ffmpeg (App Support, бандл или дерево репозитория).
     static fs::path findToolsDir();
 
@@ -223,7 +230,8 @@ private:
     void startResolve (const QueueItemPtr& item);
     void downloadTrack (const QueueItemPtr& item, int index,
                         Detector::Service searchSite,
-                        const Str& artist, const Str& track);
+                        const Str& artist, const Str& track,
+                        int expectedDuration = 0, bool strictMatch = false);
     void startPhotoFallback (const QueueItemPtr& item);
     QueueItemPtr findItem (int id);
 
@@ -243,8 +251,14 @@ private:
     // ---- открытые данные сервисов ----
     static Str fetch (const Str& url, int timeoutMs = 15000);
     static Str between (const Str& text, const Str& start, const Str& end);
-    StrVec resolveSpotify (const Str& link, Str& album) const;
-    StrVec resolveAppleMusic (const Str& link, Str& album) const;
+    StrVec resolveSpotify (const Str& link, Str& album,
+                           int* durationSec = nullptr, Str* thumbnail = nullptr) const;
+    StrVec resolveAppleMusic (const Str& link, Str& album,
+                              int* durationSec = nullptr, Str* thumbnail = nullptr) const;
+    /// Яндекс Музыка по каноническому ID трека из ссылки: открытый API
+    /// отдаёт точное название, исполнителя и длительность.
+    StrVec resolveYandexMusic (const Str& link, Str& album,
+                               int* durationSec = nullptr, Str* thumbnail = nullptr) const;
     StrVec resolveOpenGraph (const Str& link) const;
     bool downloadPinterestPhoto (const QueueItemPtr& item);
     Probe probePinterestPhoto (const Str& link) const;
@@ -253,14 +267,26 @@ private:
     Probe searchSpotifyList (const Str& query) const;
     Probe searchYandexList (const Str& query) const;
 
+    /// Сверка найденного на YouTube с тем, что записано в ссылке каталога:
+    /// значимые токены названия, исполнитель и длительность.
+    static bool candidateMatches (const Str& foundTitle, int foundDur,
+                                  const Str& artist, const Str& track,
+                                  int expectedDur, bool strict);
+
     /// Кэш разборов: тот же текст не разбирается дважды (5 минут).
     static std::map<Str, std::pair<Probe, long long>> probeCache;
     static std::mutex probeCacheMutex;
+    /// Кэш превью: адрес -> локальный файл (плюс дисковый кэш в App Support).
+    static std::map<Str, Str> thumbIndex;
+    static std::mutex thumbMutex;
     Probe searchAppleMusic (const Str& query) const;
     Probe searchSpotify (const Str& query) const;
     Probe searchYandex (const Str& query) const;
     Probe searchPinterest (const Str& query) const;
     Probe probeDrm (const Str& link, Detector::Service service) const;
+
+    static Str thumbCacheDir();
+    static StrVec nameTokens (const Str& raw);
 
     // ---- аргументы yt-dlp ----
     StrVec baseArgs (const fs::path& dest, const Str& cookie) const;

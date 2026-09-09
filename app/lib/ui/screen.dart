@@ -135,8 +135,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   int playlistLimit = 0;
   final countCtrl = TextEditingController();
 
-  final sourceFilter = TextEditingController();
-
   // раскрытая панель: '' | chron | count | quality | source
   String openPanel = '';
   final chipKeys = {
@@ -146,6 +144,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     'source': GlobalKey(),
   };
   double panelX = 0;
+
+  // позиция панели источников (под бейджем карточки)
+  double _sourceX = 140;
+  double _sourceY = 96;
 
   // пачка: последовательный сбор метаданных (общий хронометраж)
   bool batchProbing = false;
@@ -165,6 +167,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   // системный выбор папки + drag-out скачанных файлов
   static const _native = MethodChannel('kload/native');
   final _rowKeys = <int, GlobalKey>{}; // строки очереди для drag-зон
+  final _canvasKey = GlobalKey();      // канвас 560×670 — начало координат зон
+  String _lastZonesKey = '';           // подпись последних отосланных зон
 
   // позиция чипа, под которым раскрыта панель
   final _uiColumnKey = GlobalKey();
@@ -173,6 +177,18 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   String get rawText => query.text.trim();
   bool get vpnVisible => booted && vpnState == 2;
   bool get cardVisible => phase == Phase.found;
+
+  /// Имя выбранного источника поиска — для бейджа, когда разбора нет.
+  String get _sourceLabel {
+    switch (searchSource) {
+      case 'youtube': return 'YOUTUBE';
+      case 'soundcloud': return 'SOUNDCLOUD';
+      case 'apple': return 'APPLE MUSIC';
+      case 'spotify': return 'SPOTIFY';
+      case 'yandex': return 'ЯНДЕКС МУЗЫКА';
+      default: return 'АВТО';
+    }
+  }
 
   @override
   void initState() {
@@ -217,13 +233,16 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     final c = core;
     if (c == null) return;
     if (e is KdVpnEvent) {
+      final wasOff = vpnState == 2;
       setState(() {
-        final wasOff = vpnState == 2;
         vpnState = e.on ? 1 : 2;
         if (e.on) vpnDismissed = false;
         // Новое появление плашки при каждом переходе вкл -> выкл.
         if (wasOff && !e.on) vpnEpoch += 1;
       });
+      // VPN вернулся: безопасно повторяем прерванный разбор. Поле,
+      // источник, результаты и очередь загрузок не трогаем.
+      if (e.on && wasOff && booted) _recoverAfterVpn();
     } else if (e is KdProbeEvent) {
       if (batchProbing) {
         // Пачка: копим хронометраж и переходим к следующей ссылке.
@@ -244,33 +263,64 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     }
   }
 
+  /// VPN снова работает: повторяем разбор, который мог оборваться.
+  /// Безопасно: новое поколение разбора отменяет старое, состояние экрана
+  /// (запрос, источник, очередь) остаётся как было.
+  void _recoverAfterVpn() {
+    if (!mounted || rawText.isEmpty) return;
+    if (selectedResultUrl != null) {
+      // Дозапрашиваем разбор выбранного результата.
+      core?.probeAsync(selectedResultUrl!);
+      return;
+    }
+    if (phase == Phase.seeking ||
+        phase == Phase.idle ||
+        probe == null ||
+        !probe!.ok) {
+      _startSeek();
+    }
+  }
+
   /// Готовые файлы: сообщаем нативному слою прямоугольники строк, чтобы
   /// зажатием на строке можно было перетащить сам файл в Finder/DAW.
   void _scheduleDragZones() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final colCtx = _uiColumnKey.currentContext;
-      final colBox = colCtx?.findRenderObject() as RenderBox?;
-      if (colBox == null || !colBox.attached) return;
+      // Зоны в координатах канваса 560×670 — того самого, что масштабирует
+      // окно. Нативный слой сам учтёт cover-масштаб и поля телевизора.
+      final canvasCtx = _canvasKey.currentContext;
+      final canvasBox = canvasCtx?.findRenderObject() as RenderBox?;
+      if (canvasBox == null || !canvasBox.attached) return;
       final zones = <Map<String, dynamic>>[];
-      for (final it in items) {
-        if (it.state != 'done' || it.files.isEmpty) continue;
-        final ctx = _rowKeys[it.id]?.currentContext;
-        if (ctx == null) continue;
-        final box = ctx.findRenderObject() as RenderBox?;
-        if (box == null || !box.attached) continue;
-        final topLeft = box.localToGlobal(Offset.zero, ancestor: colBox);
-        // Зона без правых кнопок (папка/корзина остаются кликабельными).
-        final w = box.size.width - 84;
-        if (w <= 40) continue;
-        zones.add({
-          'path': it.files.first,
-          'x': topLeft.dx,
-          'y': topLeft.dy,
-          'w': w,
-          'h': box.size.height,
-        });
+      var key = '';
+      // Под VPN-плашкой drag не работает: нативный слой перекрыл бы её клики.
+      if (!(vpnState == 2 && !vpnDismissed)) {
+        for (final it in items) {
+          // Перетаскивать можно только скачанное: рабочие и битые строки —
+          // не зоны. Кнопки (папка/корзина) остаются вне зоны.
+          if (it.state != 'done' || it.files.isEmpty) continue;
+          final ctx = _rowKeys[it.id]?.currentContext;
+          if (ctx == null) continue;
+          final box = ctx.findRenderObject() as RenderBox?;
+          if (box == null || !box.attached) continue;
+          final topLeft = box.localToGlobal(Offset.zero, ancestor: canvasBox);
+          // Зона без правых кнопок (папка/корзина остаются кликабельными).
+          final w = box.size.width - 84;
+          if (w <= 40) continue;
+          zones.add({
+            'path': it.files.first,
+            'x': topLeft.dx,
+            'y': topLeft.dy,
+            'w': w,
+            'h': box.size.height,
+          });
+          key += '${it.id}:${topLeft.dx.round()}:'
+              '${topLeft.dy.round()}:${w.round()}:${box.size.height.round()};';
+        }
       }
+      // Раскладка не менялась — нативные виды не трогаем.
+      if (key == _lastZonesKey) return;
+      _lastZonesKey = key;
       _native.invokeMethod('setZones', zones);
     });
   }
@@ -638,7 +688,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     searchFocus.dispose();
     chronFrom.dispose();
     chronTo.dispose();
-    sourceFilter.dispose();
     super.dispose();
   }
 
@@ -647,6 +696,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     // Телевизор занимает окно целиком: масштаб «каверкой» (щелей не бывает),
     // углы корпуса — под системный радиус окна, микрощели исключены.
     if (openPanel.isNotEmpty) _measurePanel(openPanel);
+    if (openPanel == 'source') _measureSourcePanel();
+    // Зоны drag-out зависят от раскладки: пересылаем после каждого кадра,
+    // чтобы невидимые зоны никогда не оставались на устаревших местах.
+    _scheduleDragZones();
     return Scaffold(
       backgroundColor: const Color(0xFF161413),
       body: LayoutBuilder(builder: (context, box) {
@@ -659,7 +712,13 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           child: SizedBox(
             width: tvW * scale,
             height: tvH * scale,
-            child: FittedBox(fit: BoxFit.fill, child: SizedBox(width: tvW, height: tvH, child: _tv())),
+            child: FittedBox(
+                fit: BoxFit.fill,
+                child: SizedBox(
+                    key: _canvasKey,
+                    width: tvW,
+                    height: tvH,
+                    child: _tv())),
           ),
         );
       }),
@@ -741,22 +800,24 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   Widget _ui() {
     return GestureDetector(
-      // Клик вне панели хрона закрывает её (дети перехватывают свои тапы).
+      // Клик вне панелей закрывает их (дети перехватывают свои тапы).
       behavior: HitTestBehavior.translucent,
       onTap: () {
-        if (openPanel.isNotEmpty || chronOpen) {
+        if (openPanel.isNotEmpty || chronOpen || showResultList) {
           setState(() {
             openPanel = '';
             chronOpen = false;
+            showResultList = false;
           });
         }
       },
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 22, 20, 14),
-        child: Column(
-          key: _uiColumnKey,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+        child: Stack(children: [
+          Column(
+            key: _uiColumnKey,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
         _searchRow(),
         if (phase == Phase.seeking) ...[
           const SizedBox(height: 14),
@@ -776,9 +837,17 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             ],
           ],
         ),
+        // Результаты поиска — отдельная панель поверх карточки: не
+        // раздвигает вёрстку и не выходит за границы экрана.
+        if (cardVisible && showResultList && searchResults.isNotEmpty)
+          _resultsPanel(),
+        // Источники открываются поверх панели результатов.
+        if (openPanel == 'source') _sourceOverlay(),
+        ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   // ---- поисковая строка ----
 
@@ -872,8 +941,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         ? resultError
         : null;
     final dur = (r['duration'] ?? 0) as int;
+    final uploader = (r['uploader'] ?? '') as String;
     return GestureDetector(
-      onTap: () => _selectResult(url),
+      onTap: () {
+        setState(() => showResultList = false); // карточка возвращается сама
+        _selectResult(url);
+      },
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         child: AnimatedContainer(
@@ -893,6 +966,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                     style: T.mono(12, c: err != null ? Pal.dim : Pal.soft),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis),
+                if (uploader.isNotEmpty)
+                  Text(uploader.toUpperCase(),
+                      style: T.ps(7, c: Pal.dim, ls: .04),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
                 if (err != null)
                   Text(err.toUpperCase(),
                       style: T.ps(7, c: Pal.error, ls: .02)),
@@ -902,6 +979,83 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             if (dur > 0) Text(fmtDur(dur), style: T.mono(10, c: Pal.dim)),
           ]),
         ),
+      ),
+    );
+  }
+
+  // ---- панель результатов: отдельное компактное окно поверх карточки ----
+
+  Widget _resultsPanel() {
+    final rows = searchResults.take(10).toList();
+    return Positioned(
+      left: 0,
+      right: 0,
+      top: 84,
+      bottom: 10,
+      child: GlitchIn(
+        key: const ValueKey('panel-results'),
+        child: GestureDetector(
+          // Панель живёт своей жизнью: тап по ней не закрывает её же.
+          onTap: () {},
+          child: Container(
+            decoration: const BoxDecoration(color: Color(0xF5070400)),
+            child: DashedBox(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      Text('РЕЗУЛЬТАТЫ · ${searchResults.length}',
+                          style: T.ps(8, c: Pal.soft)),
+                      const Spacer(),
+                      _panelClose(() =>
+                          setState(() => showResultList = false)),
+                    ]),
+                    const SizedBox(height: 6),
+                    Expanded(
+                      child: ListView.builder(
+                        padding: EdgeInsets.zero,
+                        itemCount: rows.length,
+                        itemBuilder: (context, i) => _resultRow(rows[i]),
+                      ),
+                    ),
+                  ]),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Крестик закрытия панели: ховер подсвечивает, геометрию не трогает.
+  Widget _panelClose(VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Padding(
+          padding: const EdgeInsets.all(3),
+          child: Text('×',
+              style: const TextStyle(
+                  fontFamily: T.plex,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  height: 1,
+                  color: Pal.dim)),
+        ),
+      ),
+    );
+  }
+
+  /// Источники поверх панели результатов, под бейджем-источником.
+  Widget _sourceOverlay() {
+    return Positioned(
+      left: math.min(_sourceX, 520.0 - 190.0 - 6),
+      top: _sourceY,
+      child: GlitchIn(
+        key: const ValueKey('panel-source'),
+        child: _sourceBox(),
       ),
     );
   }
@@ -916,7 +1070,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         if (!svcNames.contains(n)) svcNames.add(n);
       }
       return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        _SmartCover(url: null),
+        _SmartCover(url: null, engineAddr: core?.address),
         const SizedBox(width: 15),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -936,6 +1090,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     }
     if (p == null) return const SizedBox.shrink();
     if (!p.ok && !p.drm) {
+      // Разбор не удался (например, VPN мигнул): честная причина, понятный
+      // повтор и — для текстового запроса — смена источника на месте,
+      // чтобы не набирать запрос заново.
       return DashedBox(
         color: Pal.amber.withValues(alpha: .35),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -944,6 +1101,29 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           const SizedBox(height: 6),
           Text(p.error.isEmpty ? 'Проверь ссылку или сеть' : p.error,
               style: T.mono(11, c: Pal.dim), textAlign: TextAlign.center),
+          const SizedBox(height: 9),
+          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            if (p.isSearch) ...[
+              _badge(_sourceLabel, src: null,
+                  dropdown: true, badgeKey: chipKeys['source']),
+              const SizedBox(width: 12),
+            ],
+            GestureDetector(
+              onTap: _startSeek,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Pal.amberFaint),
+                    borderRadius: const BorderRadius.all(Radius.circular(2)),
+                  ),
+                  child: Text('ПОВТОРИТЬ', style: T.ps(8, c: Pal.amber)),
+                ),
+              ),
+            ),
+          ]),
         ]),
       );
     }
@@ -951,7 +1131,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       // Защищённая запись: карточка собирается из oEmbed, вместо режимов —
       // объяснение, почему скачать нельзя.
       return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-        _SmartCover(url: p.thumbnail.isEmpty ? null : p.thumbnail),
+        _SmartCover(url: p.thumbnail.isEmpty ? null : p.thumbnail, engineAddr: core?.address),
         const SizedBox(width: 15),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -967,76 +1147,40 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     }
     final src = _sourceUrl(p);
     return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-      _SmartCover(url: p.thumbnail.isEmpty ? null : p.thumbnail),
+      _SmartCover(url: p.thumbnail.isEmpty ? null : p.thumbnail, engineAddr: core?.address),
       const SizedBox(width: 15),
       Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            Text('R${searchResults.length}', style: T.ps(8, c: Pal.error)),
-            const SizedBox(width: 6),
             _badge(p.isPlaylist
                     ? 'ПЛЕЙЛИСТ · ${p.serviceTitle.toUpperCase()}'
                     : p.serviceTitle.toUpperCase(),
                 src: src,
                 dropdown: p.isSearch && searchResults.isNotEmpty,
                 badgeKey: chipKeys['source']),
-            // Вернуться к списку результатов текстового поиска.
+            // Вернуться к списку результатов текстового поиска: повторное
+            // нажатие закрывает панель, крестик в самой панели тоже.
             if (p.isSearch && searchResults.isNotEmpty) ...[
               const SizedBox(width: 9),
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () => setState(() {
-                  selectedResultUrl = null;
+                  showResultList = !showResultList;
                   resultError = null;
-                  showResultList = true;
                 }),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 6, vertical: 6),
-                  child: Text('К РЕЗУЛЬТАТАМ',
-                      style: T.ps(7, c: Pal.dim, ls: .06)),
+                  child: Text(showResultList
+                      ? 'ЗАКРЫТЬ РЕЗУЛЬТАТЫ'
+                      : 'К РЕЗУЛЬТАТАМ',
+                      style: T.ps(7,
+                          c: showResultList ? Pal.amber : Pal.dim, ls: .06)),
                 ),
               ),
             ],
           ]),
-          // Список результатов текстового поиска.
-          AnimatedSize(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-            alignment: Alignment.topLeft,
-            child: showResultList && p.isSearch && searchResults.isNotEmpty
-                ? Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: GlitchIn(
-                      key: const ValueKey('panel-results'),
-                      child: Column(crossAxisAlignment:
-                          CrossAxisAlignment.start, children: [
-                        for (final r in searchResults)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 4),
-                            child: _resultRow(r),
-                          ),
-                      ]),
-                    ),
-                  )
-                : const SizedBox(width: double.infinity),
-          ),
-          // Выпадающий источник для текстового запроса.
-          AnimatedSize(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-            alignment: Alignment.topLeft,
-            child: openPanel == 'source'
-                ? Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: GlitchIn(
-                      key: const ValueKey('panel-source'),
-                      child: _sourceBox(),
-                    ),
-                  )
-                : const SizedBox(width: double.infinity),
-          ),
-          // Качество: компактный блок прямо под источником.
+          // Качество/формат: компактный блок под источником.
           const SizedBox(height: 6),
           if (!(p.isSearch && selectedResultUrl == null && searchResults.isNotEmpty))
             _mediaOptions(p),
@@ -1220,7 +1364,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   }
 
   /// Источники поиска для текстового запроса: все сервисы, которые ядро
-  /// реально умеет искать. Внутри — поиск по названию сервиса.
+  /// реально умеет искать. Поиск внутри не нужен — источников несколько.
   Widget _sourceBox() {
     final options = <(String, String)>[
       ('АВТО', 'auto'),
@@ -1234,41 +1378,21 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     final current = (searchSource == null || searchSource == 'auto')
         ? 'auto'
         : searchSource!;
-    final q = sourceFilter.text.trim().toUpperCase();
-    final visible = q.isEmpty
-        ? options
-        : options.where((o) => o.$1.contains(q)).toList();
     return _darkPanel(
       child: SizedBox(
         width: 190,
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          TextField(
-            controller: sourceFilter,
-            autofocus: true,
-            onChanged: (_) => setState(() {}),
-            cursorColor: Pal.amber,
-            style: T.mono(10, c: Pal.amber),
-            decoration: const InputDecoration(
-                isCollapsed: true,
-                border: InputBorder.none,
-                hintText: 'ПОИСК',
-                hintStyle: TextStyle(
-                    fontFamily: 'Press Start 2P',
-                    fontSize: 7,
-                    color: Pal.dim)),
-          ),
-          const SizedBox(height: 4),
-          for (final opt in visible)
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min, children: [
+          for (final opt in options)
             Padding(
               padding: const EdgeInsets.only(bottom: 2),
               child: GestureDetector(
                 onTap: () {
                   setState(() {
                     searchSource = opt.$2 == 'auto' ? null : opt.$2;
-                    openPanel = '';
-                    sourceFilter.clear();
+                    openPanel = ''; // список источников закрывается
                   });
-                  _startSeek(); // переразбор запроса в выбранном источнике
+                  _startSeek(); // результаты обновятся в выбранном источнике
                 },
                 child: MouseRegion(
                   cursor: SystemMouseCursors.click,
@@ -1285,11 +1409,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                   ),
                 ),
               ),
-            ),
-          if (visible.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Text('НЕ НАЙДЕН', style: T.ps(7, c: Pal.dim)),
             ),
         ]),
       ),
@@ -1326,7 +1445,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     if (p.isPlaylist) {
       return '${p.count} ВИДЕО · ХРОНОМЕТРАЖ · ${fmtLongDur(p.duration)}';
     }
-    final dur = p.duration > 0 ? ' · ${fmtDur(p.duration)}' : '';
+    // Длительность не успела приехать — аккуратное состояние загрузки.
+    final dur = p.duration > 0 ? ' · ${fmtDur(p.duration)}' : ' · ЗАГРУЗКА…';
     return 'ХРОНОМЕТРАЖ$dur';
   }
 
@@ -1478,6 +1598,28 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     });
   }
 
+  /// Панель источников раскрывается под бейджем карточки, поверх любых
+  /// других панелей; координаты меряем от колонки интерфейса.
+  void _measureSourcePanel() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || openPanel != 'source') return;
+      final ctx = chipKeys['source']?.currentContext;
+      final colCtx = _uiColumnKey.currentContext;
+      if (ctx == null || colCtx == null) return;
+      final badgeBox = ctx.findRenderObject() as RenderBox?;
+      final colBox = colCtx.findRenderObject() as RenderBox?;
+      if (badgeBox == null || colBox == null || !badgeBox.attached) return;
+      final tl = badgeBox.localToGlobal(Offset.zero, ancestor: colBox);
+      final x = tl.dx, y = tl.dy + badgeBox.size.height + 6;
+      if ((x - _sourceX).abs() > 0.5 || (y - _sourceY).abs() > 0.5) {
+        setState(() {
+          _sourceX = x;
+          _sourceY = y;
+        });
+      }
+    });
+  }
+
   /// КОЛ-ВО: сколько первых роликов плейлиста скачать; пусто — весь.
   Widget _countBox() {
     return _darkPanel(
@@ -1557,10 +1699,17 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       ),
       child: CustomPaint(
         foregroundPainter: const DashedBorderPainter(color: Color(0x80FFB000)),
-        child: ListView.builder(
-          padding: EdgeInsets.zero,
-          itemCount: items.length,
-          itemBuilder: (context, i) => _queueRow(items[i]),
+        child: NotificationListener<ScrollNotification>(
+          // Прокрутка двигает строки — зоны drag-out должны ехать следом.
+          onNotification: (_) {
+            _scheduleDragZones();
+            return false;
+          },
+          child: ListView.builder(
+            padding: EdgeInsets.zero,
+            itemCount: items.length,
+            itemBuilder: (context, i) => _queueRow(items[i]),
+          ),
         ),
       ),
     );
@@ -1657,7 +1806,16 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           duration: const Duration(milliseconds: 220),
           child: GlitchIn(
             key: ValueKey('vpn-plate-$vpnEpoch'),
-            child: GestureDetector(
+            child: TweenAnimationBuilder<double>(
+              // Появление: лёгкий подъём с масштабом, glitch даёт GlitchIn.
+              tween: Tween(begin: .94, end: 1),
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeOutCubic,
+              builder: (context, t, child) => Transform.translate(
+                offset: Offset(0, (1 - t) * 8),
+                child: Transform.scale(scale: t, child: child),
+              ),
+              child: GestureDetector(
               // Тап по самой плашке её не закрывает — только крестик
               // или клик по свободной области экрана.
               onTap: () {},
@@ -1695,7 +1853,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           ),
         ),
       ),
-    );
+    ));
   }
 
   // ---- тост ----
@@ -1794,24 +1952,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       ]),
     );
   }
-}
-
-class _CheckerPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = const Color(0x1AFFB000);
-    const cell = 8.0;
-    for (var y = 0.0; y < size.height; y += cell) {
-      for (var x = 0.0; x < size.width; x += cell) {
-        if (((x / cell).round() + (y / cell).round()) % 2 == 0) {
-          canvas.drawRect(Rect.fromLTWH(x, y, cell, cell), paint);
-        }
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _CheckerPainter old) => false;
 }
 
 class _GripPainter extends CustomPainter {
@@ -2121,43 +2261,56 @@ class _GlitchLinesPainter extends CustomPainter {
 
 
 /// Обложка: пока настоящей нет — живая тёплая плазма с дизером; когда
-/// картинка загрузилась — плавный кроссфейд. Без обложки плазма остаётся.
+/// картинка загрузилась — плавный кроссфейд. Картинка берётся из дискового
+/// кэша ядра (тот же сетевой путь, что у разборов, с кэшем на диске).
+/// Если превью получить невозможно, плазма остаётся.
 class _SmartCover extends StatefulWidget {
-  const _SmartCover({required this.url});
+  const _SmartCover({required this.url, this.engineAddr});
   final String? url;
+  final int? engineAddr;
 
   @override
   State<_SmartCover> createState() => _SmartCoverState();
 }
 
 class _SmartCoverState extends State<_SmartCover> {
-  bool _loaded = false;
-  bool _failed = false;
-  ImageStream? _stream;
-  ImageStreamListener? _listener;
+  String? _file; // локальный файл из кэша ядра
+  int _gen = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
 
   @override
   void didUpdateWidget(covariant _SmartCover old) {
     super.didUpdateWidget(old);
     if (old.url != widget.url) {
-      _loaded = false;
-      _failed = false;
-      _stream = null;
+      _gen += 1;
+      _file = null;
+      _load();
     }
   }
 
-  void _listen(ImageStream stream) {
-    _listener ??= ImageStreamListener((info, _) {
-      if (mounted && !_loaded) setState(() => _loaded = true);
-    }, onError: (_, __) {
-      if (mounted) setState(() => _failed = true);
-    });
-    stream.addListener(_listener!);
+  Future<void> _load() async {
+    final url = widget.url;
+    final addr = widget.engineAddr;
+    if (url == null || url.isEmpty || addr == null) return;
+    final gen = _gen;
+    try {
+      // Блокирующее чтение кэша ядра — в стороне, экран не ждёт.
+      final path = await KdCore.thumbPathAsync(addr, url);
+      if (!mounted || gen != _gen || path.isEmpty) return;
+      if (!File(path).existsSync()) return;
+      setState(() => _file = path);
+    } on Object catch (e) {
+      debugPrint('превью $url: $e');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final hasArt = widget.url != null && widget.url!.isNotEmpty && !_failed;
     return CustomPaint(
       foregroundPainter: const DashedBorderPainter(solid: true),
       child: SizedBox(
@@ -2166,22 +2319,17 @@ class _SmartCoverState extends State<_SmartCover> {
         child: ClipRect(
           child: Stack(fit: StackFit.expand, children: [
             const _Plasma(),
-            if (hasArt)
-              AnimatedOpacity(
-                opacity: _loaded ? 1 : 0,
+            if (_file != null)
+              TweenAnimationBuilder<double>(
+                // Плавная замена плазмы изображением, когда оно приехало.
+                tween: Tween(begin: 0, end: 1),
                 duration: const Duration(milliseconds: 450),
-                child: Image.network(
-                  widget.url!,
+                curve: Curves.easeOut,
+                builder: (context, t, child) =>
+                    Opacity(opacity: t, child: child),
+                child: Image.file(
+                  File(_file!),
                   fit: BoxFit.cover,
-                  frameBuilder: (context, child, frame, wasLoaded) {
-                    // Подписываемся на поток, чтобы узнать о завершении.
-                    if (!_loaded && (frame ?? 0) > 0) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (mounted && !_loaded) setState(() => _loaded = true);
-                      });
-                    }
-                    return child;
-                  },
                   errorBuilder: (_, __, ___) => const SizedBox.shrink(),
                 ),
               ),

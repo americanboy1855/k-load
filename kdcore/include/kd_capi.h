@@ -68,6 +68,11 @@ KD_EXPORT void kd_probe_async (kd_engine* e, const char* text);
 // («youtube» / «soundcloud»; пусто/NULL — авто).
 KD_EXPORT void kd_probe_async_source (kd_engine* e, const char* text, const char* source);
 
+// Локальный файл превью по адресу картинки: при первом вызове скачивается
+// (блокирующе, до 8с), затем отдаётся из дискового кэша. Пусто — превью
+// нет. Освободить kd_string_free.
+KD_EXPORT char* kd_thumb_path (kd_engine* e, const char* url);
+
 // Состояние VPN: 0 — неизвестно, 1 — включён, 2 — выключен.
 KD_EXPORT int kd_vpn_state (kd_engine* e);
 

@@ -90,51 +90,28 @@ class MainFlutterWindow: NSWindow {
 }
 
 
-// Перетаскивание скачанных файлов: Flutter присылает зоны готовых файлов
-// (прямоугольники в координатах contentView), локальный монитор события
-// mouseDown начинает системную drag-сессию с реальным файлом.
-// Перетаскивание скачанных файлов: Flutter присылает зоны готовых строк,
-// для каждой создаётся прозрачный NSView. Зажатие на нём начинает
-// системную drag-сессию с реальным файлом; кнопки справа от зоны
-// (папка/корзина) остаются кликабельными.
+// Перетаскивание скачанных файлов: Flutter присылает зоны готовых строк
+// (прямоугольники в координатах канваса 560×670), для каждой держится
+// прозрачный NSView. Зажатие начинает системную drag-сессию с реальным
+// файлом. Зона ничего не рисует и не меняет курсор: никакой подсветки,
+// свечения и «серых экранов», файл просто перетаскивается. Кнопки справа
+// от зоны (папка/корзина) остаются кликабельными.
 final class DragSourceView: NSView, NSDraggingSource {
     let filePath: String
-    private var tracking: NSTrackingArea?
 
     init(frame: NSRect, path: String) {
         self.filePath = path
         super.init(frame: frame)
-        let area = NSTrackingArea(rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow],
-            owner: self, userInfo: nil)
-        addTrackingArea(area)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override func draw(_ dirtyRect: NSRect) {
-        // Лёгкая подсветка зоны при наведении.
-        if isHovered {
-            NSColor(white: 1.0, alpha: 0.05).setFill()
-            dirtyRect.fill()
-        }
-    }
-
-    private var isHovered = false {
-        didSet { needsDisplay = true }
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        isHovered = true
-        NSCursor.pointingHand.push()
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        isHovered = false
-        NSCursor.pop()
+        // Зона невидима: подсветка и курсор запрещены спецификацией.
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard FileManager.default.fileExists(atPath: filePath) else { return }
         let url = URL(fileURLWithPath: filePath)
         let item = NSDraggingItem(pasteboardWriter: url as NSURL)
         item.setDraggingFrame(CGRect(x: 0, y: 0, width: bounds.width,

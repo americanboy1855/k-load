@@ -50,6 +50,9 @@ typedef _StringEngineString = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8
 typedef _ProbeSourceNative = Void Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
 typedef _ProbeSourceDart = void Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>);
 
+typedef _ThumbPathNative = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
+typedef _ThumbPathDart = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
+
 class KdBindings {
   KdBindings._(this.lib) {
     _attach = lib
@@ -93,6 +96,9 @@ class KdBindings {
         .asFunction();
     _probeAsyncSource = lib
         .lookup<NativeFunction<_ProbeSourceNative>>('kd_probe_async_source')
+        .asFunction();
+    _thumbPath = lib
+        .lookup<NativeFunction<_ThumbPathNative>>('kd_thumb_path')
         .asFunction();
     _vpnState = lib
         .lookup<NativeFunction<_IntEngineNative>>('kd_vpn_state')
@@ -160,6 +166,7 @@ class KdBindings {
   late final _StringEngineString _probeBlocking;
   late final _VoidEngineStringDart _probeAsync;
   late final _ProbeSourceDart _probeAsyncSource;
+  late final _ThumbPathDart _thumbPath;
   late final _IntEngine _vpnState;
   late final _StringEngine _defaultDest;
   late final _StringEngine _toolsStatus;
@@ -349,6 +356,29 @@ class KdCore {
       calloc.free(src);
     }
     calloc.free(t);
+  }
+
+  /// Адрес движка: для вызовов ядра из фонового изолята (превью).
+  int get address => _engine.address;
+
+  /// Локальный файл превью из кэша ядра; '' — превью нет. Блокирующий:
+  /// первый вызов скачивает, поэтому гонять в Isolate.run.
+  static String thumbPath(int engineAddr, String url) {
+    if (url.isEmpty) return '';
+    final b = KdBindings.open(); // библиотека уже загружена процессом
+    final u = url.toNativeUtf8();
+    final r = b._thumbPath(Pointer<Void>.fromAddress(engineAddr), u);
+    final out = r.toDartString();
+    calloc.free(u);
+    b._stringFree(r);
+    return out;
+  }
+
+  /// То же в фоновом изоляте. Метод статический нарочно: замыкание,
+  /// созданное в контексте State, тянет за собой `this` с деревом виджетов
+  /// и отказывается быть «sendable».
+  static Future<String> thumbPathAsync(int engineAddr, String url) async {
+    return Isolate.run(() => thumbPath(engineAddr, url));
   }
 
   Map<String, dynamic> probeBlocking(String text) {

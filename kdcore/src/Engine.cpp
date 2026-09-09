@@ -954,10 +954,17 @@ void Engine::startResolve (const QueueItemPtr& item)
     setStage (item, "Читаю каталог…");
 
     Str album;
+    int durSec = 0;
+    Str thumb;
     StrVec tracks;
-    if      (item->service == Detector::Service::spotify)    tracks = resolveSpotify (item->link, album);
-    else if (item->service == Detector::Service::appleMusic) tracks = resolveAppleMusic (item->link, album);
-    else                                                     tracks = resolveOpenGraph (item->link);
+    if      (item->service == Detector::Service::spotify)
+        tracks = resolveSpotify (item->link, album, &durSec, &thumb);
+    else if (item->service == Detector::Service::appleMusic)
+        tracks = resolveAppleMusic (item->link, album, &durSec, &thumb);
+    else if (item->service == Detector::Service::yandexMusic)
+        tracks = resolveYandexMusic (item->link, album, &durSec, &thumb);
+    else
+        tracks = resolveOpenGraph (item->link);
 
     if (tracks.empty())
     {
@@ -978,6 +985,10 @@ void Engine::startResolve (const QueueItemPtr& item)
         item->dest = folder;
     }
 
+    // Ссылки Яндекс Музыки сверяются с выдачей строго: похожий трек
+    // не скачивается никогда — только точное совпадение.
+    const bool strict = item->service == Detector::Service::yandexMusic;
+
     for (int i = 0; i < (int) tracks.size(); ++i)
     {
         if (item->cancelled() || quit.load (std::memory_order_relaxed)) break;
@@ -985,9 +996,13 @@ void Engine::startResolve (const QueueItemPtr& item)
         // по всей строке.
         const auto query = tracks[(size_t) i];
         const int sep = kd::indexOf (query, " - ");
+        // Ожидаемая длительность известна для одиночного трека — по ней
+        // отбраковываются кавер-версии и ускоренные «sped up»-варианты.
+        const int expected = tracks.size() == 1 ? durSec : 0;
         downloadTrack (item, i, Detector::Service::youtube,
                        sep > 0 ? query.substr (0, (size_t) sep) : Str(),
-                       sep > 0 ? query.substr ((size_t) sep + 3) : query);
+                       sep > 0 ? query.substr ((size_t) sep + 3) : query,
+                       expected, strict);
     }
 
     if (item->cancelled())
@@ -997,63 +1012,136 @@ void Engine::startResolve (const QueueItemPtr& item)
     }
     if (item->files.empty())
     {
-        finish (item, QueueItem::State::failed, "Ничего не нашлось по названиям треков");
+        finish (item, QueueItem::State::failed,
+            strict
+                ? Str ("Точное совпадение не найдено — похожий трек не скачивается. Проверьте ссылку или найдите трек вручную")
+                : Str ("Ничего не нашлось по названиям треков"));
         return;
     }
     item->progress = 1;
+    // Одиночный трек — просто «Готово», без счётчиков.
     finish (item, QueueItem::State::done,
-            "Готово · треков: " + std::to_string (item->files.size()));
+            tracks.size() > 1
+                ? "Готово · треков: " + std::to_string (item->files.size())
+                : Str ("Готово"));
 }
 
 void Engine::downloadTrack (const QueueItemPtr& item, const int index,
                             const Detector::Service searchSite,
-                            const Str& artist, const Str& track)
+                            const Str& artist, const Str& track,
+                            const int expectedDuration, const bool strictMatch)
 {
     const auto query = artist.empty() ? track : artist + " - " + track;
     item->itemIndex = index + 1;
     item->title = query;
     item->progress = 0;
-    setStage (item, "Качаю " + std::to_string (index + 1)
-                  + " из " + std::to_string (item->itemTotal));
+    // Одиночный трек качается без счётчиков: «Качаю…», а не «1 из 1».
+    setStage (item, item->itemTotal > 1
+        ? "Качаю " + std::to_string (index + 1) + " из " + std::to_string (item->itemTotal)
+        : Str ("Качаю…"));
 
-    StrVec args = baseArgs (item->dest, {});
-    for (const auto& a : kd::splitWhitespace ("-f bestaudio/best -x")) args.push_back (a);
-    args.push_back ("--audio-format");
-    args.push_back (audioFormatName (item->audioFormat));
-    for (const auto& a : kd::splitWhitespace ("--audio-quality 0 --embed-metadata --embed-thumbnail --no-playlist"))
-        args.push_back (a);
-    const auto name = safeName (query);
-    args.push_back ("-o");
-    args.push_back (name + ".%(ext)s");
-    // Теги пишем свои: иначе в файл уедет название ролика с YouTube.
-    // Двоеточие делит аргумент пополам, поэтому значения чистим.
-    if (! artist.empty())
+    // Общая часть: звук, теги, имя файла, хрон.
+    auto makeArgs = [&]() -> StrVec
     {
+        StrVec args = baseArgs (item->dest, {});
+        for (const auto& a : kd::splitWhitespace ("-f bestaudio/best -x")) args.push_back (a);
+        args.push_back ("--audio-format");
+        args.push_back (audioFormatName (item->audioFormat));
+        for (const auto& a : kd::splitWhitespace ("--audio-quality 0 --embed-metadata --embed-thumbnail --no-playlist"))
+            args.push_back (a);
+        const auto name = safeName (query);
+        args.push_back ("-o");
+        args.push_back (name + ".%(ext)s");
+        // Теги пишем свои: иначе в файл уедет название ролика с YouTube.
+        // Двоеточие делит аргумент пополам, поэтому значения чистим.
+        if (! artist.empty())
+        {
+            args.push_back ("--parse-metadata");
+            args.push_back (safeName (artist) + ":%(artist)s");
+        }
         args.push_back ("--parse-metadata");
-        args.push_back (safeName (artist) + ":%(artist)s");
-    }
-    args.push_back ("--parse-metadata");
-    args.push_back (safeName (track) + ":%(title)s");
-    // ХРОН для трека с музыкального сервиса: тот же отрезок, что и в UI.
-    if (! item->sections.empty())
-    {
-        args.push_back ("--download-sections");
-        args.push_back ("*" + item->sections);
-        args.push_back ("--force-keyframes-at-cuts");
-    }
-    for (const auto& a : kd::splitWhitespace ("--ignore-errors --max-downloads 1")) args.push_back (a);
-    // Пять кандидатов: первый результат бывает защищённым или недоступным.
-    args.push_back (searchSite == Detector::Service::soundcloud
-                  ? "scsearch5:" + query
-                  : "ytsearch5:" + query);
+        args.push_back (safeName (track) + ":%(title)s");
+        // ХРОН для трека с музыкального сервиса: тот же отрезок, что и в UI.
+        if (! item->sections.empty())
+        {
+            args.push_back ("--download-sections");
+            args.push_back ("*" + item->sections);
+            args.push_back ("--force-keyframes-at-cuts");
+        }
+        return args;
+    };
 
     const auto before = item->files.size();
-    if (! runYtDlp (item, args)) return; // отменено — состояние уже выставлено
-    if (item->files.size() == before && searchSite == Detector::Service::youtube)
+
+    // 1) Точное сопоставление: плоский поиск отдаёт кандидатов с названиями
+    //    и длительностями — сверяем с тем, что записано в ссылке каталога.
+    //    Так «sped up»-версии и каверы не обходят настоящий трек.
+    StrVec verified;
+    {
+        Str out;
+        int code = -1;
+        StrVec args { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
+                      "ytsearch5:" + query };
+        if (captureOut (args, out, &code) && code == 0 && ! out.empty())
+        {
+            const auto data = json::parse (out, nullptr, false);
+            const auto entries = data.is_object() ? data.find ("entries") : data.end();
+            if (entries != data.end() && entries->is_array())
+                for (const auto& e : *entries)
+                {
+                    if (! e.is_object()) continue;
+                    auto url = jtext (e, "webpage_url");
+                    if (url.empty()) url = jtext (e, "url");
+                    if (url.empty()) continue;
+                    if (candidateMatches (jtext (e, "title"), (int) jnum (e, "duration"),
+                                          artist, track, expectedDuration, strictMatch))
+                    {
+                        verified.push_back (url);
+                        if (verified.size() >= 3) break;
+                    }
+                }
+        }
+    }
+
+    for (const auto& url : verified)
+    {
+        if (item->cancelled() || quit.load (std::memory_order_relaxed))
+        {
+            finish (item, QueueItem::State::failed, "Отменено");
+            return;
+        }
+        StrVec args = makeArgs();
+        args.push_back (url);
+        if (! runYtDlp (item, args)) return; // отменено — состояние уже выставлено
+        if (item->files.size() > before) return; // точный кандидат скачан
+    }
+
+    // 2) Прежний путь: yt-dlp берёт первый из выдачи. Для ссылок Яндекс
+    //    Музыки похожий трек не качается — остаётся честная ошибка.
+    if (! strictMatch || verified.empty())
+    {
+        if (item->cancelled())
+        {
+            finish (item, QueueItem::State::failed, "Отменено");
+            return;
+        }
+        StrVec args = makeArgs();
+        for (const auto& a : kd::splitWhitespace ("--ignore-errors --max-downloads 1"))
+            args.push_back (a);
+        // Пять кандидатов: первый результат бывает защищённым или недоступным.
+        args.push_back (searchSite == Detector::Service::soundcloud
+                      ? "scsearch5:" + query
+                      : "ytsearch5:" + query);
+        if (! runYtDlp (item, args)) return; // отменено
+    }
+
+    if (item->files.size() == before && searchSite == Detector::Service::youtube
+        && ! strictMatch)
     {
         // На YouTube не дался — пробуем SoundCloud: там находятся ремиксы
         // и малоизвестное.
-        downloadTrack (item, index, Detector::Service::soundcloud, artist, track);
+        downloadTrack (item, index, Detector::Service::soundcloud, artist, track,
+                       expectedDuration, false);
     }
 }
 
@@ -1073,7 +1161,166 @@ Str Engine::between (const Str& text, const Str& start, const Str& end)
     return b < 0 ? Str() : body.substr (0, (size_t) b);
 }
 
-StrVec Engine::resolveSpotify (const Str& link, Str& album) const
+// ID ролика YouTube из любой формы ссылки: watch?v=, youtu.be/, shorts/.
+static Str youtubeVideoId (const Str& link)
+{
+    const int v = kd::indexOf (link, "v=");
+    if (v >= 0)
+    {
+        auto tail = link.substr ((size_t) v + 2);
+        const int amp = kd::indexOfChar (tail, '&');
+        if (amp >= 0) tail = tail.substr (0, (size_t) amp);
+        if (tail.size() >= 8 && tail.size() <= 16
+            && kd::containsOnly (kd::lower (tail),
+                                 "abcdefghijklmnopqrstuvwxyz0123456789-_"))
+            return tail;
+    }
+    const auto host = parseUrl (link).host;
+    if (host == "youtu.be" || kd::contains (host, "youtube"))
+    {
+        // Хвост пути /<id> — для youtu.be и /shorts/.
+        const auto path = parseUrl (link).path;
+        const int shorts = kd::indexOf (path, "/shorts/");
+        if (shorts >= 0)
+        {
+            auto tail = path.substr ((size_t) shorts + 8);
+            const int slash = kd::indexOfChar (tail, '/');
+            if (slash > 0) tail = tail.substr (0, (size_t) slash);
+            if (tail.size() >= 8) return tail;
+        }
+        if (host == "youtu.be")
+        {
+            auto tail = kd::upToFirst (parseUrl (link).path, "/");
+            if (tail.size() >= 8) return tail;
+        }
+    }
+    return {};
+}
+
+// ---- кэш превью ----
+
+std::map<Str, Str> Engine::thumbIndex;
+std::mutex Engine::thumbMutex;
+
+Str Engine::thumbCacheDir()
+{
+    const auto dir = appDataRoot() / "K LOAD" / "cache" / "thumbs";
+    kd::ensureDir (dir);
+    return kd::pathStr (dir);
+}
+
+Str Engine::cachedThumbnail (const Str& url, const int timeoutMs)
+{
+    if (url.empty() || ! kd::startsWith (kd::lower (url), "http")) return {};
+    {
+        const std::lock_guard<std::mutex> lock (thumbMutex);
+        const auto it = thumbIndex.find (url);
+        if (it != thumbIndex.end() && kd::isFile (fs::u8path (it->second)))
+            return it->second;
+    }
+
+    // Имя в кэше — хеш FNV-1a адреса: длинные подписанные адреса CDN не
+    // обязаны быть именами файлов. Расширение угадываем по адресу.
+    Str ext = kd::lower (kd::fromLast (kd::upToFirst (url, "?"), "."));
+    if (ext.empty() || ext.size() > 5 || kd::indexOfAnyOf (ext, "/\\") >= 0)
+        ext = "jpg";
+    uint64_t h = 1469598103934665603ull;
+    for (const unsigned char c : url) { h ^= c; h *= 1099511628211ull; }
+    char hex[20] = {};
+    std::snprintf (hex, sizeof (hex), "%llx", (unsigned long long) h);
+    const auto target = fs::u8path (thumbCacheDir()) / (Str (hex) + "." + ext);
+
+    if (kd::isFile (target))
+    {
+        const std::lock_guard<std::mutex> lock (thumbMutex);
+        thumbIndex[url] = kd::pathStr (target);
+        return kd::pathStr (target);
+    }
+
+    const auto tmp = target.string() + ".part";
+    if (kd::http::downloadToFile (url, tmp, timeoutMs))
+    {
+        std::error_code ec;
+        fs::rename (tmp, target, ec);
+        if (ec)
+        {
+            // Переименовать не вышло (кто-то успел раньше) — ок, файл уже там.
+            fs::remove (tmp, ec);
+        }
+        if (kd::isFile (target))
+        {
+            const std::lock_guard<std::mutex> lock (thumbMutex);
+            thumbIndex[url] = kd::pathStr (target);
+            return kd::pathStr (target);
+        }
+    }
+    return {};
+}
+
+void Engine::prefetchThumbnail (const Str& url)
+{
+    if (url.empty()) return;
+    std::thread ([url] { cachedThumbnail (url, 6000); }).detach();
+}
+
+// ---- сверка найденного с тем, что в ссылке ----
+
+StrVec Engine::nameTokens (const Str& raw)
+{
+    static const StrVec stop { "the", "feat", "ft", "official", "video", "audio",
+        "lyrics", "lyric", "lyricvideo", "remaster", "remastered", "hd", "hq",
+        "4k", "8k", "mv", "visualizer", "клип", "премьера", "музыка", "cover" };
+    StrVec out;
+    for (const auto& t : kd::splitTokens (kd::lower (raw),
+                                          " \t-_,./\\()[]:;!?\"'«»&+"))
+    {
+        if (t.size() < 2) continue;
+        if (kd::containsVec (stop, t)) continue;
+        out.push_back (t);
+    }
+    return out;
+}
+
+bool Engine::candidateMatches (const Str& foundTitle, const int foundDur,
+                               const Str& artist, const Str& track,
+                               const int expectedDur, const bool strict)
+{
+    const auto title = kd::lower (foundTitle);
+    const auto trackToks = nameTokens (track);
+    const auto artistToks = nameTokens (artist);
+    if (trackToks.empty()) return false;
+
+    // Название: значительная часть токенов трека должна присутствовать.
+    int hit = 0;
+    for (const auto& t : trackToks)
+        if (kd::contains (title, t)) ++hit;
+    const bool titleOk = hit * 10 >= (int) trackToks.size() * 6;
+    if (! titleOk) return false;
+
+    // Исполнитель: хоть один значимый токен в названии ролика.
+    bool artistOk = true;
+    if (! artistToks.empty())
+    {
+        artistOk = false;
+        for (const auto& t : artistToks)
+            if (kd::contains (title, t)) { artistOk = true; break; }
+    }
+
+    // Длительность: главный свидетель против «sped up» и каверов.
+    bool durOk = true;
+    if (expectedDur > 0)
+    {
+        const int diff = foundDur > expectedDur ? foundDur - expectedDur
+                                                : expectedDur - foundDur;
+        durOk = foundDur > 0 && diff <= 8;
+    }
+
+    return strict ? (titleOk && artistOk && durOk)
+                  : (titleOk && (artistOk || durOk));
+}
+
+StrVec Engine::resolveSpotify (const Str& link, Str& album,
+                               int* durationSec, Str* thumbnail) const
 {
     // .../track/ID, .../album/ID, .../playlist/ID — иногда с /intl-ru/ внутри.
     Str kind, value;
@@ -1113,23 +1360,48 @@ StrVec Engine::resolveSpotify (const Str& link, Str& album) const
 
     album = jtext (entity, "name");
 
+    // Обложка: visualIdentity.image[] — массив вариантов одного изображения.
+    if (thumbnail != nullptr)
+    {
+        const auto images = dig (entity, "visualIdentity.image");
+        if (images.is_array())
+            for (auto it = images.rbegin(); it != images.rend(); ++it)
+                if (it->is_object() && it->contains ("url"))
+                {
+                    *thumbnail = jtext (*it, "url");
+                    break;
+                }
+    }
+
+    // Длительность: у трека своё поле (миллисекунды), у подборки — сумма.
+    auto addDuration = [&] (const json& j)
+    {
+        if (durationSec != nullptr && j.is_object())
+            *durationSec += (int) (jnum (j, "duration") / 1000.0);
+    };
+    if (durationSec != nullptr) *durationSec = 0;
+
     StrVec tracks;
-    // Альбом и подборка: список лежит целиком.
+    // Список треков бывает только у альбома/подборки: у ссылки на трек
+    // entity.trackList может отражать весь альбом — сверяемся с типом.
+    const auto type = kd::lower (jtext (entity, "type"));
     const auto list = entity.find ("trackList");
-    if (list != entity.end() && list->is_array())
+    if (type != "track" && list != entity.end() && list->is_array())
     {
         for (const auto& t : *list)
         {
             if (! t.is_object()) continue;
             const auto tTitle = jtext (t, "title");
             const auto artist = jtext (t, "subtitle");
-            if (! tTitle.empty())
-                tracks.push_back (artist.empty() ? tTitle : artist + " - " + tTitle);
+            if (tTitle.empty()) continue;
+            addDuration (t);
+            tracks.push_back (artist.empty() ? tTitle : artist + " - " + tTitle);
         }
         if (! tracks.empty()) return tracks;
     }
     // Одиночный трек: имя лежит в name, исполнители — отдельным полем.
     if (album.empty()) return {};
+    addDuration (entity);
     StrVec artists;
     const auto arr = entity.find ("artists");
     if (arr != entity.end() && arr->is_array())
@@ -1142,7 +1414,8 @@ StrVec Engine::resolveSpotify (const Str& link, Str& album) const
     return { artists.empty() ? album : kd::join (artists, ", ") + " - " + album };
 }
 
-StrVec Engine::resolveAppleMusic (const Str& link, Str& album) const
+StrVec Engine::resolveAppleMusic (const Str& link, Str& album,
+                                  int* durationSec, Str* thumbnail) const
 {
     // ?i=… — конкретный трек внутри альбома, он важнее номера альбома.
     const auto url = parseUrl (link);
@@ -1167,6 +1440,7 @@ StrVec Engine::resolveAppleMusic (const Str& link, Str& album) const
     const auto results = dig (parsed, "results");
     if (! results.is_array() || results.empty()) return {};
 
+    if (durationSec != nullptr) *durationSec = 0;
     StrVec tracks;
     for (const auto& r : results)
     {
@@ -1179,9 +1453,91 @@ StrVec Engine::resolveAppleMusic (const Str& link, Str& album) const
         const auto trackName = jtext (r, "trackName");
         if (trackName.empty()) continue;
         const auto artist = jtext (r, "artistName");
+        if (durationSec != nullptr)
+            *durationSec += kd::getInt (jtext (r, "trackTimeMillis")) / 1000;
+        // Обложка: 100x100 в справочнике, для карточки просим крупнее.
+        if (thumbnail != nullptr && thumbnail->empty())
+        {
+            auto art = jtext (r, "artworkUrl100");
+            if (! art.empty())
+                *thumbnail = kd::replaceAll (art, "100x100", "600x600");
+        }
         tracks.push_back (artist.empty() ? trackName : artist + " - " + trackName);
     }
     return tracks;
+}
+
+// Канонический ID трека в ссылке Яндекс Музыки:
+// music.yandex.ru/album/<a>/track/<id> или music.yandex.ru/track/<id>.
+static Str yandexTrackId (const Str& link)
+{
+    const auto path = parseUrl (link).path;
+    const int marker = kd::indexOf (path, "/track/");
+    if (marker < 0) return {};
+    auto tail = path.substr ((size_t) marker + 7);
+    const int slash = kd::indexOfChar (tail, '/');
+    if (slash > 0) tail = tail.substr (0, (size_t) slash);
+    // Остаток — цифры; иначе это не ID трека.
+    if (tail.empty() || ! kd::containsOnly (tail, "0123456789")) return {};
+    return tail;
+}
+
+StrVec Engine::resolveYandexMusic (const Str& link, Str& album,
+                                   int* durationSec, Str* thumbnail) const
+{
+    // Точный путь: открытый API по каноническому ID трека из ссылки.
+    // Никакого поиска по названию — трек определяется своим ID.
+    const auto id = yandexTrackId (link);
+    if (! id.empty())
+    {
+        const auto body = fetch ("https://api.music.yandex.net/tracks/" + id);
+        const auto data = json::parse (body, nullptr, false);
+        const auto result = data.is_object() ? data.find ("result") : data.end();
+        if (result != data.end() && result->is_array() && ! result->empty()
+            && (*result)[0].is_object())
+        {
+            const auto t = (*result)[0];
+            const auto title = jtext (t, "title");
+            if (! title.empty())
+            {
+                StrVec artists;
+                const auto arr = t.find ("artists");
+                if (arr != t.end() && arr->is_array())
+                    for (const auto& a : *arr)
+                        if (a.is_object())
+                        {
+                            const auto n = jtext (a, "name");
+                            if (! n.empty()) artists.push_back (n);
+                        }
+                if (durationSec != nullptr)
+                    *durationSec = (int) (jnum (t, "durationMs") / 1000.0);
+                // Первый альбом трека: обложка и подпись.
+                Str firstAlbum, cover;
+                const auto albums = t.find ("albums");
+                if (albums != t.end() && albums->is_array() && ! albums->empty()
+                    && (*albums)[0].is_object())
+                {
+                    firstAlbum = jtext ((*albums)[0], "title");
+                    cover = jtext ((*albums)[0], "coverUri");
+                }
+                if (cover.empty()) cover = jtext (t, "ogImage");
+                if (thumbnail != nullptr && ! cover.empty())
+                    // «%%» в адресе — место для размера (например 400x400).
+                    *thumbnail = "https://"
+                        + kd::replaceAll (cover, "%%", "400x400");
+                // Альбом — только как подпись: папку для одиночного трека
+                // не создаём, у пачек имя альбома не используется.
+                if (album.empty()) album = firstAlbum;
+                return { artists.empty()
+                    ? title
+                    : kd::join (artists, ", ") + " - " + title };
+            }
+        }
+    }
+
+    // Ссылка без ID трека (или API недоступен) — то, что печатает сама
+    // страница для предпросмотра.
+    return resolveOpenGraph (link);
 }
 
 StrVec Engine::resolveOpenGraph (const Str& link) const
@@ -1390,6 +1746,9 @@ Probe Engine::probe (const Str& text, const Str& searchSite) const
     }
 
     const auto probe = buildAndCache (text, searchSite);
+    // Кэшируем только удачные разборы: сетевая неудача (например, VPN
+    // мигнул) не должна пять минут выдавать «ничего не нашлось».
+    if (probe.ok)
     {
         const std::lock_guard<std::mutex> lock (probeCacheMutex);
         if (probeCache.size() > 48) probeCache.clear(); // грубая гигиена
@@ -1421,9 +1780,15 @@ Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
             p.service = service;
 
             Str album;
-            auto tracks = service == Detector::Service::spotify    ? resolveSpotify (link, album)
-                        : service == Detector::Service::appleMusic ? resolveAppleMusic (link, album)
-                                                                   : resolveOpenGraph (link);
+            int durSec = 0;
+            Str thumb;
+            auto tracks = service == Detector::Service::spotify
+                              ? resolveSpotify (link, album, &durSec, &thumb)
+                        : service == Detector::Service::appleMusic
+                              ? resolveAppleMusic (link, album, &durSec, &thumb)
+                        : service == Detector::Service::yandexMusic
+                              ? resolveYandexMusic (link, album, &durSec, &thumb)
+                              : resolveOpenGraph (link);
             if (tracks.empty())
             {
                 p.ok = false;
@@ -1432,12 +1797,16 @@ Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
                     : Str ("Не удалось прочитать, что это за трек");
                 return p;
             }
-            p.title = ! album.empty() ? album : tracks[0];
+            p.title = ! album.empty() && tracks.size() > 1 ? album : tracks[0];
             p.uploader = tracks.size() > 1
                 ? Str ("альбом") + " - " + std::to_string (tracks.size()) + Str (" треков")
                 : kd::upToFirst (tracks[0], " - ");
             p.count = (int) tracks.size();
             p.isPlaylist = tracks.size() > 1;
+            // Длительность и превью известны сразу: карточка не ждёт,
+            // пока где-то на стороне найдутся форматы.
+            p.duration = durSec;
+            p.thumbnail = thumb;
             return p;
         }
 
@@ -1472,6 +1841,14 @@ Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
         // плейлист не заставит ждать минуту.
         Probe p;
         const bool flat = Detector::isCollection (link);
+        // Превью YouTube известно уже из ID ролика — качаем его параллельно
+        // с полным разбором, не дожидаясь списка форматов.
+        if (service == Detector::Service::youtube)
+        {
+            const auto vid = youtubeVideoId (link);
+            if (! vid.empty())
+                prefetchThumbnail ("https://i.ytimg.com/vi/" + vid + "/hqdefault.jpg");
+        }
         StrVec args { "--ignore-config", "--no-warnings", "-J" };
         args.push_back (flat ? "--flat-playlist" : "--no-playlist");
         args.push_back (link);
@@ -1506,6 +1883,15 @@ Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
             p.uploader = jtext (data, "channel");
         p.thumbnail = jtext (data, "thumbnail");
         p.duration = (int) jnum (data, "duration");
+        // У части роликов maxresdefault просто нет (404) — превью не будет
+        // вовсе. Канонический hqdefault существует всегда и уже подкачан
+        // параллельно с этим разбором.
+        if (service == Detector::Service::youtube)
+        {
+            const auto vid = youtubeVideoId (link);
+            if (! vid.empty())
+                p.thumbnail = "https://i.ytimg.com/vi/" + vid + "/hqdefault.jpg";
+        }
 
         if (jtext (data, "_type") == "playlist")
         {
@@ -1602,7 +1988,10 @@ Probe Engine::searchAppleMusicList (const Str& query) const
     {
         if (! r.is_object()) continue;
         SearchResult sr;
-        sr.title = jtext (r, "artistName") + " - " + jtext (r, "trackName");
+        sr.uploader = jtext (r, "artistName");
+        sr.title = sr.uploader.empty()
+            ? jtext (r, "trackName")
+            : sr.uploader + " - " + jtext (r, "trackName");
         sr.url = jtext (r, "trackViewUrl");
         if (sr.url.empty()) sr.url = jtext (r, "collectionViewUrl");
         sr.duration = kd::getInt (jtext (r, "trackTimeMillis")) / 1000;
@@ -1667,6 +2056,7 @@ Probe Engine::searchSpotifyList (const Str& query) const
             if (a.is_object()) artist = jtext (a, "name");
         }
         SearchResult sr;
+        sr.uploader = artist;
         sr.title = artist.empty() ? jtext (t, "name") : artist + " - " + jtext (t, "name");
         sr.url = jtext (dig (t, "external_urls"), "spotify");
         if (sr.url.empty()) sr.url = jtext (t, "uri");
@@ -1684,12 +2074,20 @@ Probe Engine::searchSpotifyList (const Str& query) const
     p.resolved = p.results.front().url;
     p.title = p.results.front().title;
     p.duration = p.results.front().duration;
+    // Обложка первого результата: album.images[] — берём последнюю (крупную).
+    const auto images = dig (tracks[0], "album.images");
+    if (images.is_array() && ! images.empty())
+    {
+        const auto& last = images[images.size() - 1];
+        if (last.is_object()) p.thumbnail = jtext (last, "url");
+    }
     return p;
 }
 
 // Яндекс Музыка: страница выдачи содержит прямые ссылки
-// /album/<id>/track/<id> — собираем до 5; названия подтягивает og-разметка
-// при выборе результата.
+// /album/<id>/track/<id>; по каноническому ID открытый API отдаёт точное
+// название, исполнителя и длительность — без этого строки «Трек из Яндекс
+// Музыки» пользователю ни о чём.
 Probe Engine::searchYandexList (const Str& query) const
 {
     Probe p;
@@ -1703,26 +2101,52 @@ Probe Engine::searchYandexList (const Str& query) const
     std::regex re ("/album/[0-9]+/track/[0-9]+");
     auto begin = std::sregex_iterator (html.begin(), html.end(), re);
     auto endIt = std::sregex_iterator();
+    StrVec paths;
     Str seen;
-    for (auto it = begin; it != endIt && (int) p.results.size() < 5; ++it)
+    for (auto it = begin; it != endIt && (int) paths.size() < 5; ++it)
     {
         const auto path = it->str();
         if (seen.find (path) != Str::npos) continue;
         if (! seen.empty()) seen += "|";
         seen += path;
-        SearchResult sr;
-        sr.url = "https://music.yandex.ru" + path;
-        sr.title = "Трек из Яндекс Музыки";
-        p.results.push_back (sr);
+        paths.push_back (path);
     }
-    if (p.results.empty())
+    if (paths.empty())
     {
         p.ok = false;
         p.error = "Яндекс Музыка недоступна из вашей сети — попробуйте другой источник";
         return p;
     }
+
+    for (const auto& path : paths)
+    {
+        SearchResult sr;
+        sr.url = "https://music.yandex.ru" + path;
+        // Канонические данные трека по ID из ссылки.
+        const auto id = kd::fromLast (path, "/track/");
+        const auto body = fetch ("https://api.music.yandex.net/tracks/" + id);
+        const auto data = json::parse (body, nullptr, false);
+        const auto result = data.is_object() ? data.find ("result") : data.end();
+        if (result != data.end() && result->is_array() && ! result->empty()
+            && (*result)[0].is_object())
+        {
+            const auto t = (*result)[0];
+            Str artist;
+            const auto arr = t.find ("artists");
+            if (arr != t.end() && arr->is_array() && ! arr->empty()
+                && (*arr)[0].is_object())
+                artist = jtext ((*arr)[0], "name");
+            sr.title = jtext (t, "title");
+            sr.uploader = artist;
+            sr.duration = (int) (jnum (t, "durationMs") / 1000.0);
+        }
+        if (sr.title.empty()) sr.title = "Трек из Яндекс Музыки";
+        p.results.push_back (sr);
+    }
     p.ok = true;
     p.resolved = p.results.front().url;
+    p.title = p.results.front().title;
+    p.duration = p.results.front().duration;
     return p;
 }
 
@@ -1821,6 +2245,7 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
                     SearchResult sr;
                     sr.title = runsText (item["title"]);
                     if (sr.title.empty()) sr.title = query;
+                    sr.uploader = runsText (item["ownerText"]);
                     sr.url = "https://www.youtube.com/watch?v=" + vid;
                     int s2 = 0;
                     for (const auto& part : kd::splitTokens (runsText (item["lengthText"]), ":"))
@@ -1872,6 +2297,7 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
                     if (url.empty()) continue;
                     SearchResult r;
                     r.title = jtext (e, "title", query);
+                    r.uploader = jtext (e, "uploader");
                     r.url = url;
                     r.duration = (int) jnum (e, "duration");
                     p.results.push_back (r);
@@ -1924,22 +2350,24 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
                         if (! e.is_object()) continue;
                         const auto url = jtext (e, "webpage_url");
                         if (url.empty()) continue;
-                        SearchResult r;
-                        r.title = jtext (e, "title", query);
-                        r.url = url;
-                        r.duration = (int) jnum (e, "duration");
-                        p.results.push_back (r);
-                        if (p.results.size() >= 5) break;
-                    }
-                    if (! p.results.empty())
-                    {
-                        const auto& e = p.results.front();
-                        p.ok = true;
-                        p.service = Detector::Service::soundcloud;
-                        p.resolved = e.url;
-                        p.title = e.title;
-                        p.duration = e.duration;
-                    }
+                    SearchResult r;
+                    r.title = jtext (e, "title", query);
+                    r.uploader = jtext (e, "uploader");
+                    r.url = url;
+                    r.duration = (int) jnum (e, "duration");
+                    if (p.results.empty()) p.thumbnail = searchThumb (e);
+                    p.results.push_back (r);
+                    if (p.results.size() >= 5) break;
+                }
+                if (! p.results.empty())
+                {
+                    const auto& e = p.results.front();
+                    p.ok = true;
+                    p.service = Detector::Service::soundcloud;
+                    p.resolved = e.url;
+                    p.title = e.title;
+                    p.duration = e.duration;
+                }
                 }
             }
         }
