@@ -514,6 +514,9 @@ class BootBeamPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Выключенный экран: полный чёрный, интерфейс под ним не виден.
+    canvas.drawRect(Offset.zero & size, Paint()..color = Colors.black);
+    if (t <= 0) return;
     double sx, sy, opacity;
     if (t < 0.12) {
       final k = t / 0.12;
@@ -596,9 +599,10 @@ class _PlateState extends State<Plate> {
               BoxShadow(color: Colors.black.withValues(alpha: .6), offset: const Offset(0, 3), blurRadius: 5),
               BoxShadow(color: Colors.black.withValues(alpha: .5), offset: const Offset(0, 1), blurRadius: 2),
               const BoxShadow(color: Color(0x1DFFFFFF), offset: Offset(0, 1), blurRadius: 0, spreadRadius: -1),
-              if (hover)
-                BoxShadow(
-                    color: Pal.amber.withValues(alpha: .18), blurRadius: 12),
+              // Список постоянной длины: затухание свечения плавное, без прыжка.
+              BoxShadow(
+                  color: Pal.amber.withValues(alpha: hover ? .18 : 0),
+                  blurRadius: hover ? 12 : 0),
             ],
           ),
           child: Center(

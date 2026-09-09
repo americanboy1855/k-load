@@ -54,65 +54,49 @@ let plastic = CGGradient(colorsSpace: cs, colors: [
 ctx.drawLinearGradient(plastic, start: CGPoint(x: 120, y: 940),
                        end: CGPoint(x: 920, y: 90), options: [])
 
-// мягкое янтарное свечение под буквой
+// мягкое тёплое свечение за белой буквой (не портит читаемость)
 ctx.setBlendMode(.plusLighter)
 ctx.drawRadialGradient(
     CGGradient(colorsSpace: cs,
-               colors: [rgb(0xFFB000, 0.20), rgb(0xFFB000, 0)] as CFArray,
+               colors: [rgb(0xFFB000, 0.14), rgb(0xFFB000, 0)] as CFArray,
                locations: [0, 1])!,
     startCenter: CGPoint(x: 430, y: 580), startRadius: 0,
     endCenter: CGPoint(x: 430, y: 580), endRadius: 420, options: [])
 ctx.setBlendMode(.normal)
 
-// буква K из фавикона: клип по маске + тёплый вертикальный градиент
-let kRect = CGRect(x: 96, y: 132, width: 780, height: 780)
+// буква K из фавикона: клип по маске, белая — крупная
+let kRect = CGRect(x: 76, y: 112, width: 820, height: 820)
 ctx.clip(to: kRect, mask: kMask)
-let kGrad = CGGradient(colorsSpace: cs, colors: [
-    rgb(0xFFD98C), rgb(0xFFB000), rgb(0xE88F06),
-] as CFArray, locations: [0, 0.55, 1])!
-ctx.drawLinearGradient(kGrad, start: CGPoint(x: 420, y: 912),
-                       end: CGPoint(x: 460, y: 132), options: [])
+ctx.setFillColor(rgb(0xFFFFFF))
+ctx.fill(kRect)
 ctx.restoreGState()
 
-// бейдж загрузки: круг с золотым градиентом и тёмной стрелкой вниз
-let badgeCenter = CGPoint(x: 764, y: 240)
-let badgeR: CGFloat = 128
+// пиксельная стрелка вниз (оранжевая, без круга) в правом нижнем углу
+let cell: CGFloat = 44
+let pixelGrid: [[Int]] = [
+    [0, 0, 1, 0, 0],
+    [0, 0, 1, 0, 0],
+    [0, 0, 1, 0, 0],
+    [1, 1, 1, 1, 1],
+    [0, 1, 1, 1, 0],
+    [0, 0, 1, 0, 0],
+]
+let gridW = CGFloat(pixelGrid[0].count) * cell
+let gridH = CGFloat(pixelGrid.count) * cell
+let origin = CGPoint(x: 1024 - 96 - gridW, y: 96) // CG: y вверх, низ иконки
 ctx.saveGState()
-ctx.setShadow(offset: CGSize(width: 0, height: -10), blur: 30,
-              color: rgb(0x000000, 0.55))
-ctx.setFillColor(rgb(0x14100C))
-ctx.fillEllipse(in: CGRect(x: badgeCenter.x - badgeR - 10,
-                           y: badgeCenter.y - badgeR - 10,
-                           width: (badgeR + 10) * 2, height: (badgeR + 10) * 2))
-ctx.restoreGState()
-
-ctx.saveGState()
-ctx.setShadow(offset: .zero, blur: 24, color: rgb(0xFFB000, 0.45))
-let badgeGrad = CGGradient(colorsSpace: cs, colors: [
-    rgb(0xFFDD9A), rgb(0xFFB000), rgb(0xF09000),
-] as CFArray, locations: [0, 0.55, 1])!
-ctx.drawRadialGradient(badgeGrad,
-                       startCenter: CGPoint(x: badgeCenter.x - 34, y: badgeCenter.y + 44),
-                       startRadius: 0,
-                       endCenter: badgeCenter, endRadius: badgeR, options: [])
-ctx.restoreGState()
-
-// стрелка вниз: шток + шеврон, тёмная, крупная
-ctx.saveGState()
-ctx.translateBy(x: badgeCenter.x, y: badgeCenter.y)
-ctx.scaleBy(x: badgeR / 128, y: badgeR / 128)
-let arrow = CGMutablePath()
-arrow.move(to: CGPoint(x: -26, y: 66))
-arrow.addLine(to: CGPoint(x: 26, y: 66))
-arrow.addLine(to: CGPoint(x: 26, y: -6))
-arrow.addLine(to: CGPoint(x: 64, y: -6))
-arrow.addLine(to: CGPoint(x: 0, y: -78))
-arrow.addLine(to: CGPoint(x: -64, y: -6))
-arrow.addLine(to: CGPoint(x: -26, y: -6))
-arrow.closeSubpath()
-ctx.setFillColor(rgb(0x1A1206))
-ctx.addPath(arrow)
-ctx.fillPath()
+ctx.setShadow(offset: .zero, blur: 18, color: rgb(0xFFB000, 0.5))
+ctx.setFillColor(rgb(0xFFB000))
+for (row, line) in pixelGrid.enumerated() {
+    // ось Y у CGContext снизу вверх — переворачиваем строки сетки
+    let flipped = pixelGrid.count - 1 - row
+    for (col, v) in line.enumerated() where v == 1 {
+        let r = CGRect(x: origin.x + CGFloat(col) * cell,
+                       y: origin.y + CGFloat(flipped) * cell,
+                       width: cell - 3, height: cell - 3)
+        ctx.fill(r)
+    }
+}
 ctx.restoreGState()
 
 // ---- запись PNG всех размеров ----

@@ -91,6 +91,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   // vpn
   int vpnState = 0; // 0 неизвестно, 1 вкл, 2 выкл
   bool vpnDismissed = false;
+  int vpnEpoch = 0; // каждое новое «выключился» — новый glitch на плашке
 
   // поиск
   final query = TextEditingController();
@@ -120,9 +121,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   String? searchSource;
   // качество видео: 720/1080/2160/best (по умолчанию 1080P)
   String quality = '1080';
+  bool qualityOpen = false;
   // плейлист: сколько первых роликов качать; 0 — весь
   int playlistLimit = 0;
   final countCtrl = TextEditingController();
+
+  final sourceFilter = TextEditingController();
 
   // раскрытая панель: '' | chron | count | quality | source
   String openPanel = '';
@@ -157,7 +161,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   double _chronX = 0;
 
   String get rawText => query.text.trim();
-  bool get vpnVisible => booted && vpnState == 2 && !vpnDismissed;
+  bool get vpnVisible => booted && vpnState == 2;
   bool get cardVisible => phase == Phase.found;
 
   @override
@@ -204,8 +208,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     if (c == null) return;
     if (e is KdVpnEvent) {
       setState(() {
+        final wasOff = vpnState == 2;
         vpnState = e.on ? 1 : 2;
         if (e.on) vpnDismissed = false;
+        // Новое появление плашки при каждом переходе вкл -> выкл.
+        if (wasOff && !e.on) vpnEpoch += 1;
       });
     } else if (e is KdProbeEvent) {
       if (batchProbing) {
@@ -245,8 +252,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   void _finishBoot() {
     if (booted) return;
     setState(() => booted = true);
-    // VPN-плашка появляется через паузу, как в макете.
-    Future.delayed(const Duration(seconds: 2), () {
+    // VPN-плашка появляется примерно через секунду после включения.
+    Future.delayed(const Duration(seconds: 1), () {
       if (mounted) setState(() {});
     });
   }
@@ -381,6 +388,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       chronOpen = false;
       openPanel = '';
       quality = '1080';
+      qualityOpen = false;
       playlistLimit = 0;
     });
   }
@@ -518,6 +526,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     searchFocus.dispose();
     chronFrom.dispose();
     chronTo.dispose();
+    sourceFilter.dispose();
     super.dispose();
   }
 
@@ -575,18 +584,40 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           color: Pal.screenBg,
           child: Stack(fit: StackFit.expand, children: [
             const GlassBackdrop(),
-            _ui(),
+            // Интерфейс проявляется плавно только после луча включения.
+            AnimatedOpacity(
+              opacity: booted ? 1 : 0,
+              duration: const Duration(milliseconds: 450),
+              curve: Curves.easeOut,
+              child: _ui(),
+            ),
             GlassVeil(enabled: booted),
             if (tracking)
               AnimatedBuilder(
                   animation: trackC,
                   builder: (context, _) => TrackingBar(progress: trackC.value)),
-            // vpn
-            if (vpnVisible) ...[
-              GestureDetector(
-                  onTap: () => setState(() => vpnDismissed = true),
-                  child: Container(color: const Color(0x94000000))),
-              _vpnPlate(),
+            // vpn: затемняем и слегка размываем только стекло телевизора;
+            // бэнд и логотип остаются кликабельными и не затемняются.
+            if (booted && vpnState == 2) ...[
+              AnimatedOpacity(
+                opacity: vpnDismissed ? 0 : 1,
+                duration: const Duration(milliseconds: 220),
+                child: IgnorePointer(
+                  ignoring: vpnDismissed,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => setState(() => vpnDismissed = true),
+                    child: BackdropFilter(
+                      filter: ui.ImageFilter.blur(sigmaX: 2.5, sigmaY: 2.5),
+                      child: Container(color: const Color(0x94000000)),
+                    ),
+                  ),
+                ),
+              ),
+              IgnorePointer(
+                ignoring: vpnDismissed,
+                child: _vpnPlate(),
+              ),
             ],
             if (toastText != null) _toast(),
             if (!booted) _bootOverlay(),
@@ -690,7 +721,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                           ),
                           if (rawText.isEmpty)
                             Text(
-                              'Вставьте ссылку или напишите название того что нужно скачать',
+                              'Вставьте ссылку или напишите название',
                               style: T.mono(12, c: Pal.dim),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -727,6 +758,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     final p = probe;
     if (isBatch) {
       // Пачка: бейдж по общему сервису, вместо категорий — живой хронометраж.
+      final svcNames = <String>[];
+      for (final l in batchLinks) {
+        final n = serviceOf(l).name;
+        if (!svcNames.contains(n)) svcNames.add(n);
+      }
       return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
         _SmartCover(url: null),
         const SizedBox(width: 15),
@@ -735,6 +771,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             _badge(batchBadge, src: null, dropdown: false),
             const SizedBox(height: 8),
             Text('$batchCount ССЫЛОК', style: T.ps(13, c: Pal.soft)),
+            if (svcNames.length > 1) ...[
+              const SizedBox(height: 6),
+              Text(svcNames.join('  ·  '),
+                  style: T.ps(7, c: Pal.dim, ls: .06)),
+            ],
             const SizedBox(height: 6),
             Text(_batchDurLine(), style: T.mono(11, c: Pal.dim, ls: .04)),
           ]),
@@ -797,6 +838,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                   )
                 : const SizedBox(width: double.infinity),
           ),
+          // Качество: компактный блок прямо под источником.
+          const SizedBox(height: 6),
+          _qualityInline(p),
           const SizedBox(height: 8),
           Text(p.title, style: T.mono(15),
               maxLines: 2, overflow: TextOverflow.ellipsis),
@@ -807,7 +851,86 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     ]);
   }
 
-  /// Источники поиска для текстового запроса; выбранная строка подсвечена.
+  /// Качество: селектор под источником. Видео с известными высотами —
+  /// выбор (МАКСИМУМ + высоты); иначе подпись МАКСИМАЛЬНОЕ (качаем лучшее).
+  Widget _qualityInline(KdProbeEvent p) {
+    if (p.isPhoto || !p.ok) return const SizedBox.shrink();
+    final hasHeights = p.heights.isNotEmpty;
+    if (mode == 'music' || !hasHeights) {
+      return Text('МАКСИМАЛЬНОЕ', style: T.ps(7, c: Pal.dim, ls: .06));
+    }
+    final label = quality == 'best' ? 'МАКСИМУМ' : '$quality P';
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      GestureDetector(
+        onTap: () => setState(() => qualityOpen = !qualityOpen),
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              border: Border.all(color: Pal.amberFaint),
+              borderRadius: const BorderRadius.all(Radius.circular(2)),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Text(label, style: T.ps(8, c: Pal.soft)),
+              const SizedBox(width: 6),
+              const Icon(Icons.expand_more, size: 9, color: Pal.soft),
+            ]),
+          ),
+        ),
+      ),
+      AnimatedSize(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        alignment: Alignment.topLeft,
+        child: qualityOpen
+            ? Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: GlitchIn(
+                  key: const ValueKey('panel-quality'),
+                  child: _darkPanel(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      for (final opt in [
+                        ('МАКСИМУМ', 'best'),
+                        for (final h in p.heights.take(4)) ('$h P', '$h'),
+                      ])
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 2),
+                          child: GestureDetector(
+                            onTap: () => setState(() {
+                              quality = opt.$2;
+                              qualityOpen = false;
+                            }),
+                            child: MouseRegion(
+                              cursor: SystemMouseCursors.click,
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 140),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                color: quality == opt.$2
+                                    ? Pal.amberFaint
+                                    : Colors.transparent,
+                                child: Text(opt.$1,
+                                    style: T.ps(8,
+                                        c: quality == opt.$2
+                                            ? Pal.amber
+                                            : Pal.soft)),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ]),
+                  ),
+                ),
+              )
+            : const SizedBox(width: double.infinity),
+      ),
+    ]);
+  }
+
+  /// Источники поиска для текстового запроса; внутри списка — поиск по
+  /// названию сервиса. Выбранная строка подсвечена.
   Widget _sourceBox() {
     final options = <(String, String)>[
       ('АВТО', 'auto'),
@@ -817,9 +940,29 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     final current = (searchSource == null || searchSource == 'auto')
         ? 'auto'
         : searchSource!;
+    final q = sourceFilter.text.trim().toUpperCase();
+    final visible = q.isEmpty
+        ? options
+        : options.where((o) => o.$1.contains(q)).toList();
     return _darkPanel(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        for (final opt in options)
+        SizedBox(
+          width: 150,
+          child: TextField(
+            controller: sourceFilter,
+            autofocus: true,
+            onChanged: (_) => setState(() {}),
+            cursorColor: Pal.amber,
+            style: T.mono(10, c: Pal.amber),
+            decoration: const InputDecoration(
+                isCollapsed: true, border: InputBorder.none,
+                hintText: 'ПОИСК', hintStyle: TextStyle(
+                    fontFamily: 'Press Start 2P',
+                    fontSize: 7, color: Pal.dim)),
+          ),
+        ),
+        const SizedBox(height: 4),
+        for (final opt in visible)
           Padding(
             padding: const EdgeInsets.only(bottom: 2),
             child: GestureDetector(
@@ -935,7 +1078,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     final p = probe;
     final photo = !isBatch && (p?.isPhoto ?? false);
     final playlist = !isBatch && (p?.isPlaylist ?? false);
-    final hasHeights = !isBatch && (p?.heights.isNotEmpty ?? false);
 
     // Ярлык СКАЧАТЬ: пачка — количество ссылок, плейлист — выбранное
     // количество роликов (или весь плейлист), одиночное — 1.
@@ -987,26 +1129,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                     openPanel = openPanel == 'count' ? '' : 'count';
                     if (openPanel == 'count') _measurePanel('count');
                   })),
-        // Качество: одиночное видео с известными высотами — выбор;
-        // видео без списка высот — подпись МАКС (качаем лучшее).
-        if (mode == 'video' && !photo)
-          hasHeights
-              ? _ModeChip(
-                  key: chipKeys['quality'],
-                  label: quality == 'best' ? 'МАКС' : '$quality P',
-                  on: openPanel == 'quality',
-                  locked: false,
-                  hidden: false,
-                  onTap: () => setState(() {
-                        openPanel = openPanel == 'quality' ? '' : 'quality';
-                        if (openPanel == 'quality') _measurePanel('quality');
-                      }))
-              : _ModeChip(
-                  label: 'МАКС',
-                  on: false,
-                  locked: true,
-                  hidden: false,
-                  onTap: () {}),
+
         const Spacer(),
         _GoButton(label: goLabel, enabled: canDownload),
       ]),
@@ -1023,19 +1146,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   Widget _panelBelow() {
     final showChron = chronOpen && chronOn && !chronLocked;
     final showCount = openPanel == 'count';
-    final showQuality = openPanel == 'quality';
-    if (!showChron && !showCount && !showQuality) {
+    if (!showChron && !showCount) {
       return const SizedBox(width: double.infinity);
     }
     return Padding(
       padding: EdgeInsets.only(left: _chronX, top: 8),
       child: GlitchIn(
-        key: ValueKey('panel-$openPanel-${showChron ? 'c' : (showCount ? 'n' : 'q')}'),
-        child: showChron
-            ? _chronBox()
-            : showCount
-                ? _countBox()
-                : _qualityBox(),
+        key: ValueKey('panel-$openPanel-${showChron ? 'c' : 'n'}'),
+        child: showChron ? _chronBox() : _countBox(),
       ),
     );
   }
@@ -1076,41 +1194,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
               decoration: const InputDecoration(
                   isCollapsed: true, border: InputBorder.none),
             )),
-      ]),
-    );
-  }
-
-  /// Качество: известные высоты кадра + МАКСИМУМ.
-  Widget _qualityBox() {
-    final heights = probe?.heights ?? const <int>[];
-    final options = <(String, String)>[
-      ('МАКСИМУМ', 'best'),
-      for (final h in heights.take(4)) ('$h P', '$h'),
-    ];
-    return _darkPanel(
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        for (final opt in options)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 2),
-            child: GestureDetector(
-              onTap: () => setState(() {
-                quality = opt.$2;
-                openPanel = '';
-              }),
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 140),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  color: quality == opt.$2 ? Pal.amberFaint : Colors.transparent,
-                  child: Text(opt.$1,
-                      style: T.ps(8,
-                          c: quality == opt.$2 ? Pal.amber : Pal.soft)),
-                ),
-              ),
-            ),
-          ),
       ]),
     );
   }
@@ -1255,33 +1338,51 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   Widget _vpnPlate() {
     return Center(
-      child: Container(
-        decoration: const BoxDecoration(color: Color(0xF00D0902)),
-        child: DashedBox(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            const VpnIcon(),
-            const SizedBox(width: 10),
-            Text('Для лучшей работы загрузчика - включите VPN',
-                style: T.mono(12, c: Pal.soft)),
-            const SizedBox(width: 4),
-            GestureDetector(
-              onTap: () => setState(() => vpnDismissed = true),
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: Padding(
-                  padding: const EdgeInsets.all(2),
-                  child: Text('×',
-                      style: const TextStyle(
-                          fontFamily: T.plex,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          height: 1,
-                          color: Pal.dim)),
+      child: AnimatedScale(
+        scale: vpnDismissed ? .96 : 1,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        child: AnimatedOpacity(
+          opacity: vpnDismissed ? 0 : 1,
+          duration: const Duration(milliseconds: 220),
+          child: GlitchIn(
+            key: ValueKey('vpn-plate-$vpnEpoch'),
+            child: GestureDetector(
+              // Тап по самой плашке её не закрывает — только крестик
+              // или клик по свободной области экрана.
+              onTap: () {},
+              child: Container(
+                decoration: const BoxDecoration(color: Color(0xF00D0902)),
+                child: DashedBox(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const VpnIcon(),
+                    const SizedBox(width: 10),
+                    Text('ДЛЯ ЛУЧШЕЙ РАБОТЫ ПРИЛОЖЕНИЯ — ВКЛЮЧИТЕ VPN',
+                        style: T.ps(8, c: Pal.soft, ls: .02)),
+                    const SizedBox(width: 10),
+                    GestureDetector(
+                      onTap: () => setState(() => vpnDismissed = true),
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.click,
+                        child: Padding(
+                          padding: const EdgeInsets.all(2),
+                          child: Text('×',
+                              style: const TextStyle(
+                                  fontFamily: T.plex,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  height: 1,
+                                  color: Pal.dim)),
+                        ),
+                      ),
+                    ),
+                  ]),
                 ),
               ),
             ),
-          ]),
+          ),
         ),
       ),
     );
@@ -1539,11 +1640,13 @@ class _ModeChipState extends State<_ModeChip> {
                         ? Pal.amber.withValues(alpha: .12)
                         : Colors.transparent),
                 borderRadius: const BorderRadius.all(Radius.circular(2)),
-                boxShadow: hover && !widget.on
-                    ? [BoxShadow(
-                        color: Pal.amber.withValues(alpha: .16),
-                        blurRadius: 10)]
-                    : const [],
+                boxShadow: [
+                  // Список постоянной длины — выход из ховера не прыгает.
+                  BoxShadow(
+                      color: Pal.amber.withValues(
+                          alpha: hover && !widget.on ? .16 : 0),
+                      blurRadius: hover && !widget.on ? 10 : 0),
+                ],
               ),
               child: AnimatedDefaultTextStyle(
                 duration: const Duration(milliseconds: 180),
@@ -1891,10 +1994,11 @@ class _ActButtonState extends State<_ActButton> {
             borderRadius: const BorderRadius.all(Radius.circular(2)),
             color:
                 hover ? Pal.amber.withValues(alpha: .10) : Colors.transparent,
-            boxShadow: hover
-                ? [BoxShadow(
-                    color: Pal.amber.withValues(alpha: .16), blurRadius: 8)]
-                : const [],
+            boxShadow: [
+              BoxShadow(
+                  color: Pal.amber.withValues(alpha: hover ? .16 : 0),
+                  blurRadius: hover ? 8 : 0),
+            ],
           ),
           child: CustomPaint(
             foregroundPainter:
