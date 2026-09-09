@@ -6,6 +6,7 @@
 
 #include "kd_compat.h"
 
+#include <map>
 #include <curl/curl.h>
 
 namespace kd
@@ -50,8 +51,9 @@ static CURL* makeEasy (int timeoutMs)
     return c;
 }
 
-// GET страницы целиком. Пусто — сеть, сервер или таймаут.
-inline Str fetch (const Str& url, int timeoutMs = 15000)
+// То же с дополнительными заголовками (Bearer для публичных API).
+inline Str fetch (const Str& url, int timeoutMs,
+                  const std::map<Str, Str>& extraHeaders)
 {
     CURL* c = makeEasy (timeoutMs);
     if (c == nullptr) return {};
@@ -61,9 +63,21 @@ inline Str fetch (const Str& url, int timeoutMs = 15000)
     curl_easy_setopt (c, CURLOPT_URL, url.c_str());
     curl_easy_setopt (c, CURLOPT_WRITEFUNCTION, writeCb);
     curl_easy_setopt (c, CURLOPT_WRITEDATA, &sink);
+    struct curl_slist* headers = nullptr;
+    for (const auto& h : extraHeaders)
+        headers = curl_slist_append (headers, (h.first + ": " + h.second).c_str());
+    if (headers != nullptr)
+        curl_easy_setopt (c, CURLOPT_HTTPHEADER, headers);
     curl_easy_perform (c);
     curl_easy_cleanup (c);
+    if (headers != nullptr) curl_slist_free_all (headers);
     return out;
+}
+
+// GET страницы целиком. Пусто — сеть, сервер или таймаут.
+inline Str fetch (const Str& url, int timeoutMs = 15000)
+{
+    return fetch (url, timeoutMs, {});
 }
 
 // GET в файл (фотография Pinterest). false — не скачалось.

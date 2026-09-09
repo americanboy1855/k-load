@@ -55,15 +55,34 @@ bool VpnMonitor::checkOnce()
 
 void VpnMonitor::run()
 {
+    // Debounce: состояние меняется только после двух подряд одинаковых
+    // проверок — кратковременный сбой сети не мигает плашкой.
+    int same = 0;
+    bool last = false;
+
     while (! quitFlag.load (std::memory_order_relaxed))
     {
         const bool on = checkOnce();
-        const auto next = on ? State::on : State::off;
-        const auto prev = currentState.exchange (next, std::memory_order_relaxed);
-        if (prev != next)
-            if (auto cb = copyOnChange())
-                cb (next);
+        if (same > 0 && on == last)
+        {
+            ++same;
+        }
+        else
+        {
+            last = on;
+            same = 1;
+        }
 
-        wake.waitMs (15000);
+        // Две подряд одинаковые проверки — считаем состояние устоявшимся.
+        if (same >= 2)
+        {
+            const auto next = on ? State::on : State::off;
+            const auto prev = currentState.exchange (next, std::memory_order_relaxed);
+            if (prev != next)
+                if (auto cb = copyOnChange())
+                    cb (next);
+        }
+
+        wake.waitMs (8000);
     }
 }

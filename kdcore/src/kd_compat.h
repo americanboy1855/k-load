@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -89,6 +90,20 @@ inline Str upToFirst (const Str& s, const Str& marker)
 {
     const auto p = s.find (marker);
     return p == Str::npos ? s : s.substr (0, p);
+}
+
+// Первое совпадение регулярного выражения (std::regex search), иначе пусто.
+inline Str searchRegex (const Str& s, const Str& pattern)
+{
+    try
+    {
+        std::regex re (pattern);
+        std::smatch m;
+        if (std::regex_search (s, m, re) && m.size() > 0)
+            return m[0].str();
+    }
+    catch (...) { /* битый паттерн — пусто */ }
+    return {};
 }
 
 inline int indexOf (const Str& s, const Str& needle, size_t from = 0)

@@ -23,7 +23,7 @@ enum class MediaMode { video, audio };
 // Высота кадра; best — без ограничения.
 enum class VideoQuality { q720, q1080, q2160, best };
 
-enum class AudioFormat { mp3, m4a, wav, flac };
+enum class AudioFormat { mp3, m4a, wav, flac, ogg };
 
 struct QueueItem
 {
@@ -66,6 +66,10 @@ struct QueueItem
     Str sections;
     /// Плейлист: только первые N роликов. 0 — плейлист целиком.
     int playlistLimit = 0;
+    /// Контейнер склейки видео (mp4/webm/mkv); пусто — mp4.
+    Str container;
+    /// Формат изображения (jpg/png); пусто — как скачалось.
+    Str imageFormat;
     /// Pinterest-фотография: качаем напрямую, без yt-dlp.
     bool isPhoto = false;
 
@@ -145,6 +149,10 @@ public:
         Str sections;
         /// Плейлист: скачать только первые N роликов. 0 — целиком.
         int playlistLimit = 0;
+        /// Контейнер склейки видео: mp4/webm/mkv.
+        Str container;
+        /// Формат изображения для Pinterest: jpg/png.
+        Str imageFormat;
     };
 
     /// Все изменения очереди. Приезжает из рабочих потоков — интерфейсу
@@ -199,6 +207,7 @@ private:
     void workerLoop();
     void processItem (const QueueItemPtr& item);
     void startNative (const QueueItemPtr& item);
+    void startPlaylist (const QueueItemPtr& item);
     void startResolve (const QueueItemPtr& item);
     void downloadTrack (const QueueItemPtr& item, int index,
                         Detector::Service searchSite,
@@ -228,6 +237,10 @@ private:
     bool downloadPinterestPhoto (const QueueItemPtr& item);
     Probe probePinterestPhoto (const Str& link) const;
     Probe probeSearch (const Str& query, const Str& site = {}) const;
+    Probe searchAppleMusic (const Str& query) const;
+    Probe searchSpotify (const Str& query) const;
+    Probe searchYandex (const Str& query) const;
+    Probe searchPinterest (const Str& query) const;
     Probe probeDrm (const Str& link, Detector::Service service) const;
 
     // ---- аргументы yt-dlp ----

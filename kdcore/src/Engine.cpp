@@ -51,7 +51,8 @@ void Engine::engineLog (const Str& line)
 static Str audioFormatName (AudioFormat f)
 {
     return f == AudioFormat::m4a ? "m4a" : f == AudioFormat::wav ? "wav"
-         : f == AudioFormat::flac ? "flac" : "mp3";
+         : f == AudioFormat::flac ? "flac" : f == AudioFormat::ogg ? "vorbis"
+         : "mp3";
 }
 
 // ---- JSON-хелперы (в оригинале — juce::var) ----
@@ -204,6 +205,8 @@ void Engine::enqueueBatch (const StrVec& links, const Options& options)
             // отрезок отрезал бы кусок каждой серии.
             item->sections = item->wholePlaylist ? Str() : options.sections;
             item->playlistLimit = options.playlistLimit;
+            item->container = options.container;
+            item->imageFormat = options.imageFormat;
             item->dest = options.dest;
             item->batchIndex = total > 1 ? ++index : 0;
             item->batchTotal = total;
@@ -607,8 +610,146 @@ void Engine::consume (const Str& line, const QueueItemPtr& item)
 
 // MARK: - обычные сервисы
 
+void Engine::startPlaylist (const QueueItemPtr& item)
+{
+    // Плоский список роликов: быстро, без скачивания.
+    StrVec args { "--ignore-config", "--no-warnings", "--flat-playlist", "-J" };
+    args.push_back (item->link);
+    Str out;
+    int code = -1;
+    if (! captureOut (args, out, &code) || code != 0 || out.empty())
+    {
+        finish (item, QueueItem::State::failed,
+            "Не удалось прочитать плейлист — проверьте ссылку и сеть");
+        return;
+    }
+    const auto data = json::parse (out, nullptr, false);
+    if (data.is_discarded() || ! data.is_object())
+    {
+        finish (item, QueueItem::State::failed, "Не удалось прочитать плейлист");
+        return;
+    }
+
+    const auto listTitle = jtext (data, "title", "Плейлист");
+    StrVec urls;
+    const auto entries = data.find ("entries");
+    if (entries != data.end() && entries->is_array())
+        for (const auto& e : *entries)
+        {
+            if (! e.is_object()) continue;
+            auto u = jtext (e, "webpage_url");
+            if (u.empty())
+            {
+                const auto id = jtext (e, "id");
+                if (! id.empty()) u = "https://www.youtube.com/watch?v=" + id;
+            }
+            if (! u.empty()) urls.push_back (u);
+            if (item->playlistLimit > 0
+                && (int) urls.size() >= item->playlistLimit) break;
+        }
+    if (urls.empty())
+    {
+        finish (item, QueueItem::State::failed,
+            "В плейлисте нет доступных роликов");
+        return;
+    }
+
+    item->itemTotal = (int) urls.size();
+    const auto subdir = safeName (listTitle);
+
+    // Попытки входа: без cookies, затем браузеры — как у одиночных файлов.
+    StrVec attempts { "" };
+    for (const auto& b : item->cookieChain)
+        if (! kd::containsVec (attempts, b)) attempts.push_back (b);
+
+    int done = 0, failed = 0;
+    Str lastError;
+
+    for (size_t attempt = 0; attempt < attempts.size(); ++attempt)
+    {
+        done = 0; failed = 0;
+        for (size_t i = 0; i < urls.size(); ++i)
+        {
+            if (item->cancelled() || quit.load (std::memory_order_relaxed))
+            {
+                finish (item, QueueItem::State::failed, "Отменено");
+                return;
+            }
+            item->itemIndex = (int) i + 1;
+            item->itemTotal = (int) urls.size();
+            item->progress = (float) i / (float) urls.size();
+            setStage (item, "Качаю " + std::to_string (i + 1)
+                          + " из " + std::to_string (urls.size()));
+
+            StrVec args = baseArgs (item->dest, attempts[attempt]);
+            if (item->isAudio)
+            {
+                for (const auto& a : kd::splitWhitespace ("-f bestaudio/best -x"))
+                    args.push_back (a);
+                args.push_back ("--audio-format");
+                args.push_back (audioFormatName (item->audioFormat));
+                for (const auto& a : kd::splitWhitespace ("--audio-quality 0 --embed-metadata"))
+                    args.push_back (a);
+                if (item->audioFormat != AudioFormat::wav)
+                    args.push_back ("--embed-thumbnail");
+            }
+            else
+            {
+                args.push_back ("-f");
+                if (item->maxHeight > 0)
+                    args.push_back ("bestvideo[height<=" + std::to_string (item->maxHeight)
+                              + "]+bestaudio/best[height<=" + std::to_string (item->maxHeight) + "]/best");
+                else
+                    args.push_back ("bestvideo+bestaudio/best");
+                args.push_back ("--merge-output-format");
+                args.push_back (item->container.empty() ? Str ("mp4") : item->container);
+            }
+
+            // Папка плейлиста и нумерация файлов: 01 -, 02 -, …
+            char index[8];
+            std::snprintf (index, sizeof (index), "%02d", (int) i + 1);
+            args.push_back ("-o");
+            args.push_back (subdir + "/" + index + " - %(title).100B.%(ext)s");
+            args.push_back (urls[i]);
+
+            const int before = (int) item->files.size();
+            runYtDlp (item, args);
+            if (item->cancelled())
+            {
+                finish (item, QueueItem::State::failed, "Отменено");
+                return;
+            }
+            if ((int) item->files.size() > before) ++done; else ++failed;
+            lastError = errTail;
+        }
+        if (done > 0) break;
+        if (attempt + 1 < attempts.size()
+            && retryWithCookies (lastError))
+            continue;
+        break;
+    }
+
+    if (done > 0)
+    {
+        item->progress = 1;
+        Str stage = "Готово · файлов: " + std::to_string (done);
+        if (failed > 0) stage += " · пропущено: " + std::to_string (failed);
+        finish (item, QueueItem::State::done, stage);
+    }
+    else
+        finish (item, QueueItem::State::failed, humanError (lastError));
+}
+
 void Engine::startNative (const QueueItemPtr& item)
 {
+    // Плейлист: перечисляем ролики и качаем по одному — недоступные
+    // пропускаются, а прогресс честный («Качаю 2 из 25»).
+    if (item->wholePlaylist)
+    {
+        startPlaylist (item);
+        return;
+    }
+
     // Порядок попыток: сначала без входа (открытые материалы качаются и так),
     // затем невидимо через браузеры — браузер по умолчанию, потом остальные.
     StrVec attempts { "" };
@@ -650,19 +791,24 @@ void Engine::startNative (const QueueItemPtr& item)
             args.push_back ("-f");
             args.push_back ("bestvideo[height<=" + std::to_string (item->maxHeight)
                       + "]+bestaudio/best[height<=" + std::to_string (item->maxHeight) + "]/best");
-            for (const auto& a : kd::splitWhitespace ("--merge-output-format mp4")) args.push_back (a);
+            args.push_back ("--merge-output-format");
+            args.push_back (item->container.empty() ? Str ("mp4") : item->container);
         }
         else
         {
             args.push_back ("-f");
             args.push_back ("bestvideo+bestaudio/best");
-            for (const auto& a : kd::splitWhitespace ("--merge-output-format mp4")) args.push_back (a);
+            args.push_back ("--merge-output-format");
+            args.push_back (item->container.empty() ? Str ("mp4") : item->container);
         }
 
         if (item->wholePlaylist)
         {
             // Подборка складывается в свою папку, с нумерацией; лимит —
             // только первые N роликов, если человек задал количество.
+            // Недоступные ролики пропускаем: один битый выпуск не должен
+            // хоронить весь плейлист.
+            args.push_back ("--ignore-errors");
             args.push_back ("--yes-playlist");
             if (item->playlistLimit > 0)
             {
@@ -766,6 +912,10 @@ Str Engine::humanError (const Str& raw)
         return "Адрес не опознан — нужна ссылка на саму запись";
     if (kd::contains (low, "requested format is not available"))
         return "В этом качестве записи нет — выберите другое";
+    if (kd::containsAny (low, { "failed to resolve", "connection refused",
+                                "connection reset", "timed out", "temporary failure",
+                                "network is unreachable", "ssl", "transport error" }))
+        return "Сеть недоступна — включите VPN и попробуйте снова";
 
     auto clean = kd::trim (kd::replaceAll (first, "ERROR: ", ""));
     if (clean.size() > 120) clean = clean.substr (0, 120);
@@ -1094,6 +1244,11 @@ bool Engine::downloadPinterestPhoto (const QueueItemPtr& item)
     auto ext = kd::lower (kd::fromLast (pathPart, "."));
     if (ext.empty() || ext.size() > 4 || ext.find_first_of ("/\\") != Str::npos) ext = "jpg";
 
+    // Выбранный формат изображения: jpg/png (иначе — как скачалось).
+    auto wantExt = kd::lower (kd::trim (item->imageFormat));
+    if (wantExt != "png" && wantExt != "jpg" && wantExt != "jpeg") wantExt.clear();
+    if (! wantExt.empty()) ext = wantExt == "png" ? "png" : "jpg";
+
     const auto name = safeName (title.empty() ? Str ("Фотография Pinterest") : title) + "." + ext;
     const auto finalPath = item->dest / fs::u8path (name);
     std::error_code ec;
@@ -1103,6 +1258,33 @@ bool Engine::downloadPinterestPhoto (const QueueItemPtr& item)
         fs::copy_file (target, finalPath, fs::copy_options::overwrite_existing, ec);
         fs::remove (target);
         if (ec) return false;
+    }
+
+    // Выбран формат PNG, а скачалось JPEG (или наоборот) — конвертируем
+    // штатным sips и убираем исходник.
+    const auto origExt = kd::lower (finalPath.extension().string());
+    const bool alreadyWanted =
+        (wantExt == "png" && origExt == ".png")
+        || (wantExt != "png" && (origExt == ".jpg" || origExt == ".jpeg"));
+    if (! wantExt.empty() && ! alreadyWanted)
+    {
+        auto converted = finalPath;
+        converted.replace_extension (wantExt);
+        kd::ChildProcess sips;
+        if (sips.start ({ "/usr/bin/sips", "-s", "format",
+                          wantExt == "png" ? "png" : "jpeg",
+                          kd::pathStr (finalPath),
+                          "--out", kd::pathStr (converted) }))
+        {
+            const int code = sips.waitExitCode();
+            if (code == 0 && fs::exists (converted))
+            {
+                fs::remove (finalPath, ec);
+                item->files.push_back (kd::pathStr (converted));
+                if (! title.empty()) item->title = title;
+                return true;
+            }
+        }
     }
 
     item->files.push_back (kd::pathStr (finalPath));
@@ -1331,6 +1513,142 @@ Probe Engine::probePinterestPhoto (const Str& link) const
 // Поиск трека по названию: прямой запрос к странице результатов YouTube —
 // одна загрузка вместо запуска целого процесса. yt-dlp остаётся запасным
 // путём на случай, если разметка поменяется; если и он пуст — SoundCloud.
+// ---- поиск по каталогам (выбранный источник в карточке) ----
+
+// Apple Music: официальный публичный iTunes Search API.
+Probe Engine::searchAppleMusic (const Str& query) const
+{
+    Probe p;
+    p.isSearch = true;
+    p.service = Detector::Service::appleMusic;
+    p.link = query;
+
+    const auto body = fetch ("https://itunes.apple.com/search?media=music&limit=1&term="
+                             + kd::urlEscape (query));
+    const auto data = json::parse (body, nullptr, false);
+    if (data.is_discarded() || ! data.is_object()
+        || kd::getInt (jtext (data, "resultCount")) < 1)
+    {
+        p.ok = false;
+        p.error = "Apple Music недоступен из вашей сети — попробуйте другой источник";
+        return p;
+    }
+    const auto results = data["results"];
+    if (! results.is_array() || results.empty())
+    {
+        p.ok = false;
+        p.error = "В Apple Music по этому запросу ничего не нашлось";
+        return p;
+    }
+    const auto& r = results[0];
+    p.ok = true;
+    p.resolved = jtext (r, "trackViewUrl");
+    if (p.resolved.empty()) p.resolved = jtext (r, "collectionViewUrl");
+    p.title = jtext (r, "artistName") + " - " + jtext (r, "trackName");
+    p.uploader = jtext (r, "artistName");
+    p.duration = kd::getInt (jtext (r, "trackTimeMillis")) / 1000;
+    p.thumbnail = jtext (r, "artworkUrl100");
+    return p;
+}
+
+// Spotify: анонимный токен веб-плеера + публичный поиск. Если сеть блокирует
+// токен — человек получает честную ошибку, а не выдуманные результаты.
+Probe Engine::searchSpotify (const Str& query) const
+{
+    Probe p;
+    p.isSearch = true;
+    p.service = Detector::Service::spotify;
+    p.link = query;
+
+    const auto tokenBody = fetch (
+        "https://open.spotify.com/get_access_token?reason=transport&productType=web_player");
+    const auto tokenJson = json::parse (tokenBody, nullptr, false);
+    if (tokenJson.is_discarded() || ! tokenJson.is_object()
+        || ! tokenJson.contains ("accessToken"))
+    {
+        p.ok = false;
+        p.error = "Spotify недоступен из вашей сети — попробуйте другой источник";
+        return p;
+    }
+    const auto token = jtext (tokenJson, "accessToken");
+    const auto body = kd::http::fetch (
+        "https://api.spotify.com/v1/search?type=track&limit=1&q="
+        + kd::urlEscape (query), 15000,
+        { { "Authorization", "Bearer " + token } });
+    const auto data = json::parse (body, nullptr, false);
+    auto tracks = data.is_object() ? dig (data, "tracks.items") : json();
+    if (! tracks.is_array() || tracks.empty())
+    {
+        p.ok = false;
+        p.error = "В Spotify по этому запросу ничего не нашлось";
+        return p;
+    }
+    const auto& t = tracks[0];
+    Str artist;
+    const auto artists = t.find ("artists");
+    if (artists != t.end() && artists->is_array() && ! artists->empty())
+    {
+        const auto& a = (*artists)[0];
+        if (a.is_object()) artist = jtext (a, "name");
+    }
+    p.ok = true;
+    p.resolved = jtext (dig (t, "external_urls"), "spotify");
+    if (p.resolved.empty()) p.resolved = jtext (t, "uri");
+    p.title = artist.empty() ? jtext (t, "name") : artist + " - " + jtext (t, "name");
+    p.uploader = artist;
+    p.duration = (int) (jnum (t, "duration_ms") / 1000);
+    p.thumbnail = jtext (dig (t, "album.images"), "url");
+    if (p.thumbnail.empty())
+    {
+        const auto images = dig (t, "album.images");
+        if (images.is_array() && ! images.empty() && (*images.begin()).is_object())
+            p.thumbnail = jtext (*images.begin(), "url");
+    }
+    return p;
+}
+
+// Яндекс Музыка: страница выдачи содержит прямые ссылки
+// /album/<id>/track/<id> — берём первый результат, карточку даёт og-разметка.
+Probe Engine::searchYandex (const Str& query) const
+{
+    Probe p;
+    p.isSearch = true;
+    p.service = Detector::Service::yandexMusic;
+    p.link = query;
+
+    const auto html = fetch ("https://music.yandex.ru/search?text="
+                             + kd::urlEscape (query));
+    const auto m = kd::searchRegex (html, "/album/[0-9]+/track/[0-9]+");
+    if (m.empty())
+    {
+        p.ok = false;
+        p.error = "Яндекс Музыка недоступна из вашей сети — попробуйте другой источник";
+        return p;
+    }
+    p.ok = true;
+    p.resolved = "https://music.yandex.ru" + m;
+    // Название трека возьмёт resolveOpenGraph на скачивании; для карточки
+    // спросим og-разметку сразу.
+    const auto page = fetch (p.resolved);
+    p.title = between (page,
+        "<meta property=\"og:title\" content=\"", "\"");
+    if (p.title.empty()) p.title = "Трек из Яндекс Музыки";
+    return p;
+}
+
+// Pinterest: автоматический поиск сервис закрывает (403) — честно говорим
+// об этом; пины по ссылке качаются как раньше.
+Probe Engine::searchPinterest (const Str& query) const
+{
+    Probe p;
+    p.isSearch = true;
+    p.service = Detector::Service::pinterest;
+    p.link = query;
+    p.ok = false;
+    p.error = "Pinterest закрыл автоматический поиск — вставьте ссылку на пин";
+    return p;
+}
+
 // Обложка из результата поиска: поле thumbnail, последняя из thumbnails[]
 // или artwork_url (SoundCloud) — что первое встретится.
 static Str searchThumb (const json& e)
@@ -1447,6 +1765,16 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
                 p.thumbnail = searchThumb (e);
             }
         }
+    }
+
+    // Выбранный каталог: Apple Music / Spotify / Яндекс Музыка / Pinterest.
+    if (! p.ok && ! site.empty() && site != "youtube" && site != "soundcloud")
+    {
+        if (site == "apple")        p = searchAppleMusic (query);
+        else if (site == "spotify") p = searchSpotify (query);
+        else if (site == "yandex")  p = searchYandex (query);
+        else if (site == "pinterest") p = searchPinterest (query);
+        return p;
     }
 
     // На YouTube пусто — SoundCloud: там находятся ремиксы и малоизвестное.

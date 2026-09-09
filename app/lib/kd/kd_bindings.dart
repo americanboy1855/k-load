@@ -304,7 +304,8 @@ class KdCore {
   int enqueueBatch(List<String> links,
       {String? dest, bool audio = false, String quality = 'best',
        String audioFormat = 'mp3', int wholePlaylist = -1, String? nameOverride,
-       String? sections, int playlistLimit = 0}) {
+       String? sections, int playlistLimit = 0, String container = 'mp4',
+       String imageFormat = 'jpg'}) {
     final linksJson = jsonEncode(links).toNativeUtf8();
     final opts = jsonEncode({
       if (dest != null) 'dest': dest,
@@ -315,6 +316,8 @@ class KdCore {
       if (nameOverride != null) 'nameOverride': nameOverride,
       if (sections != null && sections.isNotEmpty) 'sections': sections,
       if (playlistLimit > 0) 'playlistLimit': playlistLimit,
+      'container': container,
+      'imageFormat': imageFormat,
     }).toNativeUtf8();
     final n = _b._enqueueBatch(_engine, linksJson, opts);
     calloc
@@ -323,9 +326,12 @@ class KdCore {
     return n;
   }
 
-  int enqueuePhoto(String link, {String? dest}) {
+  int enqueuePhoto(String link, {String? dest, String imageFormat = 'jpg'}) {
     final l = link.toNativeUtf8();
-    final o = jsonEncode({if (dest != null) 'dest': dest}).toNativeUtf8();
+    final o = jsonEncode({
+      if (dest != null) 'dest': dest,
+      'imageFormat': imageFormat,
+    }).toNativeUtf8();
     final n = _b._enqueuePhoto(_engine, l, o);
     calloc
       ..free(l)

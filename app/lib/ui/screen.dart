@@ -119,9 +119,13 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   // источник поиска текстового запроса: null/«auto» — автомат
   String? searchSource;
-  // качество видео: 720/1080/2160/best (по умолчанию 1080P)
+  // качество видео: реальные высоты (дефолт 1080P); МАКСИМУМ убран
   String quality = '1080';
   bool qualityOpen = false;
+  // формат контейнера видео и аудио/фото-формата
+  String videoContainer = 'mp4';
+  String audioFormat = 'mp3';
+  String imageFormat = 'jpg';
   // плейлист: сколько первых роликов качать; 0 — весь
   int playlistLimit = 0;
   final countCtrl = TextEditingController();
@@ -276,6 +280,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       chronOpen = false;
       openPanel = '';
       quality = '1080';
+      qualityOpen = false;
+      videoContainer = 'mp4';
+      audioFormat = 'mp3';
+      imageFormat = 'jpg';
       searchSource = null;
       playlistLimit = 0;
       countCtrl.clear();
@@ -389,6 +397,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       openPanel = '';
       quality = '1080';
       qualityOpen = false;
+      videoContainer = 'mp4';
+      audioFormat = 'mp3';
+      imageFormat = 'jpg';
       playlistLimit = 0;
     });
   }
@@ -427,18 +438,23 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     if (isBatch) {
       final fresh = batchLinks.where((l) => !busy.contains(l)).toList();
       if (fresh.isEmpty) return;
-      c.enqueueBatch(fresh, audio: audio, quality: quality);
+      c.enqueueBatch(fresh,
+          audio: audio, quality: quality, container: videoContainer);
     } else {
       if (p == null || !p.ok) return;
       if (p.isPhoto) {
         final link = targetLink(rawText);
         if (busy.contains(link)) return;
-        c.enqueuePhoto(link);
+        c.enqueuePhoto(link, imageFormat: imageFormat);
       } else if (playlist) {
         final link = p.link;
         if (busy.contains(link)) return;
         c.enqueueBatch([link],
-            audio: audio, wholePlaylist: 1, playlistLimit: limit, quality: quality);
+            audio: audio,
+            wholePlaylist: 1,
+            playlistLimit: limit,
+            quality: quality,
+            container: videoContainer);
       } else if (p.isSearch) {
         // найденный по названию трек: файл называется запросом
         final link = targetLink('');
@@ -447,12 +463,18 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             audio: audio,
             sections: secs,
             nameOverride: rawText,
-            quality: quality);
+            quality: quality,
+            container: videoContainer,
+            audioFormat: audioFormat);
       } else {
         final link = targetLink(rawText);
         if (busy.contains(link)) return;
         c.enqueueBatch([link],
-            audio: audio, sections: secs, quality: quality);
+            audio: audio,
+            sections: secs,
+            quality: quality,
+            container: videoContainer,
+            audioFormat: audioFormat);
       }
     }
     setState(() => items = c.snapshot());
@@ -819,7 +841,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       const SizedBox(width: 15),
       Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _badge(p.serviceTitle.toUpperCase(),
+          _badge(p.isPlaylist
+                  ? 'ПЛЕЙЛИСТ · ${p.serviceTitle.toUpperCase()}'
+                  : p.serviceTitle.toUpperCase(),
               src: src,
               dropdown: p.isSearch, // выбор источника — только для запроса
               badgeKey: chipKeys['source']),
@@ -840,7 +864,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           ),
           // Качество: компактный блок прямо под источником.
           const SizedBox(height: 6),
-          _qualityInline(p),
+          _mediaOptions(p),
           const SizedBox(height: 8),
           Text(p.title, style: T.mono(15),
               maxLines: 2, overflow: TextOverflow.ellipsis),
@@ -851,91 +875,182 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     ]);
   }
 
-  /// Качество: селектор под источником. Видео с известными высотами —
-  /// выбор (МАКСИМУМ + высоты); иначе подпись МАКСИМАЛЬНОЕ (качаем лучшее).
-  Widget _qualityInline(KdProbeEvent p) {
-    if (p.isPhoto || !p.ok) return const SizedBox.shrink();
-    final hasHeights = p.heights.isNotEmpty;
-    if (mode == 'music' || !hasHeights) {
-      return Text('МАКСИМАЛЬНОЕ', style: T.ps(7, c: Pal.dim, ls: .06));
-    }
-    final label = quality == 'best' ? 'МАКСИМУМ' : '$quality P';
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      GestureDetector(
-        onTap: () => setState(() => qualityOpen = !qualityOpen),
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              border: Border.all(color: Pal.amberFaint),
-              borderRadius: const BorderRadius.all(Radius.circular(2)),
-            ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text(label, style: T.ps(8, c: Pal.soft)),
-              const SizedBox(width: 6),
-              const Icon(Icons.expand_more, size: 9, color: Pal.soft),
-            ]),
-          ),
+  /// Формат и качество: компактный блок под источником.
+  /// Видео — формат (MP4/WEBM/MKV) + реальные высоты; аудио — формат
+  /// (MP3/M4A/WAV/FLAC/OGG) + подпись «МАКСИМАЛЬНОЕ КАЧЕСТВО»;
+  /// фото — JPG/PNG + подпись. Один-единственный вариант — без списка.
+  Widget _mediaOptions(KdProbeEvent p) {
+    if (p.isPhoto || !p.ok || p.isPlaylist) return const SizedBox.shrink();
+
+    // Аудио: формат + подпись качества.
+    if (mode == 'music') {
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          _dropChip(
+              label: _audioLabel(audioFormat),
+              open: openPanel == 'aformat',
+              onTap: () => setState(() =>
+                  openPanel = openPanel == 'aformat' ? '' : 'aformat')),
+          const SizedBox(width: 8),
+          Text('· МАКСИМАЛЬНОЕ КАЧЕСТВО', style: T.ps(7, c: Pal.dim, ls: .04)),
+        ]),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topLeft,
+          child: openPanel == 'aformat'
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: GlitchIn(
+                    key: const ValueKey('panel-aformat'),
+                    child: _optionsPanel(const [
+                      ('MP3', 'mp3'),
+                      ('M4A', 'm4a'),
+                      ('WAV', 'wav'),
+                      ('FLAC', 'flac'),
+                      ('OGG', 'ogg'),
+                    ], audioFormat, (v) => audioFormat = v),
+                  ),
+                )
+              : const SizedBox(width: double.infinity),
         ),
-      ),
+      ]);
+    }
+
+    // Видео: формат слева, качество справа (реальные высоты кадра).
+    final hasHeights = p.heights.isNotEmpty;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        _dropChip(
+            label: videoContainer.toUpperCase(),
+            open: openPanel == 'vformat',
+            onTap: () => setState(() =>
+                openPanel = openPanel == 'vformat' ? '' : 'vformat')),
+        const SizedBox(width: 6),
+        if (hasHeights)
+          _dropChip(
+              label: quality == 'best' ? 'МАКС' : '$quality P',
+              open: openPanel == 'quality',
+              onTap: () => setState(() =>
+                  openPanel = openPanel == 'quality' ? '' : 'quality')),
+      ]),
       AnimatedSize(
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOutCubic,
         alignment: Alignment.topLeft,
-        child: qualityOpen
+        child: openPanel == 'vformat'
             ? Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: GlitchIn(
-                  key: const ValueKey('panel-quality'),
-                  child: _darkPanel(
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                      for (final opt in [
-                        ('МАКСИМУМ', 'best'),
-                        for (final h in p.heights.take(4)) ('$h P', '$h'),
-                      ])
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 2),
-                          child: GestureDetector(
-                            onTap: () => setState(() {
-                              quality = opt.$2;
-                              qualityOpen = false;
-                            }),
-                            child: MouseRegion(
-                              cursor: SystemMouseCursors.click,
-                              child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 140),
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 4),
-                                color: quality == opt.$2
-                                    ? Pal.amberFaint
-                                    : Colors.transparent,
-                                child: Text(opt.$1,
-                                    style: T.ps(8,
-                                        c: quality == opt.$2
-                                            ? Pal.amber
-                                            : Pal.soft)),
-                              ),
-                            ),
-                          ),
-                        ),
-                    ]),
-                  ),
+                  key: const ValueKey('panel-vformat'),
+                  child: _optionsPanel(const [
+                    ('MP4', 'mp4'),
+                    ('WEBM', 'webm'),
+                    ('MKV', 'mkv'),
+                  ], videoContainer, (v) => videoContainer = v),
                 ),
               )
-            : const SizedBox(width: double.infinity),
+            : openPanel == 'quality' && hasHeights
+                ? Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: GlitchIn(
+                      key: const ValueKey('panel-quality'),
+                      child: _optionsPanel(
+                        [
+                          for (final h in p.heights.take(4)) ('$h P', '$h'),
+                        ],
+                        quality,
+                        (v) => quality = v,
+                      ),
+                    ),
+                  )
+                : const SizedBox(width: double.infinity),
       ),
     ]);
   }
 
-  /// Источники поиска для текстового запроса; внутри списка — поиск по
-  /// названию сервиса. Выбранная строка подсвечена.
+  String _audioLabel(String v) {
+    switch (v) {
+      case 'm4a': return 'M4A';
+      case 'wav': return 'WAV';
+      case 'flac': return 'FLAC';
+      case 'ogg': return 'OGG';
+      default: return 'MP3';
+    }
+  }
+
+  /// Раскрывающийся ярлык с шевроном.
+  Widget _dropChip({required String label, required bool open, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            border: Border.all(color: open ? Pal.amber : Pal.amberFaint),
+            borderRadius: const BorderRadius.all(Radius.circular(2)),
+            boxShadow: [
+              BoxShadow(
+                  color: Pal.amber.withValues(alpha: open ? .14 : 0),
+                  blurRadius: open ? 8 : 0),
+            ],
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(label, style: T.ps(8, c: Pal.soft)),
+            const SizedBox(width: 5),
+            Icon(open ? Icons.expand_less : Icons.expand_more,
+                size: 9, color: Pal.soft),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  /// Вертикальный список опций; выбранная строка подсвечена.
+  Widget _optionsPanel(
+      List<(String, String)> options, String current, ValueChanged<String> onSelect) {
+    return _darkPanel(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        for (final opt in options)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: GestureDetector(
+              onTap: () => setState(() {
+                onSelect(opt.$2);
+                openPanel = '';
+              }),
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 140),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  color:
+                      current == opt.$2 ? Pal.amberFaint : Colors.transparent,
+                  child: Text(opt.$1,
+                      style: T.ps(8,
+                          c: current == opt.$2 ? Pal.amber : Pal.soft)),
+                ),
+              ),
+            ),
+          ),
+      ]),
+    );
+  }
+
+  /// Источники поиска для текстового запроса: все сервисы, которые ядро
+  /// реально умеет искать. Внутри — поиск по названию сервиса.
   Widget _sourceBox() {
     final options = <(String, String)>[
       ('АВТО', 'auto'),
       ('YOUTUBE', 'youtube'),
       ('SOUNDCLOUD', 'soundcloud'),
+      ('APPLE MUSIC', 'apple'),
+      ('SPOTIFY', 'spotify'),
+      ('ЯНДЕКС МУЗЫКА', 'yandex'),
+      ('PINTEREST', 'pinterest'),
     ];
     final current = (searchSource == null || searchSource == 'auto')
         ? 'auto'
@@ -945,49 +1060,60 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         ? options
         : options.where((o) => o.$1.contains(q)).toList();
     return _darkPanel(
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(
-          width: 150,
-          child: TextField(
+      child: SizedBox(
+        width: 190,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          TextField(
             controller: sourceFilter,
             autofocus: true,
             onChanged: (_) => setState(() {}),
             cursorColor: Pal.amber,
             style: T.mono(10, c: Pal.amber),
             decoration: const InputDecoration(
-                isCollapsed: true, border: InputBorder.none,
-                hintText: 'ПОИСК', hintStyle: TextStyle(
+                isCollapsed: true,
+                border: InputBorder.none,
+                hintText: 'ПОИСК',
+                hintStyle: TextStyle(
                     fontFamily: 'Press Start 2P',
-                    fontSize: 7, color: Pal.dim)),
+                    fontSize: 7,
+                    color: Pal.dim)),
           ),
-        ),
-        const SizedBox(height: 4),
-        for (final opt in visible)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 2),
-            child: GestureDetector(
-              onTap: () {
-                setState(() {
-                  searchSource = opt.$2 == 'auto' ? null : opt.$2;
-                  openPanel = '';
-                });
-                _startSeek(); // переразбор запроса в выбранном источнике
-              },
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 140),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  color: current == opt.$2 ? Pal.amberFaint : Colors.transparent,
-                  child: Text(opt.$1,
-                      style: T.ps(8,
-                          c: current == opt.$2 ? Pal.amber : Pal.soft)),
+          const SizedBox(height: 4),
+          for (final opt in visible)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: GestureDetector(
+                onTap: () {
+                  setState(() {
+                    searchSource = opt.$2 == 'auto' ? null : opt.$2;
+                    openPanel = '';
+                    sourceFilter.clear();
+                  });
+                  _startSeek(); // переразбор запроса в выбранном источнике
+                },
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 140),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 4),
+                    color: current == opt.$2
+                        ? Pal.amberFaint
+                        : Colors.transparent,
+                    child: Text(opt.$1,
+                        style: T.ps(8,
+                            c: current == opt.$2 ? Pal.amber : Pal.soft)),
+                  ),
                 ),
               ),
             ),
-          ),
-      ]),
+          if (visible.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Text('НЕ НАЙДЕН', style: T.ps(7, c: Pal.dim)),
+            ),
+        ]),
+      ),
     );
   }
 

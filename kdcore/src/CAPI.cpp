@@ -30,7 +30,8 @@ static const char* KD_VERSION = "1.0.0";
 static const char* audioFormatName (AudioFormat f)
 {
     return f == AudioFormat::m4a ? "m4a" : f == AudioFormat::wav ? "wav"
-         : f == AudioFormat::flac ? "flac" : "mp3";
+         : f == AudioFormat::flac ? "flac" : f == AudioFormat::ogg ? "vorbis"
+         : "mp3";
 }
 
 static char* dupString (const std::string& s)

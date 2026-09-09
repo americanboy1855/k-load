@@ -21,6 +21,18 @@ func rgb(_ hex: UInt32, _ alpha: CGFloat = 1) -> CGColor {
 guard let srcImage = NSImage(contentsOf: faviconURL)?.cgImage(
     forProposedRect: nil, context: nil, hints: nil)
 else { fatalError("Фавикон.png не прочитался") }
+// Пиксельная K: ужимаем фавикон до грубой сетки и растягиваем ступеньками.
+let tinySide = 40
+let tinyCtx = CGContext(data: nil, width: tinySide, height: tinySide,
+                        bitsPerComponent: 8, bytesPerRow: tinySide,
+                        space: CGColorSpaceCreateDeviceGray(),
+                        bitmapInfo: 0)!
+tinyCtx.setFillColor(gray: 0, alpha: 1)
+tinyCtx.fill(CGRect(x: 0, y: 0, width: tinySide, height: tinySide))
+tinyCtx.interpolationQuality = .medium
+tinyCtx.draw(srcImage, in: CGRect(x: 0, y: 0, width: tinySide, height: tinySide))
+guard let tinyMask = tinyCtx.makeImage() else { fatalError("tiny mask") }
+
 let maskSide = 512
 let grayCtx = CGContext(data: nil, width: maskSide, height: maskSide,
                         bitsPerComponent: 8, bytesPerRow: maskSide,
@@ -28,8 +40,8 @@ let grayCtx = CGContext(data: nil, width: maskSide, height: maskSide,
                         bitmapInfo: 0)!
 grayCtx.setFillColor(gray: 0, alpha: 1)
 grayCtx.fill(CGRect(x: 0, y: 0, width: maskSide, height: maskSide))
-grayCtx.interpolationQuality = .high
-grayCtx.draw(srcImage, in: CGRect(x: 0, y: 0, width: maskSide, height: maskSide))
+grayCtx.interpolationQuality = .none // ступеньки без сглаживания
+grayCtx.draw(tinyMask, in: CGRect(x: 0, y: 0, width: maskSide, height: maskSide))
 let kMask = grayCtx.makeImage()!
 
 // ---- полотно ----
@@ -64,15 +76,15 @@ ctx.drawRadialGradient(
     endCenter: CGPoint(x: 430, y: 580), endRadius: 420, options: [])
 ctx.setBlendMode(.normal)
 
-// буква K из фавикона: клип по маске, белая — крупная
-let kRect = CGRect(x: 76, y: 112, width: 820, height: 820)
+// буква K из фавикона: клип по маске, белая — почти весь тайтл
+let kRect = CGRect(x: 32, y: 32, width: 880, height: 880)
 ctx.clip(to: kRect, mask: kMask)
 ctx.setFillColor(rgb(0xFFFFFF))
 ctx.fill(kRect)
 ctx.restoreGState()
 
 // пиксельная стрелка вниз (оранжевая, без круга) в правом нижнем углу
-let cell: CGFloat = 44
+let cell: CGFloat = 56
 let pixelGrid: [[Int]] = [
     [0, 0, 1, 0, 0],
     [0, 0, 1, 0, 0],
@@ -83,7 +95,7 @@ let pixelGrid: [[Int]] = [
 ]
 let gridW = CGFloat(pixelGrid[0].count) * cell
 let gridH = CGFloat(pixelGrid.count) * cell
-let origin = CGPoint(x: 1024 - 96 - gridW, y: 96) // CG: y вверх, низ иконки
+let origin = CGPoint(x: 1024 - 64 - gridW, y: 64) // CG: y вверх, низ иконки
 ctx.saveGState()
 ctx.setShadow(offset: .zero, blur: 18, color: rgb(0xFFB000, 0.5))
 ctx.setFillColor(rgb(0xFFB000))
