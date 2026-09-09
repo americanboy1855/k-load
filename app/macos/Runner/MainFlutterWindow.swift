@@ -2,6 +2,8 @@ import Cocoa
 import FlutterMacOS
 
 class MainFlutterWindow: NSWindow {
+  var dragContentView: NSView?
+
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
@@ -35,6 +37,7 @@ class MainFlutterWindow: NSWindow {
         name: "kload/native",
         binaryMessenger: flutterViewController.engine.binaryMessenger)
     let dragHelper = DragOutHelper(contentView: contentView!)
+    dragContentView = contentView
     channel.setMethodCallHandler { call, result in
         switch call.method {
         case "chooseFolder":
@@ -52,17 +55,18 @@ class MainFlutterWindow: NSWindow {
                     result(nil) // отменено
                 }
             }
-        case "setDragZones":
+        case "setZones":
             // Зоны приходят в дизайн-координатах (канвас 560×670, оси сверху-
             // слева); переводим в координаты contentView (снизу-слева) с учётом
             // cover-масштаба, которым Flutter укладывает телевизор в окно.
-            if let zones = call.arguments as? [[String: Any]] {
+            if let zones = call.arguments as? [[String: Any]],
+               let contentView = self.dragContentView {
                 let cw = contentView.bounds.width
                 let ch = contentView.bounds.height
                 let scale = max(cw / 560.0, ch / 670.0)
                 let ox = (cw - 560.0 * scale) / 2
                 let oy = (ch - 670.0 * scale) / 2
-                dragHelper.zones = zones.compactMap { zone in
+                let converted: [(path: String, rect: CGRect)] = zones.compactMap { zone in
                     guard let path = zone["path"] as? String,
                           let x = zone["x"] as? Double,
                           let y = zone["y"] as? Double,
@@ -73,6 +77,7 @@ class MainFlutterWindow: NSWindow {
                     return (path, CGRect(x: nx, y: ny,
                                          width: w * scale, height: h * scale))
                 }
+                dragHelper.setZones(converted)
             }
             result(nil)
         default:
@@ -88,52 +93,78 @@ class MainFlutterWindow: NSWindow {
 // Перетаскивание скачанных файлов: Flutter присылает зоны готовых файлов
 // (прямоугольники в координатах contentView), локальный монитор события
 // mouseDown начинает системную drag-сессию с реальным файлом.
+// Перетаскивание скачанных файлов: Flutter присылает зоны готовых строк,
+// для каждой создаётся прозрачный NSView. Зажатие на нём начинает
+// системную drag-сессию с реальным файлом; кнопки справа от зоны
+// (папка/корзина) остаются кликабельными.
 final class DragSourceView: NSView, NSDraggingSource {
+    let filePath: String
+    private var tracking: NSTrackingArea?
+
+    init(frame: NSRect, path: String) {
+        self.filePath = path
+        super.init(frame: frame)
+        let area = NSTrackingArea(rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow],
+            owner: self, userInfo: nil)
+        addTrackingArea(area)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // Лёгкая подсветка зоны при наведении.
+        if isHovered {
+            NSColor(white: 1.0, alpha: 0.05).setFill()
+            dirtyRect.fill()
+        }
+    }
+
+    private var isHovered = false {
+        didSet { needsDisplay = true }
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        NSCursor.pointingHand.push()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        NSCursor.pop()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let url = URL(fileURLWithPath: filePath)
+        let item = NSDraggingItem(pasteboardWriter: url as NSURL)
+        item.setDraggingFrame(CGRect(x: 0, y: 0, width: bounds.width,
+                                     height: bounds.height), contents: nil)
+        _ = beginDraggingSession(with: [item], event: event, source: self)
+    }
+
     func draggingSession(_ session: NSDraggingSession,
                          sourceOperationMaskFor draggingContext: NSDraggingContext) -> NSDragOperation {
         return .copy
-    }
-
-    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint,
-                         operation: NSDragOperation) {
-        removeFromSuperview()
     }
 }
 
 final class DragOutHelper: NSObject {
     private weak var contentView: NSView?
-    private var zones: [(path: String, rect: CGRect)] = []
-    private var monitor: Any?
+    private var views: [DragSourceView] = []
 
     init(contentView: NSView) {
         self.contentView = contentView
         super.init()
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) {
-            [weak self] event in
-            return self?.handle(event: event) ?? event
-        }
     }
 
-    deinit {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-    }
-
-    private func handle(event: NSEvent) -> NSEvent? {
-        guard let contentView, !zones.isEmpty,
-              event.window === contentView.window else { return event }
-        let loc = event.locationInWindow // снизу-слева окна
-        for zone in zones where zone.rect.contains(loc) {
-            guard let url = NSURL(fileURLWithPath: zone.path) as URL? else { continue }
-            let source = DragSourceView(frame: CGRect(x: loc.x - 2, y: loc.y - 2,
-                                                      width: 4, height: 4))
-            contentView.addSubview(source, positioned: .above, relativeTo: nil)
-            let item = NSDraggingItem(pasteboardWriter: url)
-            item.setDraggingFrame(CGRect(x: 0, y: 0, width: 64, height: 64),
-                                  contents: nil)
-            _ = source.beginDraggingSession(with: [item], event: event,
-                                            source: source)
-            return nil // нажатие поглощено — Flutter не получает клик
+    func setZones(_ zones: [(path: String, rect: CGRect)]) {
+        guard let contentView else { return }
+        for v in views { v.removeFromSuperview() }
+        views.removeAll()
+        for zone in zones {
+            let v = DragSourceView(frame: zone.rect, path: zone.path)
+            contentView.addSubview(v, positioned: .above, relativeTo: nil)
+            views.append(v)
         }
-        return event
     }
 }

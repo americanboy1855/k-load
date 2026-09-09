@@ -10,6 +10,8 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <map>
+#include <chrono>
 
 #include "Detector.h"
 #include "kd_compat.h"
@@ -81,6 +83,14 @@ struct QueueItem
 
 using QueueItemPtr = std::shared_ptr<QueueItem>;
 
+/// Один результат текстового поиска (для списка на карточке).
+struct SearchResult
+{
+    Str title;
+    Str url;
+    int duration = 0;
+};
+
 /// Что увидели по ссылке до скачивания — содержимое карточки на экране.
 struct Probe
 {
@@ -98,6 +108,7 @@ struct Probe
     bool isPhoto = false;                  // Pinterest-фотография
     bool isSearch = false;                 // искали по названию
     bool drm = false;                      // запись защищена DRM — скачать нельзя
+    std::vector<SearchResult> results;     // варианты текстового поиска (до 5)
 };
 
 /// Один-единственный разбор ссылки: пока человек допечатывает, старые
@@ -182,6 +193,7 @@ public:
     /// Разбор ссылки/названия. searchSite — «youtube»/«soundcloud»:
     /// задаёт, где искать текстовый запрос (пусто — авто).
     Probe probe (const Str& text, const Str& searchSite = {}) const;
+    Probe buildAndCache (const Str& text, const Str& searchSite) const;
 
     /// Фоновый разбор: старые запросы отменяются поколением, результат
     /// приезжает в onDone из потока разбора.
@@ -237,6 +249,13 @@ private:
     bool downloadPinterestPhoto (const QueueItemPtr& item);
     Probe probePinterestPhoto (const Str& link) const;
     Probe probeSearch (const Str& query, const Str& site = {}) const;
+    Probe searchAppleMusicList (const Str& query) const;
+    Probe searchSpotifyList (const Str& query) const;
+    Probe searchYandexList (const Str& query) const;
+
+    /// Кэш разборов: тот же текст не разбирается дважды (5 минут).
+    static std::map<Str, std::pair<Probe, long long>> probeCache;
+    static std::mutex probeCacheMutex;
     Probe searchAppleMusic (const Str& query) const;
     Probe searchSpotify (const Str& query) const;
     Probe searchYandex (const Str& query) const;

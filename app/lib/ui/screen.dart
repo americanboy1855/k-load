@@ -119,6 +119,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   // источник поиска текстового запроса: null/«auto» — автомат
   String? searchSource;
+  // результаты текстового поиска и выбранный (полный разбор по ссылке)
+  List<Map<String, dynamic>> searchResults = const [];
+  String? selectedResultUrl;
+  bool showResultList = false;
+  String? resultError; // причина, почему результат недоступен
   // качество видео: реальные высоты (дефолт 1080P); МАКСИМУМ убран
   String quality = '1080';
   bool qualityOpen = false;
@@ -255,15 +260,18 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         final box = ctx.findRenderObject() as RenderBox?;
         if (box == null || !box.attached) continue;
         final topLeft = box.localToGlobal(Offset.zero, ancestor: colBox);
+        // Зона без правых кнопок (папка/корзина остаются кликабельными).
+        final w = box.size.width - 84;
+        if (w <= 40) continue;
         zones.add({
           'path': it.files.first,
           'x': topLeft.dx,
           'y': topLeft.dy,
-          'w': box.size.width,
+          'w': w,
           'h': box.size.height,
         });
       }
-      _native.invokeMethod('setDragZones', zones);
+      _native.invokeMethod('setZones', zones);
     });
   }
 
@@ -318,6 +326,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       playlistLimit = 0;
       countCtrl.clear();
       batchProbing = false;
+      showResultList = false;
+      selectedResultUrl = null;
+      searchResults = const [];
     });
     debounce?.cancel();
     seekAnim?.cancel();
@@ -409,6 +420,33 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   void _onProbe(KdProbeEvent p) {
     if (!mounted || rawText.isEmpty) return;
+
+    // Ждём разбор выбранного результата поиска: если трек защищён или
+    // недоступен — честно помечаем строку и остаёмся в списке.
+    if (selectedResultUrl != null) {
+      setState(() {
+        if (p.ok) {
+          probe = p;
+          phase = Phase.found;
+          seekPct = 100;
+          resultError = null;
+          mediaMode = false;
+          final effective = p.resolved.isNotEmpty ? p.resolved : p.link;
+          final svc = serviceOf(
+              effective.startsWith('http') ? effective : rawText);
+          musicOnly = svc.music && !p.isPlaylist;
+          mode = musicOnly ? 'music' : 'video';
+          chronLocked = p.isPlaylist || p.isPhoto || !p.ok;
+        } else {
+          resultError = p.error.isEmpty
+              ? 'Результат недоступен'
+              : p.error;
+        }
+        selectedResultUrl = null;
+      });
+      return;
+    }
+
     // Что реально будет качаться: для поиска по названию это resolved
     // (SoundCloud и т.п.), а не сырой текст из поля.
     final effective = (p.resolved.isNotEmpty ? p.resolved : p.link);
@@ -418,6 +456,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       phase = Phase.found;
       seekPct = 100;
       mediaMode = false;
+      searchResults = [
+        for (final r in (p.json['results'] as List?) ?? [])
+          Map<String, dynamic>.from(r as Map),
+      ];
       // музыкальный сервис: видео оттуда не скачать — сразу плашка МУЗЫКА
       musicOnly = svc.music && !p.isPlaylist;
       mode = musicOnly ? 'music' : 'video';
@@ -432,6 +474,20 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       imageFormat = 'jpg';
       playlistLimit = 0;
     });
+  }
+
+  /// Выбор результата текстового поиска: полный разбор по ссылке —
+  /// подтянутся превью, высоты кадра и честные ошибки (DRM и т.п.).
+  void _selectResult(String url) {
+    if (core == null) return;
+    setState(() {
+      selectedResultUrl = url;
+      resultError = null;
+      phase = Phase.seeking;
+      seekPct = 40;
+      _animateSeek(null);
+    });
+    core?.probeAsync(url);
   }
 
   // ---- скачать ----
@@ -810,6 +866,46 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   // ---- НАЙДЕНО ----
 
+  Widget _resultRow(Map<String, dynamic> r) {
+    final url = (r['url'] ?? '') as String;
+    final err = selectedResultUrl == url && resultError != null
+        ? resultError
+        : null;
+    final dur = (r['duration'] ?? 0) as int;
+    return GestureDetector(
+      onTap: () => _selectResult(url),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(
+            color: err != null
+                ? Pal.amber.withValues(alpha: .04)
+                : Colors.transparent,
+            borderRadius: const BorderRadius.all(Radius.circular(2)),
+          ),
+          child: Row(children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text((r['title'] ?? '') as String,
+                    style: T.mono(12, c: err != null ? Pal.dim : Pal.soft),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+                if (err != null)
+                  Text(err.toUpperCase(),
+                      style: T.ps(7, c: Pal.error, ls: .02)),
+              ]),
+            ),
+            const SizedBox(width: 8),
+            if (dur > 0) Text(fmtDur(dur), style: T.mono(10, c: Pal.dim)),
+          ]),
+        ),
+      ),
+    );
+  }
+
   Widget _foundCard() {
     final p = probe;
     if (isBatch) {
@@ -875,12 +971,56 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       const SizedBox(width: 15),
       Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _badge(p.isPlaylist
-                  ? 'ПЛЕЙЛИСТ · ${p.serviceTitle.toUpperCase()}'
-                  : p.serviceTitle.toUpperCase(),
-              src: src,
-              dropdown: p.isSearch, // выбор источника — только для запроса
-              badgeKey: chipKeys['source']),
+          Row(children: [
+            Text('R${searchResults.length}', style: T.ps(8, c: Pal.error)),
+            const SizedBox(width: 6),
+            _badge(p.isPlaylist
+                    ? 'ПЛЕЙЛИСТ · ${p.serviceTitle.toUpperCase()}'
+                    : p.serviceTitle.toUpperCase(),
+                src: src,
+                dropdown: p.isSearch && searchResults.isNotEmpty,
+                badgeKey: chipKeys['source']),
+            // Вернуться к списку результатов текстового поиска.
+            if (p.isSearch && searchResults.isNotEmpty) ...[
+              const SizedBox(width: 9),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => setState(() {
+                  selectedResultUrl = null;
+                  resultError = null;
+                  showResultList = true;
+                }),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 6, vertical: 6),
+                  child: Text('К РЕЗУЛЬТАТАМ',
+                      style: T.ps(7, c: Pal.dim, ls: .06)),
+                ),
+              ),
+            ],
+          ]),
+          // Список результатов текстового поиска.
+          AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topLeft,
+            child: showResultList && p.isSearch && searchResults.isNotEmpty
+                ? Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: GlitchIn(
+                      key: const ValueKey('panel-results'),
+                      child: Column(crossAxisAlignment:
+                          CrossAxisAlignment.start, children: [
+                        for (final r in searchResults)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: _resultRow(r),
+                          ),
+                      ]),
+                    ),
+                  )
+                : const SizedBox(width: double.infinity),
+          ),
           // Выпадающий источник для текстового запроса.
           AnimatedSize(
             duration: const Duration(milliseconds: 220),
@@ -898,7 +1038,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           ),
           // Качество: компактный блок прямо под источником.
           const SizedBox(height: 6),
-          _mediaOptions(p),
+          if (!(p.isSearch && selectedResultUrl == null && searchResults.isNotEmpty))
+            _mediaOptions(p),
           const SizedBox(height: 8),
           Text(p.title, style: T.mono(15),
               maxLines: 2, overflow: TextOverflow.ellipsis),

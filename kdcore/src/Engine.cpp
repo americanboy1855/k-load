@@ -93,6 +93,31 @@ static json dig (const json& root, const Str& path)
     return cur;
 }
 
+// Все videoRenderer выдачи (для списка результатов на карточке).
+static std::vector<json> findAllVideoRenderers (const json& v)
+{
+    std::vector<json> out;
+    if (v.is_object())
+    {
+        const auto it = v.find ("videoRenderer");
+        if (it != v.end() && it->is_object()) out.push_back (*it);
+        for (auto it2 = v.begin(); it2 != v.end(); ++it2)
+        {
+            auto sub = findAllVideoRenderers (it2.value());
+            for (auto& f : sub) out.push_back (std::move (f));
+        }
+    }
+    else if (v.is_array())
+    {
+        for (const auto& item : v)
+        {
+            auto sub = findAllVideoRenderers (item);
+            for (auto& f : sub) out.push_back (std::move (f));
+        }
+    }
+    return out;
+}
+
 // Рекурсивный поиск первого объекта с ключом videoRenderer в дереве выдачи
 // YouTube (в оригинале — std::function по juce::var).
 static json findVideoRenderer (const json& v)
@@ -1343,7 +1368,40 @@ Str Engine::safeName (const Str& s)
 
 // MARK: - разбор ссылки для карточки
 
+std::map<Str, std::pair<Probe, long long>> Engine::probeCache;
+std::mutex Engine::probeCacheMutex;
+
 Probe Engine::probe (const Str& text, const Str& searchSite) const
+{
+    // Кэш: тот же запрос/ссылка не разбирается повторно 5 минут.
+    {
+        const std::lock_guard<std::mutex> lock (probeCacheMutex);
+        const auto it = probeCache.find (text + "|" + searchSite);
+        if (it != probeCache.end())
+        {
+            const auto stamp = it->second.second;
+            const auto now = std::chrono::duration_cast<std::chrono::seconds> (
+                                 std::chrono::system_clock::now().time_since_epoch())
+                                 .count();
+            if (now - stamp < 300)
+                return it->second.first;
+            probeCache.erase (it);
+        }
+    }
+
+    const auto probe = buildAndCache (text, searchSite);
+    {
+        const std::lock_guard<std::mutex> lock (probeCacheMutex);
+        if (probeCache.size() > 48) probeCache.clear(); // грубая гигиена
+        probeCache[text + "|" + searchSite] = { probe,
+            std::chrono::duration_cast<std::chrono::seconds> (
+                std::chrono::system_clock::now().time_since_epoch())
+                .count() };
+    }
+    return probe;
+}
+
+Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
 {
     auto build = [&]() -> Probe
     {
@@ -1515,15 +1573,15 @@ Probe Engine::probePinterestPhoto (const Str& link) const
 // путём на случай, если разметка поменяется; если и он пуст — SoundCloud.
 // ---- поиск по каталогам (выбранный источник в карточке) ----
 
-// Apple Music: официальный публичный iTunes Search API.
-Probe Engine::searchAppleMusic (const Str& query) const
+// Apple Music: официальный публичный iTunes Search API — 5 результатов.
+Probe Engine::searchAppleMusicList (const Str& query) const
 {
     Probe p;
     p.isSearch = true;
     p.service = Detector::Service::appleMusic;
     p.link = query;
 
-    const auto body = fetch ("https://itunes.apple.com/search?media=music&limit=1&term="
+    const auto body = fetch ("https://itunes.apple.com/search?media=music&limit=5&term="
                              + kd::urlEscape (query));
     const auto data = json::parse (body, nullptr, false);
     if (data.is_discarded() || ! data.is_object()
@@ -1540,20 +1598,35 @@ Probe Engine::searchAppleMusic (const Str& query) const
         p.error = "В Apple Music по этому запросу ничего не нашлось";
         return p;
     }
-    const auto& r = results[0];
+    for (const auto& r : results)
+    {
+        if (! r.is_object()) continue;
+        SearchResult sr;
+        sr.title = jtext (r, "artistName") + " - " + jtext (r, "trackName");
+        sr.url = jtext (r, "trackViewUrl");
+        if (sr.url.empty()) sr.url = jtext (r, "collectionViewUrl");
+        sr.duration = kd::getInt (jtext (r, "trackTimeMillis")) / 1000;
+        if (sr.url.empty()) continue;
+        p.results.push_back (sr);
+    }
+    if (p.results.empty())
+    {
+        p.ok = false;
+        p.error = "В Apple Music по этому запросу ничего не нашлось";
+        return p;
+    }
     p.ok = true;
-    p.resolved = jtext (r, "trackViewUrl");
-    if (p.resolved.empty()) p.resolved = jtext (r, "collectionViewUrl");
-    p.title = jtext (r, "artistName") + " - " + jtext (r, "trackName");
-    p.uploader = jtext (r, "artistName");
-    p.duration = kd::getInt (jtext (r, "trackTimeMillis")) / 1000;
-    p.thumbnail = jtext (r, "artworkUrl100");
+    p.resolved = p.results.front().url;
+    p.title = p.results.front().title;
+    p.uploader = jtext (results[0], "artistName");
+    p.duration = p.results.front().duration;
+    p.thumbnail = jtext (results[0], "artworkUrl100");
     return p;
 }
 
-// Spotify: анонимный токен веб-плеера + публичный поиск. Если сеть блокирует
-// токен — человек получает честную ошибку, а не выдуманные результаты.
-Probe Engine::searchSpotify (const Str& query) const
+// Spotify: анонимный токен веб-плеера + публичный поиск — 5 результатов.
+// Если сеть блокирует токен — честная ошибка, а не выдуманные результаты.
+Probe Engine::searchSpotifyList (const Str& query) const
 {
     Probe p;
     p.isSearch = true;
@@ -1572,7 +1645,7 @@ Probe Engine::searchSpotify (const Str& query) const
     }
     const auto token = jtext (tokenJson, "accessToken");
     const auto body = kd::http::fetch (
-        "https://api.spotify.com/v1/search?type=track&limit=1&q="
+        "https://api.spotify.com/v1/search?type=track&limit=5&q="
         + kd::urlEscape (query), 15000,
         { { "Authorization", "Bearer " + token } });
     const auto data = json::parse (body, nullptr, false);
@@ -1583,33 +1656,41 @@ Probe Engine::searchSpotify (const Str& query) const
         p.error = "В Spotify по этому запросу ничего не нашлось";
         return p;
     }
-    const auto& t = tracks[0];
-    Str artist;
-    const auto artists = t.find ("artists");
-    if (artists != t.end() && artists->is_array() && ! artists->empty())
+    for (const auto& t : tracks)
     {
-        const auto& a = (*artists)[0];
-        if (a.is_object()) artist = jtext (a, "name");
+        if (! t.is_object()) continue;
+        Str artist;
+        const auto artists = t.find ("artists");
+        if (artists != t.end() && artists->is_array() && ! artists->empty())
+        {
+            const auto& a = (*artists)[0];
+            if (a.is_object()) artist = jtext (a, "name");
+        }
+        SearchResult sr;
+        sr.title = artist.empty() ? jtext (t, "name") : artist + " - " + jtext (t, "name");
+        sr.url = jtext (dig (t, "external_urls"), "spotify");
+        if (sr.url.empty()) sr.url = jtext (t, "uri");
+        sr.duration = (int) (jnum (t, "duration_ms") / 1000);
+        if (sr.url.empty()) continue;
+        p.results.push_back (sr);
+    }
+    if (p.results.empty())
+    {
+        p.ok = false;
+        p.error = "В Spotify по этому запросу ничего не нашлось";
+        return p;
     }
     p.ok = true;
-    p.resolved = jtext (dig (t, "external_urls"), "spotify");
-    if (p.resolved.empty()) p.resolved = jtext (t, "uri");
-    p.title = artist.empty() ? jtext (t, "name") : artist + " - " + jtext (t, "name");
-    p.uploader = artist;
-    p.duration = (int) (jnum (t, "duration_ms") / 1000);
-    p.thumbnail = jtext (dig (t, "album.images"), "url");
-    if (p.thumbnail.empty())
-    {
-        const auto images = dig (t, "album.images");
-        if (images.is_array() && ! images.empty() && (*images.begin()).is_object())
-            p.thumbnail = jtext (*images.begin(), "url");
-    }
+    p.resolved = p.results.front().url;
+    p.title = p.results.front().title;
+    p.duration = p.results.front().duration;
     return p;
 }
 
 // Яндекс Музыка: страница выдачи содержит прямые ссылки
-// /album/<id>/track/<id> — берём первый результат, карточку даёт og-разметка.
-Probe Engine::searchYandex (const Str& query) const
+// /album/<id>/track/<id> — собираем до 5; названия подтягивает og-разметка
+// при выборе результата.
+Probe Engine::searchYandexList (const Str& query) const
 {
     Probe p;
     p.isSearch = true;
@@ -1618,21 +1699,30 @@ Probe Engine::searchYandex (const Str& query) const
 
     const auto html = fetch ("https://music.yandex.ru/search?text="
                              + kd::urlEscape (query));
-    const auto m = kd::searchRegex (html, "/album/[0-9]+/track/[0-9]+");
-    if (m.empty())
+    // Первые вхождения /album/<id>/track/<id> без повторов.
+    std::regex re ("/album/[0-9]+/track/[0-9]+");
+    auto begin = std::sregex_iterator (html.begin(), html.end(), re);
+    auto endIt = std::sregex_iterator();
+    Str seen;
+    for (auto it = begin; it != endIt && (int) p.results.size() < 5; ++it)
+    {
+        const auto path = it->str();
+        if (seen.find (path) != Str::npos) continue;
+        if (! seen.empty()) seen += "|";
+        seen += path;
+        SearchResult sr;
+        sr.url = "https://music.yandex.ru" + path;
+        sr.title = "Трек из Яндекс Музыки";
+        p.results.push_back (sr);
+    }
+    if (p.results.empty())
     {
         p.ok = false;
         p.error = "Яндекс Музыка недоступна из вашей сети — попробуйте другой источник";
         return p;
     }
     p.ok = true;
-    p.resolved = "https://music.yandex.ru" + m;
-    // Название трека возьмёт resolveOpenGraph на скачивании; для карточки
-    // спросим og-разметку сразу.
-    const auto page = fetch (p.resolved);
-    p.title = between (page,
-        "<meta property=\"og:title\" content=\"", "\"");
-    if (p.title.empty()) p.title = "Трек из Яндекс Музыки";
+    p.resolved = p.results.front().url;
     return p;
 }
 
@@ -1714,7 +1804,8 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
         {
             const auto data = json::parse (body.substr (0, (size_t) b), nullptr, false);
 
-            auto v = findVideoRenderer (data);
+            auto all = findAllVideoRenderers (data);
+            auto v = all.empty() ? json() : all.front();
             if (v.is_object())
             {
                 const auto id = jtext (v, "videoId");
@@ -1722,6 +1813,22 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
                 for (const auto& part : kd::splitTokens (runsText (v["lengthText"]), ":"))
                     seconds = seconds * 60 + kd::getInt (part);
 
+                // Список результатов: все найденные videoRenderer (до 5).
+                for (const auto& item : all)
+                {
+                    const auto vid = jtext (item, "videoId");
+                    if (vid.empty()) continue;
+                    SearchResult sr;
+                    sr.title = runsText (item["title"]);
+                    if (sr.title.empty()) sr.title = query;
+                    sr.url = "https://www.youtube.com/watch?v=" + vid;
+                    int s2 = 0;
+                    for (const auto& part : kd::splitTokens (runsText (item["lengthText"]), ":"))
+                        s2 = s2 * 60 + kd::getInt (part);
+                    sr.duration = s2;
+                    p.results.push_back (sr);
+                    if (p.results.size() >= 5) break;
+                }
                 p.ok = true;
                 p.resolved = "https://www.youtube.com/watch?v=" + id;
                 p.title = runsText (v["title"]);
@@ -1743,26 +1850,42 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
         }
     }
 
-    // Запасной путь: тот же поиск через сам yt-dlp.
+    // Запасной путь: поиск через сам yt-dlp — сразу 5 результатов для списка.
     int code = -1;
     Str out;
     StrVec args { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
-                  "ytsearch1:" + query };
+                  "ytsearch5:" + query };
     if (wantYoutube && captureOut (args, out, &code) && code == 0 && ! out.empty())
     {
         const auto data = json::parse (out, nullptr, false);
         if (! data.is_discarded())
         {
             const auto entries = data.find ("entries");
-            if (entries != data.end() && entries->is_array() && ! entries->empty())
+            if (entries != data.end() && entries->is_array())
             {
-                const auto& e = (*entries)[0];
-                p.ok = true;
-                p.resolved = jtext (e, "webpage_url");
-                p.title = jtext (e, "title", query);
-                p.uploader = jtext (e, "uploader");
-                p.duration = (int) jnum (e, "duration");
-                p.thumbnail = searchThumb (e);
+                for (const auto& e : *entries)
+                {
+                    if (! e.is_object()) continue;
+                    // В flat-выдаче YouTube ссылка лежит в url, не в webpage_url.
+                    auto url = jtext (e, "webpage_url");
+                    if (url.empty()) url = jtext (e, "url");
+                    if (url.empty()) continue;
+                    SearchResult r;
+                    r.title = jtext (e, "title", query);
+                    r.url = url;
+                    r.duration = (int) jnum (e, "duration");
+                    p.results.push_back (r);
+                    if (p.results.size() >= 5) break;
+                }
+                if (! p.results.empty())
+                {
+                    p.ok = true;
+                    p.resolved = p.results.front().url;
+                    p.title = p.results.front().title;
+                    p.duration = p.results.front().duration;
+                    const auto& e0 = (*entries)[0];
+                    if (e0.is_object()) p.thumbnail = searchThumb (e0);
+                }
             }
         }
     }
@@ -1770,9 +1893,9 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
     // Выбранный каталог: Apple Music / Spotify / Яндекс Музыка / Pinterest.
     if (! p.ok && ! site.empty() && site != "youtube" && site != "soundcloud")
     {
-        if (site == "apple")        p = searchAppleMusic (query);
-        else if (site == "spotify") p = searchSpotify (query);
-        else if (site == "yandex")  p = searchYandex (query);
+        if (site == "apple")        p = searchAppleMusicList (query);
+        else if (site == "spotify") p = searchSpotifyList (query);
+        else if (site == "yandex")  p = searchYandexList (query);
         else if (site == "pinterest") p = searchPinterest (query);
         return p;
     }
@@ -1783,6 +1906,8 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
     // не попадают — человек видит только то, что реально скачается.
     if (! p.ok && wantSoundcloud)
     {
+        // Выдача: 5 кандидатов плоско; скачиваемость конкретного трека
+        // проверяем при выборе результата (полный -J по ссылке).
         Str sc;
         StrVec scArgs { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
                         "scsearch5:" + query };
@@ -1794,41 +1919,27 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
                 const auto entries = data.find ("entries");
                 if (entries != data.end() && entries->is_array())
                 {
-                    int checked = 0;
                     for (const auto& e : *entries)
                     {
-                        if (! e.is_object() || checked >= 3) break;
-                        ++checked;
-                        auto url = jtext (e, "webpage_url");
+                        if (! e.is_object()) continue;
+                        const auto url = jtext (e, "webpage_url");
                         if (url.empty()) continue;
-
-                        StrVec jArgs { "--ignore-config", "--no-warnings",
-                                       "-J", "--no-playlist" };
-                        jArgs.push_back (url);
-                        Str jOut;
-                        int jCode = -1;
-                        if (! captureOut (jArgs, jOut, &jCode)
-                            || jCode != 0 || jOut.empty())
-                            continue; // DRM/закрытый — следующий кандидат
-                        const auto full = json::parse (jOut, nullptr, false);
-                        if (full.is_discarded() || ! full.is_object()) continue;
-                        const auto formats = full.find ("formats");
-                        if (formats == full.end() || ! formats->is_array()
-                            || formats->empty())
-                            continue; // качать нечем
-
+                        SearchResult r;
+                        r.title = jtext (e, "title", query);
+                        r.url = url;
+                        r.duration = (int) jnum (e, "duration");
+                        p.results.push_back (r);
+                        if (p.results.size() >= 5) break;
+                    }
+                    if (! p.results.empty())
+                    {
+                        const auto& e = p.results.front();
                         p.ok = true;
                         p.service = Detector::Service::soundcloud;
-                        p.resolved = url;
-                        p.title = jtext (full, "title", query);
-                        p.uploader = jtext (full, "uploader");
-                        p.duration = (int) jnum (full, "duration");
-                        p.thumbnail = searchThumb (full);
-                        break;
+                        p.resolved = e.url;
+                        p.title = e.title;
+                        p.duration = e.duration;
                     }
-                    if (! p.ok)
-                        p.error = "Найденные треки защищены от скачивания (DRM)"
-                                  " — попробуйте другой запрос или источник";
                 }
             }
         }
