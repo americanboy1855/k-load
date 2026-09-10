@@ -13,13 +13,6 @@ import 'widgets.dart';
 
 const tvW = 560.0, tvH = 670.0;
 
-/// Источники текстового поиска — зеркально агрегатору ядра
-/// (Engine::probeSearch: YouTube, SoundCloud, Spotify, Apple Music).
-/// Если источник убирается из поиска, его ярлык уходит и из подсказки.
-const textSearchHints = ['YT', 'SC', 'SP', 'AM'];
-String get searchHintText =>
-    'ВСТАВЬТЕ ССЫЛКУ ИЛИ НАПИШИТЕ НАЗВАНИЕ (${textSearchHints.join(', ')})';
-
 // Классификатор сервисов — зеркально design/main-screen.html.
 class ServiceInfo {
   const ServiceInfo(this.id, this.name, {this.music = false, this.playlist = false});
@@ -271,49 +264,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   /// Прямым ссылкам кнопка не нужна.
   bool get _showBackToResults =>
       cameFromSearch && cardVisible && searchResults.isNotEmpty;
-
-  /// Квадратная кнопка возврата к прежней выдаче текстового поиска.
-  bool backHover = false;
-
-  Widget _backToResultsButton() {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => setState(() => showResultList = true),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => backHover = true),
-        onExit: (_) => setState(() => backHover = false),
-        child: TweenAnimationBuilder<double>(
-          tween: Tween(end: backHover ? 1.0 : 0.0),
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOut,
-          builder: (context, t, _) => Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-            decoration: BoxDecoration(
-              color: Color.lerp(Colors.transparent,
-                  Pal.amber.withValues(alpha: .08), t),
-              boxShadow: t > 0.01
-                  ? [BoxShadow(
-                      color: Pal.amber.withValues(alpha: .2 * t),
-                      blurRadius: 8 * t)]
-                  : null,
-            ),
-            child: CustomPaint(
-              foregroundPainter: DashedBorderPainter(
-                  color: Color.lerp(Pal.amberFaint, Pal.amber, t)!),
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                child: Text('К РЕЗУЛЬТАТАМ',
-                    style: T.ps(7,
-                        c: Color.lerp(Pal.dim, Pal.amber, t)!, ls: .08)),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 
   @override
   void initState() {
@@ -1274,18 +1224,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
               const SizedBox(height: 14),
               _searchErrorPanel(),
             ] else ...[
-              if (_showBackToResults) ...[
-                const SizedBox(height: 8),
-                // Возврат к прежней выдаче: справа под строкой поиска,
-                // на уровне верхней границы обложки. Запрос, результаты
-                // и позиция прокрутки сохранены.
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: _backToResultsButton(),
-                ),
-              ],
               if (cardVisible) ...[
-                SizedBox(height: _showBackToResults ? 6 : 18),
+                const SizedBox(height: 18),
                 _foundCard(),
                 if (!(probe?.drm ?? false)) ...[
                   const SizedBox(height: 18),
@@ -1390,13 +1330,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                           ),
                           if (rawText.isEmpty)
                             // Подсказка не должна перехватывать клики поля.
-                            // Крупный пиксельный кегль: читается сразу после
-                            // запуска; на узкой ширине честно переносится.
+                            // Тонкий шрифт поля, кегль крупнее прежнего 12.
                             IgnorePointer(
                               child: Text(
-                                searchHintText,
-                                style: T.ps(9, c: Pal.soft, ls: .04),
-                                maxLines: 2,
+                                'Вставьте ссылку или напишите название',
+                                style: T.mono(14, c: Pal.dim),
+                                maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -1749,6 +1688,13 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                     ? 'ПЛЕЙЛИСТ · ${p.serviceTitle.toUpperCase()}'
                     : p.serviceTitle.toUpperCase(),
                 src: src),
+            // Возврат к прежней выдаче: на одной линии со строкой
+            // источника, правый край — по внутренней границе контента.
+            if (_showBackToResults) ...[
+              const Spacer(),
+              _BackToResultsButton(
+                  onTap: () => setState(() => showResultList = true)),
+            ],
           ]),
           // Качество/формат: компактный блок под источником.
           const SizedBox(height: 6),
@@ -2180,14 +2126,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     final photo = !isBatch && (p?.isPhoto ?? false);
     final playlist = !isBatch && (p?.isPlaylist ?? false);
 
-    // Ярлык СКАЧАТЬ: пачка — количество ссылок, плейлист — выбранное
-    // количество роликов (или весь плейлист), одиночное — 1.
-    final goCount = isBatch
-        ? batchCount
-        : playlist
-            ? (playlistLimit > 0 ? playlistLimit : (p?.count ?? 1))
-            : 1;
-    final goLabel = 'СКАЧАТЬ · $goCount';
+    // Ярлык СКАЧАТЬ: пачка — количество ссылок, одиночное — 1. У плейлиста
+    // счётчик не дублируется: количество видно в плашке («N ВИДЕО») и в
+    // меню КОЛ-ВО.
+    final goLabel = playlist
+        ? 'СКАЧАТЬ'
+        : 'СКАЧАТЬ · ${isBatch ? batchCount : 1}';
     final canDownload = isBatch || (p != null && p.ok && !p.drm);
     final videoLabel = mediaMode ? 'МЕДИА' : 'ВИДЕО';
 
@@ -2232,6 +2176,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                   })),
 
         const Spacer(),
+        // Пауза/плей — вплотную к «СКАЧАТЬ», одной с ней высоты. Пока
+        // активных загрузок нет, кнопки не видно и «СКАЧАТЬ» не сдвигается.
+        if (hasActiveTasks) ...[
+          _pauseButton(),
+          const SizedBox(width: 8),
+        ],
         _GoButton(label: goLabel, enabled: canDownload),
       ]),
       // Панели открываются под своим чипом и плавно раздвигают контент.
@@ -2282,8 +2232,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         : 0;
     return _darkPanel(
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Text('КОЛ-ВО${max > 0 ? ' · ДО $max' : ''}',
-            style: T.ps(8, c: Pal.soft)),
+        // Количество роликов уже видно в плашке плейлиста — здесь без
+        // приписки «ДО N», чтобы не дублировать.
+        Text('КОЛ-ВО', style: T.ps(8, c: Pal.soft)),
         const SizedBox(width: 8),
         SizedBox(
             width: 64,
@@ -2377,8 +2328,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                 thumbVisibility: true,
                 child: ListView.builder(
                   controller: _queueScroll,
-                  // Активные сверху, очередь под ними, история внизу
-                  // (см. _sortedItems): порядок сортированный, не обратный.
+                  // Активные и их завершённые сверху, очередь под ними,
+                  // ошибки внизу (см. _sortedItems).
                   padding: EdgeInsets.zero,
                   itemCount: sorted.length,
                   itemBuilder: (context, i) => _queueRow(sorted[i]),
@@ -2386,19 +2337,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
               ),
             ),
           ),
-          // Резервная полоса под кнопку паузы: строки, папка, корзина и
-          // полоса прогресса никогда не оказываются под ней.
-          if (hasActiveTasks)
-            SizedBox(
-              height: 40,
-              child: Align(
-                alignment: Alignment.bottomRight,
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 13, bottom: 8),
-                  child: _pauseButton(),
-                ),
-              ),
-            ),
         ]),
       ),
     );
@@ -2434,18 +2372,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                 );
               }),
             ),
-            // Кнопка паузы на своей полосе снизу: строки не перекрывает.
-            if (hasActiveTasks)
-              SizedBox(
-                height: 34,
-                child: Align(
-                  alignment: Alignment.bottomRight,
-                  child: Padding(
-                    padding: const EdgeInsets.only(right: 13, bottom: 5),
-                    child: _pauseButton(),
-                  ),
-                ),
-              ),
           ]),
         ),
       ),
@@ -2471,17 +2397,19 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     );
   }
 
-  /// Активные (качается/ждёт/приостановлено) — сверху, старое и готовое —
-  /// ниже; внутри групп: очередь по порядку скачивания, завершённые —
-  /// свежие сверху. Порядок работы ядра не меняется.
+  /// Сверху — самое актуальное. Группы: 1) активные (качается/обрабатывается/
+  /// «Читаю каталог…») и их завершённые — закончившийся файл остаётся в
+  /// верхнем блоке, новые активные появляются над ним; 2) очередь и пауза;
+  /// 3) ошибки. Внутри активных и очереди — порядок скачивания, у
+  /// завершённых и ошибок — свежие сверху. Порядок работы ядра не меняется.
   List<KdItem> _sortedItems() {
     int rank(KdItem it) {
       switch (it.state) {
         case 'working': return 0;
-        case 'queued': return 1;
+        case 'done': return 1;
+        case 'queued': return 2;
         case 'paused': return 2;
-        case 'done': return 3;
-        default: return 4;
+        default: return 3; // ошибки и отменённые
       }
     }
 
@@ -2491,8 +2419,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     indexed.sort((a, b) {
       final r = rank(a.$2).compareTo(rank(b.$2));
       if (r != 0) return r;
-      final queueRank = rank(a.$2) <= 1; // очередь — по порядку скачивания
-      return queueRank ? a.$1.compareTo(b.$1) : b.$1.compareTo(a.$1);
+      final inQueueOrder = rank(a.$2) == 0 || rank(a.$2) == 2;
+      return inQueueOrder ? a.$1.compareTo(b.$1) : b.$1.compareTo(a.$1);
     });
     return [for (final e in indexed) e.$2];
   }
@@ -2502,46 +2430,31 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       it.state == 'working' ||
       it.state == 'paused');
 
-  /// Квадратная кнопка паузы/возобновления. В главном диспетчере живёт на
-  /// резервной полосе справа снизу, в компактном — под списком справа:
-  /// строки, папка, корзина и полоса прогресса не перекрываются.
+  /// Квадратная кнопка паузы/возобновления: стоит слева от «СКАЧАТЬ»,
+  /// высота совпадает с ней пиксель в пиксель. Заливка — как у «СКАЧАТЬ»,
+  /// иконка чёрная и показывает действие, которое произойдёт по нажатию:
+  /// идёт загрузка — пауза, стоит на паузе — плей.
   Widget _pauseButton() {
+    // Высота «СКАЧАТЬ»: шрифт 10 * высота строки 1.45 + вертикальные
+    // паддинги 10+10 = 34.5.
+    const goHeight = 34.5;
     return GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: _toggleQueuePause,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: TweenAnimationBuilder<double>(
-            tween: Tween(end: queuePaused ? 1.0 : 0.0),
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOut,
-            builder: (context, t, child) => Container(
-              width: 44,
-              height: 30,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: const Color(0xF50D0902),
-                boxShadow: [
-                  BoxShadow(
-                      color: Colors.black.withValues(alpha: .55),
-                      blurRadius: 6),
-                  BoxShadow(
-                      color: Pal.amber.withValues(alpha: .25 * t),
-                      blurRadius: 8 * t),
-                ],
-              ),
-              child: CustomPaint(
-                foregroundPainter: DashedBorderPainter(
-                    color: Color.lerp(Pal.amberFaint, Pal.amber, t)!),
-                child: Center(
-                  child: Text(queuePaused ? 'PLAY' : 'ПАУЗА',
-                      style: T.ps(7,
-                          c: Color.lerp(Pal.dim, Pal.amber, t)!, ls: .06)),
-                ),
-              ),
-            ),
+      behavior: HitTestBehavior.opaque,
+      onTap: _toggleQueuePause,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Container(
+          width: goHeight,
+          height: goHeight,
+          alignment: Alignment.center,
+          color: Pal.amber,
+          child: Icon(
+            queuePaused ? Icons.play_arrow : Icons.pause,
+            size: 18,
+            color: const Color(0xFF0A0500),
           ),
         ),
+      ),
     );
   }
 
@@ -3036,6 +2949,66 @@ class _ModeChipState extends State<_ModeChip> {
                 style: T.ps(9,
                     c: widget.on ? const Color(0xFF0A0500) : Pal.soft),
                 child: Text(widget.label),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Кнопка «К РЕЗУЛЬТАТАМ»: стоит в строке источника карточки. Подсветка —
+// только внутренняя заливка внутри пунктирной рамки, никакого свечения
+// снаружи. Состояние hover живёт в самом виджете и сбрасывается по клику
+// и по уходу курсора — залипание подсветки исключено.
+class _BackToResultsButton extends StatefulWidget {
+  const _BackToResultsButton({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  State<_BackToResultsButton> createState() => _BackToResultsButtonState();
+}
+
+class _BackToResultsButtonState extends State<_BackToResultsButton> {
+  bool _hover = false;
+
+  void _setHover(bool v) {
+    if (_hover != v) setState(() => _hover = v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        // Клик гасит подсветку сразу — hover не тянется дальше нажатия.
+        _setHover(false);
+        widget.onTap();
+      },
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => _setHover(true),
+        onExit: (_) => _setHover(false),
+        // Страховка от потерянного onEnter при пересборке дерева.
+        onHover: (_) => _setHover(true),
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(end: _hover ? 1.0 : 0.0),
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+          builder: (context, t, _) => Container(
+            // Внутренняя заливка — единственная подсветка, наружу не выходит.
+            color: Color.lerp(Colors.transparent,
+                Pal.amber.withValues(alpha: .08), t),
+            child: CustomPaint(
+              foregroundPainter: DashedBorderPainter(
+                  color: Color.lerp(Pal.amberFaint, Pal.amber, t)!),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Text('К РЕЗУЛЬТАТАМ',
+                    style: T.ps(7,
+                        c: Color.lerp(Pal.dim, Pal.amber, t)!, ls: .08)),
               ),
             ),
           ),
