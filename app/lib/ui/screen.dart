@@ -309,12 +309,28 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     if (c == null) return;
     if (e is KdVpnEvent) {
       final wasOff = vpnState == 2;
+      // VPN пропал: активные загрузки корректно ставим на паузу (yt-dlp
+      // сохраняет .part), чтобы они не падали сетевыми ошибками. После
+      // возврата VPN их можно продолжить кнопкой плей.
+      var autoPaused = false;
+      if (wasOff && !e.on && !queuePaused) {
+        final hasTasks = items.any((it) =>
+            it.state == 'queued' ||
+            it.state == 'working' ||
+            it.state == 'paused');
+        if (hasTasks) {
+          c.setPaused(true);
+          queuePaused = true;
+          autoPaused = true;
+        }
+      }
       setState(() {
         vpnState = e.on ? 1 : 2;
         if (e.on) vpnDismissed = false;
         // Новое появление плашки при каждом переходе вкл -> выкл.
         if (wasOff && !e.on) vpnEpoch += 1;
       });
+      if (autoPaused) _showToast('VPN ОТКЛЮЧЁН — ЗАГРУЗКИ ПРИОСТАНОВЛЕНЫ');
       // VPN вернулся: безопасно повторяем прерванный разбор. Поле,
       // источник, результаты и очередь загрузок не трогаем.
       if (e.on && wasOff && booted) _recoverAfterVpn();
@@ -333,9 +349,47 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       }
       _onProbe(e);
     } else {
-      setState(() => items = c.snapshot());
-      _scheduleDragZones();
+      _refreshItems(c);
     }
+  }
+
+  /// Якорь прокрутки: id первой видимой строки. Пока список меняется,
+  /// якорь возвращает вьюпорт к той же строке — пересортировка статусов
+  /// не прыгает под курсором.
+  int? _queueAnchorId() {
+    if (!_queueScroll.hasClients) return null;
+    final sorted = _sortedItems();
+    if (sorted.isEmpty) return null;
+    final pos = _queueScroll.position;
+    if (pos.maxScrollExtent <= 0) return null;
+    final rowH = pos.maxScrollExtent / sorted.length;
+    final firstVisible = (pos.pixels / rowH).floor().clamp(0, sorted.length - 1);
+    return sorted[firstVisible].id;
+  }
+
+  void _restoreQueueAnchor(int? anchorId) {
+    if (anchorId == null || !_queueScroll.hasClients) return;
+    final sorted = _sortedItems();
+    final idx = sorted.indexWhere((e) => e.id == anchorId);
+    if (idx < 0) return;
+    final pos = _queueScroll.position;
+    if (pos.maxScrollExtent <= 0) return;
+    final rowH = pos.maxScrollExtent / sorted.length;
+    final target = (idx * rowH).clamp(0.0, pos.maxScrollExtent);
+    if ((_queueScroll.offset - target).abs() > rowH / 2) {
+      _queueScroll.jumpTo(target);
+    }
+  }
+
+  /// Обновление очереди из ядра: якорим прокрутку против прыжков.
+  void _refreshItems(KdCore? c) {
+    if (c == null) return;
+    final anchor = _queueAnchorId();
+    setState(() => items = c.snapshot());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _restoreQueueAnchor(anchor);
+    });
+    _scheduleDragZones();
   }
 
   /// VPN снова работает: повторяем разбор, который мог оборваться.
@@ -345,15 +399,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     // Очередь: задания, упавшие по сети, встают обратно (лимит автоповторов).
     // Второй проход с задержкой ловит отложенные сетевые таймауты.
     core?.retryNetworkFailed();
-    setState(() => items = core?.snapshot() ?? items);
-    _scheduleDragZones();
+    _refreshItems(core);
     Future.delayed(const Duration(seconds: 5), () {
       if (!mounted) return;
       final n = core?.retryNetworkFailed() ?? 0;
-      if (n > 0) {
-        setState(() => items = core?.snapshot() ?? items);
-        _scheduleDragZones();
-      }
+      if (n > 0) _refreshItems(core);
     });
     if (!mounted || rawText.isEmpty) return;
     _probeWatchdog?.cancel();
@@ -782,8 +832,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         quality: it.maxHeight > 0 ? '${it.maxHeight}' : 'best',
         audioFormat: it.audioFormat,
         container: it.container);
-    setState(() => items = c.snapshot());
-    _scheduleDragZones();
+    _refreshItems(c);
   }
 
   // ---- скачать ----
@@ -999,10 +1048,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             durationHint: p.duration);
       }
     }
-    setState(() {
-      items = c.snapshot();
-      _scheduleDragZones();
-    });
+    _refreshItems(c);
   }
 
   // ---- очередь: действия ----
@@ -1055,8 +1101,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       }
     }
     core?.remove(it.id);
-    setState(() => items = core?.snapshot() ?? items);
-    _scheduleDragZones();
+    _refreshItems(core);
   }
 
   // ---- build ----
@@ -1692,7 +1737,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             // источника, правый край — по внутренней границе контента.
             if (_showBackToResults) ...[
               const Spacer(),
-              _BackToResultsButton(
+              _GhostButton(
+                  label: 'К РЕЗУЛЬТАТАМ',
                   onTap: () => setState(() => showResultList = true)),
             ],
           ]),
@@ -2126,12 +2172,15 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     final photo = !isBatch && (p?.isPhoto ?? false);
     final playlist = !isBatch && (p?.isPlaylist ?? false);
 
-    // Ярлык СКАЧАТЬ: пачка — количество ссылок, одиночное — 1. У плейлиста
-    // счётчик не дублируется: количество видно в плашке («N ВИДЕО») и в
-    // меню КОЛ-ВО.
-    final goLabel = playlist
-        ? 'СКАЧАТЬ'
-        : 'СКАЧАТЬ · ${isBatch ? batchCount : 1}';
+    // Ярлык СКАЧАТЬ · N: N — сколько файлов реально уйдёт в загрузку.
+    // Пачка — количество ссылок, плейлист — введённое КОЛ-ВО (или весь
+    // плейлист), одиночное — 1. Ввод в КОЛ-ВО обновляет кнопку сразу.
+    final goCount = isBatch
+        ? batchCount
+        : playlist
+            ? (playlistLimit > 0 ? playlistLimit : (p?.count ?? 1))
+            : 1;
+    final goLabel = 'СКАЧАТЬ · $goCount';
     final canDownload = isBatch || (p != null && p.ok && !p.drm);
     final videoLabel = mediaMode ? 'МЕДИА' : 'ВИДЕО';
 
@@ -2230,12 +2279,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     final max = (!isBatch && probe != null && probe!.isPlaylist && probe!.count > 0)
         ? probe!.count
         : 0;
+    // Слово «КОЛ-ВО» уже стоит на чипе — в панели только поле ввода,
+    // без повторной подписи.
     return _darkPanel(
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        // Количество роликов уже видно в плашке плейлиста — здесь без
-        // приписки «ДО N», чтобы не дублировать.
-        Text('КОЛ-ВО', style: T.ps(8, c: Pal.soft)),
-        const SizedBox(width: 8),
         SizedBox(
             width: 64,
             child: TextField(
@@ -2384,14 +2431,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       child: Row(children: [
         Text('ДИСПЕТЧЕР ЗАГРУЗОК', style: T.ps(9, c: Pal.soft, ls: .1)),
         const Spacer(),
+        // Очистка: крупная кнопка с той же подсветкой, что у
+        // «К РЕЗУЛЬТАТАМ» (пунктирная рамка, заливка только внутри).
         if (!compact && items.isNotEmpty)
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
+          _GhostButton(
+            label: 'ОЧИСТИТЬ',
             onTap: _clearQueueHistory,
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: Text('[ОЧИСТИТЬ]', style: T.ps(7, c: Pal.dim, ls: .08)),
-            ),
+            fontSize: 8,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           ),
       ]),
     );
@@ -2403,14 +2450,19 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   /// 3) ошибки. Внутри активных и очереди — порядок скачивания, у
   /// завершённых и ошибок — свежие сверху. Порядок работы ядра не меняется.
   List<KdItem> _sortedItems() {
+    // Сверху — самое актуальное, пересортировка на каждом обновлении
+    // снапшота. Группы: 1) активные (качается/обрабатывается/«Читаю
+    // каталог…»), 2) очередь и пауза, 3) ошибки, 4) завершённые —
+    // самые свежие выше. Внутри активных и очереди — порядок скачивания.
     int rank(KdItem it) {
       switch (it.state) {
         case 'working': return 0;
-        case 'done': return 1;
-        case 'queued': return 2;
-        case 'paused': return 2;
-        default: return 3; // ошибки и отменённые
+        case 'queued': return 1;
+        case 'paused': return 1;
+        case 'failed': return 2;
+        case 'done': return 3;
       }
+      return 3;
     }
 
     final indexed = <(int, KdItem)>[
@@ -2419,7 +2471,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     indexed.sort((a, b) {
       final r = rank(a.$2).compareTo(rank(b.$2));
       if (r != 0) return r;
-      final inQueueOrder = rank(a.$2) == 0 || rank(a.$2) == 2;
+      final inQueueOrder = rank(a.$2) <= 1;
       return inQueueOrder ? a.$1.compareTo(b.$1) : b.$1.compareTo(a.$1);
     });
     return [for (final e in indexed) e.$2];
@@ -2463,10 +2515,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   void _toggleQueuePause() {
     final next = !queuePaused;
     core?.setPaused(next);
+    final anchor = _queueAnchorId();
     setState(() {
       queuePaused = next;
       items = core?.snapshot() ?? items;
       queueShown = true;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _restoreQueueAnchor(anchor);
     });
     _scheduleDragZones();
   }
@@ -2671,7 +2727,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     const VpnIcon(),
                     const SizedBox(width: 10),
-                    Text('ДЛЯ ЛУЧШЕЙ РАБОТЫ ПРИЛОЖЕНИЯ — ВКЛЮЧИТЕ VPN',
+                    Text('VPN ОТКЛЮЧЁН — ЗАГРУЗКИ МОГУТ НЕ РАБОТАТЬ. ВКЛЮЧИТЕ VPN',
                         style: T.ps(8, c: Pal.soft, ls: .02)),
                     const SizedBox(width: 10),
                     GestureDetector(
@@ -2958,19 +3014,28 @@ class _ModeChipState extends State<_ModeChip> {
   }
 }
 
-// Кнопка «К РЕЗУЛЬТАТАМ»: стоит в строке источника карточки. Подсветка —
-// только внутренняя заливка внутри пунктирной рамки, никакого свечения
-// снаружи. Состояние hover живёт в самом виджете и сбрасывается по клику
-// и по уходу курсора — залипание подсветки исключено.
-class _BackToResultsButton extends StatefulWidget {
-  const _BackToResultsButton({required this.onTap});
+// Кнопка-«призрак» в пунктирной рамке: «К РЕЗУЛЬТАТАМ», «ОЧИСТИТЬ».
+// Подсветка — только внутренняя заливка внутри рамки, наружу не выходит.
+// Состояние hover живёт в самом виджете и сбрасывается по клику и по
+// уходу курсора — залипание исключено.
+class _GhostButton extends StatefulWidget {
+  const _GhostButton({
+    super.key,
+    required this.label,
+    required this.onTap,
+    this.fontSize = 7,
+    this.padding = const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+  });
+  final String label;
   final VoidCallback onTap;
+  final double fontSize;
+  final EdgeInsetsGeometry padding;
 
   @override
-  State<_BackToResultsButton> createState() => _BackToResultsButtonState();
+  State<_GhostButton> createState() => _GhostButtonState();
 }
 
-class _BackToResultsButtonState extends State<_BackToResultsButton> {
+class _GhostButtonState extends State<_GhostButton> {
   bool _hover = false;
 
   void _setHover(bool v) {
@@ -3004,10 +3069,9 @@ class _BackToResultsButtonState extends State<_BackToResultsButton> {
               foregroundPainter: DashedBorderPainter(
                   color: Color.lerp(Pal.amberFaint, Pal.amber, t)!),
               child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                child: Text('К РЕЗУЛЬТАТАМ',
-                    style: T.ps(7,
+                padding: widget.padding,
+                child: Text(widget.label,
+                    style: T.ps(widget.fontSize,
                         c: Color.lerp(Pal.dim, Pal.amber, t)!, ls: .08)),
               ),
             ),
@@ -3211,13 +3275,6 @@ class _SmartCoverState extends State<_SmartCover> {
       if (!mounted || gen != _gen || path.isEmpty) return;
       if (!File(path).existsSync()) return;
       setState(() => _file = path);
-      // Анимация анимацией, но 90-миллисекундный таймер плазмы после
-      // проявления картинки только жрёт батарейку.
-      Future.delayed(const Duration(milliseconds: 600), () {
-        if (mounted && gen == _gen && !_plasmaGone) {
-          setState(() => _plasmaGone = true);
-        }
-      });
     } on Object catch (e) {
       debugPrint('превью $url: $e');
     }
@@ -3241,10 +3298,13 @@ class _SmartCoverState extends State<_SmartCover> {
                 curve: Curves.easeOut,
                 builder: (context, t, child) =>
                     Opacity(opacity: t, child: child),
-                child: Image.file(
-                  File(_file!),
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                child: _CoverImage(
+                  file: File(_file!),
+                  onReady: () {
+                    if (mounted && !_plasmaGone) {
+                      setState(() => _plasmaGone = true);
+                    }
+                  },
                 ),
               ),
           ]),
@@ -3252,6 +3312,140 @@ class _SmartCoverState extends State<_SmartCover> {
       ),
     );
   }
+}
+
+/// Превью, заполняющее область целиком (cover, без чёрных полей).
+/// У YouTube-превью (hqdefault, 4:3 с «запечёнными» чёрными полосами)
+/// полосы детектятся по яркости и срезаются — рисуется центральный 16:9.
+/// Квадратные (Spotify, Apple, SoundCloud), вертикальные (TikTok) и любые
+/// другие пропорции рисуются обычным cover по центру. Если картинку
+/// не удалось декодировать — остаётся прежняя плазма-заглушка.
+class _CoverImage extends StatefulWidget {
+  const _CoverImage({required this.file, required this.onReady});
+  final File file;
+  final VoidCallback onReady;
+
+  @override
+  State<_CoverImage> createState() => _CoverImageState();
+}
+
+class _CoverImageState extends State<_CoverImage> {
+  ui.Image? _image;
+  Rect? _sourceCrop; // источник после среза полос (null — весь кадр)
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _CoverImage old) {
+    super.didUpdateWidget(old);
+    if (old.file.path != widget.file.path) {
+      _image = null;
+      _sourceCrop = null;
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    try {
+      final data = await widget.file.readAsBytes();
+      final codec =
+          await ui.instantiateImageCodec(data, targetWidth: 96);
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+      Rect? crop;
+      final aspect = image.width / image.height;
+      // 4:3 с полосами — сигнатура hqdefault у 16:9-роликов.
+      if (aspect > 1.2 && aspect < 1.45) {
+        final bytes =
+            await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+        if (bytes != null) {
+          final px = bytes.buffer.asUint8List();
+          double stripLum(int y0, int y1) {
+            var sum = 0.0;
+            var n = 0;
+            for (var y = y0; y < y1; y++) {
+              for (var x = 0; x < image.width; x += 2) {
+                final o = (y * image.width + x) * 4;
+                sum += 0.299 * px[o] + 0.587 * px[o + 1] + 0.114 * px[o + 2];
+                n++;
+              }
+            }
+            return n > 0 ? sum / n : 255;
+          }
+
+          final strip = (image.height * 0.10).round();
+          final top = stripLum(0, strip);
+          final bottom = stripLum(image.height - strip, image.height);
+          final middle = stripLum(image.height ~/ 3, image.height * 2 ~/ 3);
+          // Полосы почти чёрные, в центре есть картинка — режем до 16:9.
+          if (top < 20 && bottom < 20 && middle > 24) {
+            final cropH =
+                (image.width * 9 / 16).round().clamp(1, image.height);
+            final y0 = (image.height - cropH) ~/ 2;
+            crop = Rect.fromLTWH(
+                0, y0.toDouble(), image.width.toDouble(), cropH.toDouble());
+          }
+        }
+      }
+      if (!mounted) {
+        image.dispose();
+        return;
+      }
+      setState(() {
+        _image = image;
+        _sourceCrop = crop;
+      });
+      // Дать кроссфейду отыграть поверх плазмы, потом погасить плазму.
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (mounted) widget.onReady();
+      });
+    } on Object {
+      // Не декодируется — плазма-заглушка остаётся.
+    }
+  }
+
+  @override
+  void dispose() {
+    _image?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final image = _image;
+    if (image == null) return const SizedBox.shrink();
+    return CustomPaint(
+        painter: _CoverPainter(image: image, sourceCrop: _sourceCrop));
+  }
+}
+
+class _CoverPainter extends CustomPainter {
+  _CoverPainter({required this.image, required this.sourceCrop});
+  final ui.Image image;
+  final Rect? sourceCrop;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final src = sourceCrop ??
+        Rect.fromLTWH(
+            0, 0, image.width.toDouble(), image.height.toDouble());
+    // cover: масштаб по большей стороне, выравнивание по центру.
+    final scale = math.max(size.width / src.width, size.height / src.height);
+    final dst = Rect.fromCenter(
+      center: Offset(size.width / 2, size.height / 2),
+      width: src.width * scale,
+      height: src.height * scale,
+    );
+    canvas.drawImageRect(image, src, dst, Paint());
+  }
+
+  @override
+  bool shouldRepaint(covariant _CoverPainter old) =>
+      old.image != image || old.sourceCrop != sourceCrop;
 }
 
 /// Тёплая дизер-плазма: низкоразрешённое поле значений + упорядоченный
