@@ -715,82 +715,119 @@ bool Engine::runYtDlp (const QueueItemPtr& item, const StrVec& args,
     }
     const auto tool = tools / "ytdlp" / ytdlpBinaryName();
 
-    StrVec all;
-    all.push_back (kd::pathStr (tool));
-    all.insert (all.end(), args.begin(), args.end());
-
-    engineLog ("запуск: " + kd::join (all, " "));
-    rs.current = std::make_unique<kd::ChildProcess>();
-    rs.errTail = {};
-    rs.buffer = {};
-    if (! rs.current->start (all, childPath (tools)))
+    // Лестница сетевых повторов: возобновление с .part, затем перекачка
+    // с нуля (--no-part). Только этот незавершённый файл — очередь и
+    // остальные задания не затрагиваются.
+    StrVec launchArgs = args;
+    for (int stallAttempt = 0;; ++stallAttempt)
     {
-        engineLog ("ошибка: процесс не запустился");
-        rs.current = nullptr;
-        finish (item, QueueItem::State::failed, "Не удалось запустить загрузчик");
-        return false;
-    }
+        StrVec all;
+        all.push_back (kd::pathStr (tool));
+        all.insert (all.end(), launchArgs.begin(), launchArgs.end());
 
-    char chunk[8192];
-    bool cancelled = false;
-    auto lastOutput = std::chrono::steady_clock::now();
-    for (;;)
-    {
-        if (item->cancelled() || quit.load (std::memory_order_relaxed)) { cancelled = true; break; }
-
-        // Глобальная пауза: процесс останавливается корректно (SIGTERM —
-        // yt-dlp закрывает .part), задание переходит в состояние paused.
-        if (pauseRequested.load (std::memory_order_relaxed))
+        engineLog ("запуск: " + kd::join (all, " ")
+                   + (stallAttempt > 0
+                          ? " (повтор " + std::to_string (stallAttempt) + ")"
+                          : Str()));
+        rs.current = std::make_unique<kd::ChildProcess>();
+        rs.errTail = {};
+        rs.buffer = {};
+        if (! rs.current->start (all, childPath (tools)))
         {
-            rs.current->kill();
-            pauseItem (item);
-            rs.current->closeOutput(); // иначе дескриптор трубы живёт до деструктора
+            engineLog ("ошибка: процесс не запустился");
             rs.current = nullptr;
+            finish (item, QueueItem::State::failed, "Не удалось запустить загрузчик");
             return false;
         }
 
-        const int n = rs.current->read (chunk, (int) sizeof (chunk), 40);
-        // Сеть пропала, а процесс висит: 90 с без единого байта вывода —
-        // глушим и честно помечаем сетевой причиной (повтор после VPN).
-        const auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::seconds> (now - lastOutput).count() > 90)
+        char chunk[8192];
+        bool cancelled = false;
+        bool stalled = false;
+        auto lastOutput = std::chrono::steady_clock::now();
+        for (;;)
         {
-            engineLog ("нет вывода 90 с — глушу зависший процесс");
-            rs.errTail = "ERROR: network stalled - no output for 90 seconds";
-            rs.current->kill();
-            cancelled = false;
-            break;
-        }
-        if (n > 0)
-        {
-            lastOutput = std::chrono::steady_clock::now();
-            rs.buffer += Str (chunk, (size_t) n);
-            int nl;
-            while ((nl = kd::indexOfChar (rs.buffer, '\n')) >= 0)
+            if (item->cancelled() || quit.load (std::memory_order_relaxed)) { cancelled = true; break; }
+
+            // Глобальная пауза: процесс останавливается корректно (SIGTERM —
+            // yt-dlp закрывает .part), задание переходит в состояние paused.
+            if (pauseRequested.load (std::memory_order_relaxed))
             {
-                consume (rs.buffer.substr (0, (size_t) nl), item, rs.errTail);
-                rs.buffer = rs.buffer.substr ((size_t) nl + 1);
+                rs.current->kill();
+                pauseItem (item);
+                rs.current->closeOutput(); // иначе дескриптор трубы живёт до деструктора
+                rs.current = nullptr;
+                return false;
+            }
+
+            const int n = rs.current->read (chunk, (int) sizeof (chunk), 40);
+            // Сеть пропала, а процесс висит: 90 с без единого байта вывода —
+            // глушим и уходим в лестницу повторов.
+            const auto now = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::seconds> (now - lastOutput).count() > 90)
+            {
+                engineLog ("нет вывода 90 с — глушу зависший процесс");
+                rs.errTail = "ERROR: network stalled - no output for 90 seconds";
+                stalled = true;
+                rs.current->kill();
+                break;
+            }
+            if (n > 0)
+            {
+                lastOutput = std::chrono::steady_clock::now();
+                rs.buffer += Str (chunk, (size_t) n);
+                int nl;
+                while ((nl = kd::indexOfChar (rs.buffer, '\n')) >= 0)
+                {
+                    consume (rs.buffer.substr (0, (size_t) nl), item, rs.errTail);
+                    rs.buffer = rs.buffer.substr ((size_t) nl + 1);
+                }
+            }
+            else if (n == 0)
+            {
+                break;
             }
         }
-        else if (n == 0)
+
+        if (cancelled) rs.current->kill();
+
+        // Хвост без перевода строки — тоже строка вывода.
+        if (! rs.buffer.empty()) consume (rs.buffer, item, rs.errTail);
+        rs.buffer = {};
+        const auto code = rs.current->waitExitCode();
+        rs.current->closeOutput();
+        engineLog ("завершён: код " + std::to_string (code)
+                   + (rs.errTail.empty() ? Str() : " | " + rs.errTail));
+        rs.current = nullptr;
+
+        if (exitCodeOut != nullptr) *exitCodeOut = code;
+        if (cancelled) return ! cancelled;
+
+        // Зависание сети: повтор этого же файла (докачка .part), затем
+        // перекачка с нуля; только после — честная ошибка. Резьюм
+        // фрагментного скачивания после SIGTERM бывает «залипшим» —
+        // перед перекачкой с нуля убираем его недокачанные куски.
+        if (stalled && stallAttempt < 2)
         {
-            break;
+            setStage (item, stallAttempt == 0
+                ? "Соединение нестабильно — пробую ещё раз"
+                : "Соединение нестабильно — качаю заново");
+            if (stallAttempt == 1)
+            {
+                std::error_code ec;
+                for (const auto& entry : fs::directory_iterator (item->dest))
+                {
+                    const auto name = entry.path().filename().string();
+                    if (entry.path().extension() == ".part"
+                        || entry.path().extension() == ".ytdl"
+                        || kd::contains (name, ".part-Frag"))
+                        fs::remove (entry.path(), ec);
+                }
+                launchArgs.push_back ("--no-part");
+            }
+            continue;
         }
+        return true;
     }
-
-    if (cancelled) rs.current->kill();
-
-    // Хвост без перевода строки — тоже строка вывода.
-    if (! rs.buffer.empty()) consume (rs.buffer, item, rs.errTail);
-    rs.buffer = {};
-    const auto code = rs.current->waitExitCode();
-    rs.current->closeOutput();
-    engineLog ("завершён: код " + std::to_string (code)
-               + (rs.errTail.empty() ? Str() : " | " + rs.errTail));
-    rs.current = nullptr;
-
-    if (exitCodeOut != nullptr) *exitCodeOut = code;
-    return ! cancelled;
 }
 
 void Engine::consume (const Str& line, const QueueItemPtr& item, Str& errTail)
