@@ -67,6 +67,59 @@ String normTC(String v) {
 
 enum Phase { idle, seeking, found }
 
+/// Единая карта понятных сообщений: сырья ошибка ядра → заголовок для
+/// человека и действие-кнопка. Порядок проверок — от частного к общему.
+class UserMessage {
+  const UserMessage(this.title, this.action);
+  final String title; // что показываем
+  final String action; // retry | openLink | close | selectVideo | selectMusic | changeChron | changeFormat
+}
+
+UserMessage mapUserMessage(String raw) {
+  final r = raw.toLowerCase();
+  bool has(List<String> keys) => keys.any(r.contains);
+  if (has(['отрезок', 'диапазон'])) {
+    return const UserMessage('УКАЖИТЕ ДОСТУПНЫЙ ДИАПАЗОН ВРЕМЕНИ', 'changeChron');
+  }
+  if (has(['thumbnail embedding', 'обработать', 'конверт'])) {
+    return const UserMessage('НЕ УДАЛОСЬ ПОДГОТОВИТЬ ФАЙЛ', 'retry');
+  }
+  if (has(['requested format', 'формате', 'формат недоступен'])) {
+    return const UserMessage('ВЫБРАННЫЙ ФОРМАТ НЕДОСТУПЕН', 'changeFormat');
+  }
+  if (has(['аудио', 'фотография', 'фото'])) {
+    return const UserMessage('АУДИОДОРОЖКА НЕДОСТУПНА', 'selectVideo');
+  }
+  if (has(['яндекс'])) {
+    return const UserMessage('ЯНДЕКС МУЗЫКА НЕ ПОДДЕРЖИВАЕТСЯ', 'close');
+  }
+  if (has(['не поддерживается', 'pinterest закрыл'])) {
+    return const UserMessage('ЭТОТ ИСТОЧНИК НЕ ПОДДЕРЖИВАЕТСЯ', 'close');
+  }
+  if (has(['удалена', 'скрыта', 'требует входа', 'закрыта', 'открытые материалы',
+           'недоступна для', 'drm', 'видео unavailable', 'video unavailable',
+           'не существует'])) {
+    return const UserMessage('КОНТЕНТ НЕДОСТУПЕН ДЛЯ ЗАГРУЗКИ', 'openLink');
+  }
+  if (has(['не удалось получить данные', 'нет ядра'])) {
+    return const UserMessage('НЕ УДАЛОСЬ ПОЛУЧИТЬ ДАННЫЕ О ФАЙЛЕ', 'retry');
+  }
+  if (has(['отменено'])) {
+    return const UserMessage('ЗАГРУЗКА ОТМЕНЕНА', 'retry');
+  }
+  if (has(['распознан', 'адрес не опознан', 'не является ссылкой'])) {
+    return const UserMessage('НЕ УДАЛОСЬ РАСПОЗНАТЬ ССЫЛКУ', 'retry');
+  }
+  if (has(['сеть', 'vpn', 'timed out', 'connection', 'stalled', 'unreachable',
+           'не робот', 'sign in', 'отказал', 'ssl', 'no video formats'])) {
+    return const UserMessage('НЕТ СОЕДИНЕНИЯ С ИСТОЧНИКОМ — ПРОВЕРЬТЕ VPN', 'retry');
+  }
+  if (has(['видео недоступно', 'нет видео', 'no video'])) {
+    return const UserMessage('ВИДЕО НЕДОСТУПНО', 'selectMusic');
+  }
+  return const UserMessage('НЕ УДАЛОСЬ ПОЛУЧИТЬ ДАННЫЕ О ФАЙЛЕ', 'retry');
+}
+
 class KLoadScreen extends StatefulWidget {
   const KLoadScreen({super.key});
 
@@ -129,6 +182,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   // сторожевой таймер разбора: зависший запрос → честная ошибка
   Timer? _probeWatchdog;
   bool clearHover = false;
+  // диспетчер показан в пустом состоянии после [ОЧИСТИТЬ]
+  bool queueShown = false;
+  // уже скачанный эквивалент: показываем аккуратное уведомление
+  KdItem? dupeNotice;
+  bool forceDownload = false;
   // качество видео: реальные высоты (дефолт 1080P); МАКСИМУМ убран
   String quality = '1080';
   bool qualityOpen = false;
@@ -273,9 +331,18 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   /// (запрос, источник, очередь) остаётся как было.
   void _recoverAfterVpn() {
     // Очередь: задания, упавшие по сети, встают обратно (лимит автоповторов).
+    // Второй проход с задержкой ловит отложенные сетевые таймауты.
     core?.retryNetworkFailed();
     setState(() => items = core?.snapshot() ?? items);
     _scheduleDragZones();
+    Future.delayed(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      final n = core?.retryNetworkFailed() ?? 0;
+      if (n > 0) {
+        setState(() => items = core?.snapshot() ?? items);
+        _scheduleDragZones();
+      }
+    });
     if (!mounted || rawText.isEmpty) return;
     _probeWatchdog?.cancel();
     if (selectedResultUrl != null) {
@@ -396,7 +463,24 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   }
 
   void _startSeek() {
-    final links = core?.splitLinks(query.text) ?? const [];
+    var links = core?.splitLinks(query.text) ?? const [];
+    // Яндекс Музыка выведена из приложения: ссылки не разбираются и
+    // задач не создают.
+    final yandexLinks =
+        links.where((l) => serviceOf(l).id == 'YM').toList();
+    if (yandexLinks.isNotEmpty) {
+      links = links.where((l) => serviceOf(l).id != 'YM').toList();
+      _showToast('ЯНДЕКС МУЗЫКА НЕ ПОДДЕРЖИВАЕТСЯ');
+      if (links.isEmpty) {
+        setState(() {
+          phase = Phase.idle;
+          probe = null;
+          showResultList = false;
+          searchingNow = false;
+        });
+        return;
+      }
+    }
     setState(() {
       seekPct = 0;
       phase = Phase.seeking;
@@ -416,9 +500,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       // Прямой ссылке — никогда не показывать окно текстовых результатов:
       // старая выдача гасится вместе с началом нового разбора.
       showResultList = false;
-      // Текстовый запрос ищем с неопределённой шкалой: честное «ИЩЕМ...»
-      // вместо процентов, которые добегают раньше выдачи.
-      searchingNow = !_looksLikeLink(rawText);
+      // Процентов больше нет: любой разбор — честное «ИЩЕМ...» с бегущей
+      // шкалой, пока данные не приехали.
+      searchingNow = true;
       if (links.length > 1) {
         isBatch = true;
         batchCount = links.length;
@@ -695,6 +779,24 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     return '$from-$to';
   }
 
+  /// Подпись варианта файла: контент + режим + формат + качество + ХРОН.
+  String _variantSig(String link, bool audio, String fmt, String chron, String quality) {
+    return '$link|$audio|$fmt|$chron|$quality';
+  }
+
+  /// Уже скачан такой же вариант? (полный ≠ фрагмент, видео ≠ музыка,
+  /// разные форматы и диапазоны — разные варианты.)
+  KdItem? _findDupe(String link, bool audio, String fmt, String chron, String quality) {
+    final sig = _variantSig(link, audio, fmt, chron, quality);
+    for (final it in items) {
+      if (it.state != 'done' || it.files.isEmpty) continue;
+      final other = _variantSig(it.link, it.isAudio, it.audioFormat,
+          it.sections, it.maxHeight > 0 ? '${it.maxHeight}' : 'best');
+      if (other == sig) return it;
+    }
+    return null;
+  }
+
   void _download() {
     final c = core;
     if (c == null) return;
@@ -716,6 +818,21 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     final p = probe;
     final playlist = !isBatch && (p?.isPlaylist ?? false);
     final limit = playlist && playlistLimit > 0 ? playlistLimit : 0;
+
+    // Уже скачан такой же вариант (контент+режим+формат+качество+ХРОН)?
+    // Полный файл, видео- и аудио-фрагменты — разные варианты.
+    if (!forceDownload && !isBatch && p != null && p.ok && !p.isPlaylist) {
+      final link = targetLink(rawText);
+      if (link.isNotEmpty) {
+        final dupe = _findDupe(link, audio,
+            audio ? audioFormat : videoContainer, secs ?? '', quality);
+        if (dupe != null) {
+          setState(() { dupeNotice = dupe; });
+          return;
+        }
+      }
+    }
+    forceDownload = false;
 
     if (isBatch) {
       final fresh = batchLinks.where((l) => !busy.contains(l)).toList();
@@ -975,6 +1092,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                 child: _vpnPlate(),
               ),
             ],
+            if (dupeNotice != null) _dupePlate(dupeNotice!),
             if (toastText != null) _toast(),
             if (!booted) _bootOverlay(),
           ]),
@@ -1028,9 +1146,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                   _modesRow(),
                 ],
               ],
-              if (items.isNotEmpty) ...[
+              if (items.isNotEmpty || queueShown) ...[
                 const SizedBox(height: 14),
-                Expanded(child: _queue()),
+                Expanded(
+                    child: items.isEmpty ? _emptyQueue() : _queue()),
               ],
             ],
           ],
@@ -1039,11 +1158,40 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     );
   }
 
+  /// Аккуратное пустое состояние диспетчера после [ОЧИСТИТЬ].
+  Widget _emptyQueue() {
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Pal.amberFaint), bottom: BorderSide(color: Pal.amberFaint)),
+      ),
+      child: CustomPaint(
+        foregroundPainter: const DashedBorderPainter(color: Color(0x80FFB000)),
+        child: Column(children: [
+          _queueHeader(),
+          const Expanded(
+            child: Center(
+              child: Text('ЗАГРУЗОК НЕТ',
+                  style: TextStyle(
+                      fontFamily: 'Press Start 2P',
+                      fontSize: 9,
+                      color: Pal.dim)),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
   // ---- поисковая строка ----
 
   Widget _searchRow() {
     return GestureDetector(
-      onTap: () => searchFocus.requestFocus(),
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        // Фокус в поле при любом клике по строке — вставка и ввод
+        // работают с первого раза.
+        searchFocus.requestFocus();
+      },
       child: MouseRegion(
         onEnter: (_) => setState(() => searchHover = true),
         onExit: (_) => setState(() => searchHover = false),
@@ -1095,11 +1243,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                             minLines: 1,
                           ),
                           if (rawText.isEmpty)
-                            Text(
-                              'Вставьте ссылку или напишите название',
-                              style: T.mono(12, c: Pal.dim),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                            // Подсказка не должна перехватывать клики поля.
+                            IgnorePointer(
+                              child: Text(
+                                'Вставьте ссылку или напишите название',
+                                style: T.mono(12, c: Pal.dim),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                         ]),
                       ),
@@ -1391,32 +1542,20 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     }
     if (p == null) return const SizedBox.shrink();
     if (!p.ok && !p.drm) {
-      // Разбор не удался (например, VPN мигнул): честная причина и понятный
-      // повтор — состояние экрана при этом не сбрасывается.
+      // Разбор не удался: единая карта сообщений — понятный заголовок и
+      // действие. Состояние экрана не сбрасывается.
+      final msg = mapUserMessage(p.error);
       return DashedBox(
         color: Pal.amber.withValues(alpha: .35),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         child: Column(children: [
-          Text('РАЗБОР НЕ УДАЛСЯ', style: T.ps(12, c: Pal.soft)),
-          const SizedBox(height: 6),
-          Text(p.error.isEmpty ? 'Проверь ссылку или сеть' : p.error,
-              style: T.mono(11, c: Pal.dim), textAlign: TextAlign.center),
+          Text(msg.title, style: T.ps(11, c: Pal.soft), textAlign: TextAlign.center),
           const SizedBox(height: 9),
-          GestureDetector(
-            onTap: _startSeek,
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  border: Border.all(color: Pal.amberFaint),
-                  borderRadius: const BorderRadius.all(Radius.circular(2)),
-                ),
-                child: Text('ПОВТОРИТЬ', style: T.ps(8, c: Pal.amber)),
-              ),
-            ),
-          ),
+          Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.center,
+              children: [
+            for (final action in _errorActions(msg))
+              _errorActionButton(action, p),
+          ]),
         ]),
       );
     }
@@ -1494,7 +1633,42 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     if (p.isPhoto || !p.ok || p.isPlaylist) return const SizedBox.shrink();
 
     if (p.shortVideo) {
-      final label = mode == 'music' ? 'MP3' : 'MP4';
+      // TikTok/Instagram: видео одним вариантом (MP4 · МАКС), аудио —
+      // с выбором формата (MP3/M4A/WAV/FLAC/OGG), качество — максимум.
+      if (mode == 'music') {
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            _dropChip(
+                label: _audioLabel(audioFormat),
+                open: openPanel == 'aformat',
+                onTap: () => setState(() =>
+                    openPanel = openPanel == 'aformat' ? '' : 'aformat')),
+            const SizedBox(width: 8),
+            Text('· МАКСИМАЛЬНОЕ КАЧЕСТВО',
+                style: T.ps(7, c: Pal.dim, ls: .04)),
+          ]),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topLeft,
+            child: openPanel == 'aformat'
+                ? Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: GlitchIn(
+                      key: const ValueKey('panel-aformat'),
+                      child: _optionsPanel(const [
+                        ('MP3', 'mp3'),
+                        ('M4A', 'm4a'),
+                        ('WAV', 'wav'),
+                        ('FLAC', 'flac'),
+                        ('OGG', 'ogg'),
+                      ], audioFormat, (v) => audioFormat = v),
+                    ),
+                  )
+                : const SizedBox(width: double.infinity),
+          ),
+        ]);
+      }
       return Padding(
         padding: const EdgeInsets.only(top: 2),
         child: Row(children: [
@@ -1504,7 +1678,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
               border: Border.all(color: Pal.amberFaint),
               borderRadius: const BorderRadius.all(Radius.circular(2)),
             ),
-            child: Text(label, style: T.ps(8, c: Pal.soft)),
+            child: Text('MP4', style: T.ps(8, c: Pal.soft)),
           ),
           const SizedBox(width: 8),
           Text('· МАКСИМАЛЬНОЕ КАЧЕСТВО', style: T.ps(7, c: Pal.dim, ls: .04)),
@@ -1705,8 +1879,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     if (p.isPlaylist) {
       return '${p.count} ВИДЕО · ХРОНОМЕТРАЖ · ${fmtLongDur(p.duration)}';
     }
-    // Длительность не успела приехать — аккуратное состояние загрузки.
-    final dur = p.duration > 0 ? ' · ${fmtDur(p.duration)}' : ' · ЗАГРУЗКА…';
+    // Длительность не приехала после повторного запроса — источник её
+    // не отдаёт (Instagram): честно «НЕДОСТУПЕН», ХРОН при этом остаётся
+    // доступным. До повторного запроса — аккуратная «ЗАГРУЗКА…».
+    final dur = p.duration > 0
+        ? ' · ${fmtDur(p.duration)}'
+        : (durationRetried ? ' НЕДОСТУПЕН' : ' · ЗАГРУЗКА…');
     return 'ХРОНОМЕТРАЖ$dur';
   }
 
@@ -1769,6 +1947,90 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       return '${u.substring(0, hostEnd)}/…/$tail';
     }
     return '${u.substring(0, max)}…';
+  }
+
+  /// Кнопки-действия карточки ошибки по типу действия.
+  List<(String, String)> _errorActions(UserMessage msg) {
+    switch (msg.action) {
+      case 'openLink':
+        return [('ОТКРЫТЬ ССЫЛКУ', 'openLink'), ('ЗАКРЫТЬ', 'close')];
+      case 'close':
+        return [('ЗАКРЫТЬ', 'close')];
+      case 'selectVideo':
+        return [('ВЫБРАТЬ ВИДЕО', 'selectVideo'), ('ЗАКРЫТЬ', 'close')];
+      case 'selectMusic':
+        return [('ВЫБРАТЬ МУЗЫКУ', 'selectMusic'), ('ЗАКРЫТЬ', 'close')];
+      case 'changeChron':
+        return [('ИЗМЕНИТЬ ХРОН', 'changeChron')];
+      case 'changeFormat':
+        return [('ВЫБРАТЬ ДРУГОЙ ФОРМАТ', 'changeFormat')];
+      default:
+        return [('ПОВТОРИТЬ', 'retry')];
+    }
+  }
+
+  Widget _errorActionButton((String, String) action, KdProbeEvent p) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _runErrorAction(action.$2, p),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            border: Border.all(color: Pal.amberFaint),
+            borderRadius: const BorderRadius.all(Radius.circular(2)),
+          ),
+          child: Text(action.$1, style: T.ps(8, c: Pal.amber)),
+        ),
+      ),
+    );
+  }
+
+  void _runErrorAction(String action, KdProbeEvent p) {
+    switch (action) {
+      case 'retry':
+        _startSeek();
+      case 'openLink':
+        final src = _sourceUrl(p);
+        if (src.isNotEmpty) _openPath(src);
+      case 'close':
+        setState(() {
+          phase = Phase.idle;
+          probe = null;
+        });
+      case 'selectVideo':
+        setState(() {
+          mode = 'video';
+          phase = Phase.idle;
+          probe = null;
+        });
+        _startSeek();
+      case 'selectMusic':
+        setState(() {
+          mode = 'music';
+          phase = Phase.idle;
+          probe = null;
+        });
+        _startSeek();
+      case 'changeChron':
+        setState(() {
+          chronLocked = false;
+          chronOn = true;
+          chronOpen = true;
+          openPanel = 'chron';
+          phase = Phase.idle;
+          probe = null;
+        });
+        _startSeek();
+      case 'changeFormat':
+        setState(() {
+          phase = Phase.idle;
+          probe = null;
+          openPanel = mode == 'music' ? 'aformat' : 'vformat';
+        });
+        _startSeek();
+    }
   }
 
   // ---- режимы + СКАЧАТЬ ----
@@ -1971,8 +2233,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
               },
               child: ListView.builder(
                 padding: EdgeInsets.zero,
+                // Новое сверху: очередь показывается в обратном порядке.
                 itemCount: items.length,
-                itemBuilder: (context, i) => _queueRow(items[i]),
+                itemBuilder: (context, i) => _queueRow(items[items.length - 1 - i]),
               ),
             ),
           ),
@@ -1995,12 +2258,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           foregroundPainter:
               const DashedBorderPainter(color: Color(0x80FFB000)),
           child: Column(children: [
-            _queueHeader(),
+            _queueHeader(compact: true),
             Expanded(
               child: ListView.builder(
                 padding: EdgeInsets.zero,
                 itemCount: math.min(2, items.length),
-                itemBuilder: (context, i) => _queueRow(items[i]),
+                // Две самые свежие плашки (очередь реверсируется).
+                itemBuilder: (context, i) =>
+                    _queueRow(items[items.length - 1 - i]),
               ),
             ),
           ]),
@@ -2009,13 +2274,34 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     );
   }
 
-  Widget _queueHeader() {
+  Widget _queueHeader({bool compact = false}) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(13, 6, 13, 2),
       child: Row(children: [
         Text('ДИСПЕТЧЕР ЗАГРУЗОК', style: T.ps(9, c: Pal.soft, ls: .1)),
+        const Spacer(),
+        if (!compact && items.isNotEmpty)
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _clearQueueHistory,
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: Text('[ОЧИСТИТЬ]', style: T.ps(7, c: Pal.dim, ls: .08)),
+            ),
+          ),
       ]),
     );
+  }
+
+  /// Очистка истории: убирает записи диспетчера. Файлы на диске не
+  /// удаляются и в корзину не перемещаются.
+  void _clearQueueHistory() {
+    core?.clearFinished();
+    setState(() {
+      items = core?.snapshot() ?? items;
+      queueShown = true; // пустое состояние остаётся аккуратно видимым
+    });
+    _scheduleDragZones();
   }
 
   Widget _queueRow(KdItem it) {
@@ -2045,8 +2331,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             Text(title,
                 style: T.mono(13, c: Pal.soft), maxLines: 1, overflow: TextOverflow.ellipsis),
             const SizedBox(height: 3),
-            Text(it.stage.toUpperCase(),
-                style: T.ps(8, c: stageColor, ls: .04)),
+            Text(failed
+                ? mapUserMessage(it.stage).title
+                : it.stage.toUpperCase(),
+                style: T.ps(8, c: stageColor, ls: .04), maxLines: 2,
+                overflow: TextOverflow.ellipsis),
           ]),
         ),
         const SizedBox(width: 12),
@@ -2101,6 +2390,71 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           ),
         ],
         ]),
+      ),
+    );
+  }
+
+  // ---- уже скачано: аккуратное уведомление в стиле VPN-плашки ----
+
+  void _forceDownloadDupe(KdItem it) {
+    setState(() {
+      dupeNotice = null;
+      forceDownload = true;
+    });
+    _download();
+  }
+
+  Widget _dupePlate(KdItem it) {
+    Widget action(String label, VoidCallback onTap, {bool bright = false}) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              border: Border.all(
+                  color: bright ? Pal.amber : Pal.amberFaint),
+              borderRadius: const BorderRadius.all(Radius.circular(2)),
+            ),
+            child: Text(label,
+                style: T.ps(8, c: bright ? Pal.amber : Pal.soft)),
+          ),
+        ),
+      );
+    }
+
+    return Center(
+      child: GestureDetector(
+        onTap: () {},
+        child: Container(
+          decoration: const BoxDecoration(color: Color(0xF00D0902)),
+          child: DashedBox(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Text('ЭТОТ ФАЙЛ УЖЕ СКАЧАН',
+                  style: TextStyle(
+                      fontFamily: 'Press Start 2P',
+                      fontSize: 10,
+                      color: Pal.soft)),
+              const SizedBox(height: 12),
+              Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.center, children: [
+                action('ОТКРЫТЬ В ПАПКЕ', () {
+                  final f = it.files.isNotEmpty ? it.files.first : null;
+                  _openPath(f != null ? File(f).parent.path : destFolder);
+                  setState(() => dupeNotice = null);
+                }),
+                const SizedBox(width: 8),
+                action('СКАЧАТЬ ЕЩЁ РАЗ', () => _forceDownloadDupe(it),
+                    bright: true),
+                const SizedBox(width: 8),
+                action('ОТМЕНА', () => setState(() => dupeNotice = null)),
+              ]),
+            ]),
+          ),
+        ),
       ),
     );
   }
@@ -2237,7 +2591,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             child: Plate(
               onPressed: () => _openPath('https://boosty.to/kvartalrecords/donate'),
               child: Builder(builder: (context) {
-                // \$ красится как иконка папки: тёмный, на ховере — фосфор.
+                // $ красится как иконка папки: тёмный, на ховере — фосфор.
                 final hover = PlateHover.of(context)?.hover ?? false;
                 return Text('\$',
                     style: TextStyle(

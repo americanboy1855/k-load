@@ -274,6 +274,7 @@ class KdItem {
   bool get isPhoto => json['isPhoto'] == true;
   String get audioFormat => (json['audioFormat'] ?? 'mp3') as String;
   String get container => (json['container'] ?? 'mp4') as String;
+  String get sections => (json['sections'] ?? '') as String;
   int get maxHeight => (json['maxHeight'] ?? 0) as int;
   int get itemIndex => (json['itemIndex'] ?? 0) as int;
   int get itemTotal => (json['itemTotal'] ?? 1) as int;

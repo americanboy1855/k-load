@@ -65,6 +65,14 @@ static Str fmtSeconds (int total)
     return buf;
 }
 
+// Расширение целевого аудиофайла (ogg, а не внутреннее «vorbis»).
+static Str audioExt (AudioFormat f)
+{
+    return f == AudioFormat::m4a ? "m4a" : f == AudioFormat::wav ? "wav"
+         : f == AudioFormat::flac ? "flac" : f == AudioFormat::ogg ? "ogg"
+         : "mp3";
+}
+
 // Диапазон ХРОНа для имени файла: «[00:00–00:10]», минуты с ведущими
 // нулями. Не время — пусто.
 static Str chronSuffix (const Str& sections)
@@ -940,6 +948,10 @@ void Engine::startNative (const QueueItemPtr& item)
             // Pinterest) — звук извлекается из лучшего полного потока.
             // -x ОБЯЗАТЕЛЕН: без него файл остаётся исходным webm/m4a.
             for (const auto& a : kd::splitWhitespace ("-f bestaudio/bv*+ba/b -x")) args.push_back (a);
+            // Перекачка источника при повторе: иначе вариант «wav» находил
+            // уже скачанный mp3 с тем же базовым именем, конвертировал его
+            // в wav и удалял исходный mp3.
+            args.push_back ("--force-overwrites");
             args.push_back ("--audio-format");
             args.push_back (audioFormatName (item->audioFormat));
             for (const auto& a : kd::splitWhitespace ("--audio-quality 0 --embed-metadata")) args.push_back (a);
@@ -1017,10 +1029,15 @@ void Engine::startNative (const QueueItemPtr& item)
         else
         {
             // Ролик, открытый внутри плейлиста, качаем как ролик.
-            // У фрагмента по ХРОНУ диапазон — часть имени файла.
+            // У фрагмента по ХРОНУ диапазон — часть имени файла; не-mp3
+            // аудио помечается форматом, чтобы варианты не затирали друг
+            // друга (источник TikTok, например, сам лежит в mp3).
+            Str base = "%(title).120B";
+            if (item->isAudio && item->audioFormat != AudioFormat::mp3)
+                base += Str (" [") + audioExt (item->audioFormat) + "]";
             args.push_back ("--no-playlist");
             args.push_back ("-o");
-            args.push_back ("%(title).120B" + chronSuffix (item->sections) + ".%(ext)s");
+            args.push_back (base + chronSuffix (item->sections) + ".%(ext)s");
         }
 
         // ХРОН: режем отрезок точно по кадровым границам. Только одиночный
@@ -1281,6 +1298,12 @@ Str Engine::humanError (const Str& raw)
 
 void Engine::startResolve (const QueueItemPtr& item)
 {
+    if (item->service == Detector::Service::yandexMusic)
+    {
+        finish (item, QueueItem::State::failed,
+            "ЯНДЕКС МУЗЫКА НЕ ПОДДЕРЖИВАЕТСЯ");
+        return;
+    }
     setStage (item, "Читаю каталог…");
 
     Str album;
@@ -1449,9 +1472,12 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
         args.push_back (audioFormatName (item->audioFormat));
         for (const auto& a : kd::splitWhitespace ("--audio-quality 0 --embed-metadata --embed-thumbnail --no-playlist"))
             args.push_back (a);
-        const auto name = safeName (query);
+        auto name = safeName (query);
+        // У фрагмента по ХРОНУ диапазон — часть имени файла; не-mp3 формат
+        // — тоже (иначе mp3-вариант затирался родственным контейнером).
+        if (item->audioFormat != AudioFormat::mp3)
+            name += Str (" [") + audioExt (item->audioFormat) + "]";
         args.push_back ("-o");
-        // У фрагмента по ХРОНУ диапазон — часть имени файла.
         args.push_back (name + chronSuffix (item->sections) + ".%(ext)s");
         // Теги пишем свои: иначе в файл уедет название ролика с YouTube.
         // Двоеточие делит аргумент пополам, поэтому значения чистим.
@@ -2175,6 +2201,17 @@ Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
         const auto service = Detector::serviceFor (link);
 
         // Закрытые каталоги: карточка из открытых данных страницы.
+        if (service == Detector::Service::yandexMusic)
+        {
+            // Яндекс Музыка выведена из приложения.
+            Probe p;
+            p.ok = false;
+            p.link = link;
+            p.service = service;
+            p.error = "ЯНДЕКС МУЗЫКА НЕ ПОДДЕРЖИВАЕТСЯ";
+            return p;
+        }
+
         if (Detector::needsResolve (service))
         {
             Probe p;
@@ -2594,6 +2631,17 @@ Probe Engine::searchYandexList (const Str& query) const
     return p;
 }
 
+// Яндекс Музыка выведена из приложения: ни поиска, ни обработки ссылок.
+Probe Engine::searchYandexRemoved (const Str& query) const
+{
+    Probe p;
+    p.isSearch = true;
+    p.link = query;
+    p.ok = false;
+    p.error = "ЯНДЕКС МУЗЫКА НЕ ПОДДЕРЖИВАЕТСЯ";
+    return p;
+}
+
 // Pinterest: автоматический поиск сервис закрывает (403) — честно говорим
 // об этом; пины по ссылке качаются как раньше.
 Probe Engine::searchPinterest (const Str& query) const
@@ -2756,7 +2804,7 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
     {
         if (site == "apple")          p = searchAppleMusicList (query);
         else if (site == "spotify")   p = searchSpotifyList (query);
-        else if (site == "yandex")    p = searchYandexList (query);
+        else if (site == "yandex")    p = searchYandexRemoved (query);
         else if (site == "pinterest") p = searchPinterest (query);
         else                          p.error = "Такой источник поиска не поддерживается";
         if (! p.ok && p.error.empty())
@@ -2829,11 +2877,6 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
         {
             const auto sp = searchSpotifyList (query);
             if (sp.ok) append (sp, 4);
-        }
-        // Яндекс Музыка: страница выдачи + канонические данные по ID.
-        {
-            const auto ya = searchYandexList (query);
-            if (ya.ok) append (ya, 4);
         }
 
         if (p.results.empty())

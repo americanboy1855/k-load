@@ -287,7 +287,8 @@ private:
     Probe probeSearch (const Str& query, const Str& site = {}) const;
     Probe searchAppleMusicList (const Str& query) const;
     Probe searchSpotifyList (const Str& query) const;
-    Probe searchYandexList (const Str& query) const;
+    Probe searchYandexList (const Str& query) const; // (не вызывается: Яндекс выведен)
+    Probe searchYandexRemoved (const Str& query) const;
 
     /// Сверка найденного на YouTube с тем, что записано в ссылке каталога:
     /// значимые токены названия, исполнитель (в названии или канале) и
