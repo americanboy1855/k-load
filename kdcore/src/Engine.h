@@ -29,7 +29,7 @@ enum class AudioFormat { mp3, m4a, wav, flac, ogg };
 
 struct QueueItem
 {
-    enum class State { queued, working, done, failed };
+    enum class State { queued, working, paused, done, failed };
 
     /// Отмена читается из UI-потока и рабочего — прячем атомик в общую
     /// кучу, чтобы сам QueueItem оставался копируемым (снимки для UI).
@@ -157,6 +157,14 @@ private:
 class Engine
 {
 public:
+    // Контекст одного запуска yt-dlp — у каждого воркера свой.
+    struct RunState
+    {
+        std::unique_ptr<ChildProcess> current;
+        Str errTail;                       // последняя строка с ERROR текущего процесса
+        Str buffer;                        // недоразобранный хвост stdout
+    };
+
     struct Options
     {
         fs::path dest;                    // пусто — автоматическая папка
@@ -197,6 +205,11 @@ public:
     void cancel (int id);
     void remove (int id);
     void clearFinished();
+
+    /// Глобальная пауза: текущий процесс останавливается (yt-dlp корректно
+    /// закрывает .part), очередь не подаёт следующие задания.
+    void setPaused (bool p);
+    bool isPaused() const { return pausedFlag.load (std::memory_order_relaxed); }
     std::vector<QueueItem> snapshot() const;
 
     /// Повтор заданий, упавших по сети (VPN мигнул): максимум два
@@ -246,6 +259,7 @@ public:
 
 private:
     void workerLoop();
+    void pauseItem (const QueueItemPtr& item);
     void processItem (const QueueItemPtr& item);
     void startNative (const QueueItemPtr& item);
     void startPlaylist (const QueueItemPtr& item);
@@ -263,8 +277,8 @@ private:
     /// Запуск yt-dlp с построчным разбором вывода. false — отменено или
     /// процесс не поднялся (тогда состояние уже выставлено).
     bool runYtDlp (const QueueItemPtr& item, const StrVec& args,
-                   int* exitCodeOut = nullptr);
-    void consume (const Str& line, const QueueItemPtr& item);
+                   RunState& rs, int* exitCodeOut = nullptr);
+    void consume (const Str& line, const QueueItemPtr& item, Str& errTail);
     void finish (const QueueItemPtr& item, QueueItem::State state,
                  const Str& stage = {});
     void setStage (const QueueItemPtr& item, const Str& stage);
@@ -324,11 +338,9 @@ private:
     Wake wake;
     ProbeRunner probes;                // разборы карточки, вне очереди загрузок
 
-    std::unique_ptr<ChildProcess> current; // процесс текущего задания, живёт только в рабочем потоке
-    Str errTail;                           // последняя строка с ERROR текущего процесса
-    Str buffer;                            // недоразобранный хвост stdout
-
     std::atomic<bool> quit { false };
-    std::thread thread;                    // рабочий поток очереди
+    std::vector<std::thread> workers;      // ограниченная параллельность: 2 воркера
+    std::atomic<bool> pausedFlag { false };     // глобальная пауза очереди
+    std::atomic<bool> pauseRequested { false }; // остановить текущий процесс
     int nextId = 1;
 };

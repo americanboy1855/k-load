@@ -13,7 +13,10 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <future>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -115,7 +118,7 @@ static void testCAPIPure()
     kd_engine_destroy (e);
 }
 
-// ---- живые источники ----
+// ---- пауза очереди (фейковый загрузчик, без сети) ----
 
 static std::string waitForState (kd_engine* e, int id, const char* stateA, const char* stateB, int seconds)
 {
@@ -141,6 +144,111 @@ static std::string waitForState (kd_engine* e, int id, const char* stateA, const
         std::this_thread::sleep_for (std::chrono::milliseconds (500));
     }
 }
+
+static void testPauseResume()
+{
+    std::cout << "C-API: пауза очереди\n";
+    const auto tools = fs::temp_directory_path() / "kdcore-stub-tools";
+    fs::remove_all (tools);
+    fs::create_directories (tools / "ytdlp");
+    { std::ofstream f (tools / "ffmpeg"); f << "# приманка для поиска инструментов\n"; }
+
+    // Фейковый загрузчик: до маркера висит 30 с (ловим паузу), после —
+    // завершается мгновенно. Реальный yt-dlp по SIGTERM так же бросает
+    // .part, который потом докачивается с той же позиции.
+    const char* script = R"sh(#!/bin/sh
+if [ -f "$KD_STUB_DONE" ]; then
+    echo "[download] 100.0% of 1.00MiB"
+    exit 0
+fi
+echo "[download] 5.0% of 1.00MiB"
+sleep 30
+)sh";
+    for (const char* name : { "yt-dlp_macos", "yt-dlp" })
+    {
+        const auto stub = tools / "ytdlp" / name;
+        { std::ofstream f (stub); f << script; }
+        fs::permissions (stub, fs::perms::owner_exec, fs::perm_options::add);
+    }
+
+    const auto out = fs::temp_directory_path() / "kdcore-stub-out";
+    fs::remove_all (out);
+    fs::create_directories (out);
+    const std::string dest = kd::pathStr (out);
+    const std::string opts = "{\"dest\":\"" + dest + "\",\"mode\":\"video\"}";
+
+    kd_engine* e = kd_engine_create (kd::pathStr (tools).c_str());
+    check (e != nullptr, "движок на фейковых инструментах");
+
+    check (kd_enqueue_batch (e,
+        "[\"https://example.com/video1\",\"https://example.com/video2\"]",
+        opts.c_str()) == 2, "enqueue двух заданий");
+
+    // Параллельность: два воркера забирают оба задания сразу.
+    const auto w1 = waitForState (e, 1, "working", nullptr, 15);
+    const auto w2 = waitForState (e, 2, "working", nullptr, 15);
+    check (w1.find ("\"state\":\"working\"") != std::string::npos, "воркер 1 взял задание");
+    check (w2.find ("\"state\":\"working\"") != std::string::npos,
+        "воркер 2 взял второе задание не дожидаясь первого");
+
+    kd_set_paused (e, 1);
+    check (kd_is_paused (e) == 1, "kd_is_paused на паузе");
+    const auto p1 = waitForState (e, 1, "paused", nullptr, 15);
+    const auto p2 = waitForState (e, 2, "paused", nullptr, 15);
+    check (p1.find ("\"state\":\"paused\"") != std::string::npos
+        && p1.find ("ПРИОСТАНОВИЛ") != std::string::npos,
+        "задание 1 приостановлено", p1.substr (0, 300));
+    check (p2.find ("\"state\":\"paused\"") != std::string::npos,
+        "задание 2 приостановлено", p2.substr (0, 300));
+
+    // [ОЧИСТИТЬ] историю не должен трогать приостановленное.
+    kd_clear_finished (e);
+    {
+        char* snap = kd_snapshot (e);
+        const std::string s = snap;
+        check (s.find ("\"state\":\"paused\"") != std::string::npos,
+            "clearFinished бережёт приостановленные", s);
+        kd_string_free (snap);
+    }
+
+    // Отмена приостановленного срабатывает сразу, а не после возобновления.
+    kd_cancel (e, 1);
+    const auto c1 = waitForState (e, 1, "failed", nullptr, 5);
+    check (c1.find ("\"state\":\"failed\"") != std::string::npos
+        && c1.find ("Отменено") != std::string::npos,
+        "отмена приостановленного — сразу", c1.substr (0, 300));
+
+    // Возобновление: маркер-файл заставит приманку завершиться мгновенно.
+    { const std::ofstream f (out / "done.marker"); }
+    ::setenv ("KD_STUB_DONE", (fs::path (out) / "done.marker").string().c_str(), 1);
+    kd_set_paused (e, 0);
+    check (kd_is_paused (e) == 0, "kd_is_paused после возобновления");
+    const auto r2 = waitForState (e, 2, "done", "failed", 30);
+    check (r2.find ("\"state\":\"done\"") != std::string::npos,
+        "возобновлённое задание докачалось", r2.substr (0, 300));
+    ::unsetenv ("KD_STUB_DONE");
+
+    // Выход приложения на паузе не должен зависать: воркеры спят в паузе,
+    // деструктор должен разбудить каждого.
+    {
+        kd_engine* e2 = kd_engine_create (kd::pathStr (tools).c_str());
+        kd_enqueue_batch (e2, "[\"https://example.com/v\"]", opts.c_str());
+        (void) waitForState (e2, 1, "working", nullptr, 15);
+        kd_set_paused (e2, 1);
+        (void) waitForState (e2, 1, "paused", nullptr, 15);
+        auto destroyed = std::async (std::launch::async,
+            [e2] { kd_engine_destroy (e2); });
+        check (destroyed.wait_for (std::chrono::seconds (5)) == std::future_status::ready,
+            "destroy на паузе не зависает");
+    }
+
+    kd_engine_destroy (e);
+    ::unsetenv ("K_LOAD_TOOLS"); // живые тесты ниже ищут инструменты сами
+    fs::remove_all (tools);
+    fs::remove_all (out);
+}
+
+// ---- живые источники ----
 
 static void testLiveProbes (kd_engine* e)
 {
@@ -270,6 +378,7 @@ int main (int argc, char** argv)
     testLinkLogic();
     testNames();
     testCAPIPure();
+    testPauseResume();
 
     if (live)
     {

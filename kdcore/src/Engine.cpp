@@ -243,15 +243,20 @@ static Str searchThumb (const json& e)
 
 Engine::Engine()
 {
-    thread = std::thread ([this] { workerLoop(); });
+    // Ограниченная параллельность: два задания одновременно — сеть и
+    // интерфейс не перегружаются, новая ссылка качается, не дожидаясь
+    // конца плейлиста.
+    for (int w = 0; w < 2; ++w)
+        workers.emplace_back ([this] { workerLoop(); });
 }
 
 Engine::~Engine()
 {
     quit.store (true, std::memory_order_relaxed);
-    wake.signal();
-    if (thread.joinable())
-        thread.join();
+    for (size_t i = 0; i < workers.size(); ++i)
+        wake.signal(); // по токену на каждого спящего воркера
+    for (auto& t : workers)
+        if (t.joinable()) t.join();
 }
 
 void Engine::fireChanged()
@@ -368,7 +373,11 @@ void Engine::cancel (int id)
 {
     if (auto item = findItem (id))
     {
+        const bool wasPaused = item->state == QueueItem::State::paused;
         item->setCancelled();
+        // Приостановленное никто не качает: воркер спит до снятия паузы,
+        // отмечаем отработанным сразу, а не после возобновления.
+        if (wasPaused) finish (item, QueueItem::State::failed, "Отменено");
         wake.signal(); // поднять спящий поток
         fireChanged();
     }
@@ -391,7 +400,8 @@ void Engine::clearFinished()
         items.erase (std::remove_if (items.begin(), items.end(),
             [] (const QueueItemPtr& i)
             { return i->state != QueueItem::State::queued
-                  && i->state != QueueItem::State::working; }),
+                  && i->state != QueueItem::State::working
+                  && i->state != QueueItem::State::paused; }), // приостановленное — живое
             items.end());
     }
     fireChanged();
@@ -455,6 +465,16 @@ void Engine::workerLoop()
 {
     while (! quit.load (std::memory_order_relaxed))
     {
+        // Глобальная пауза: очередь не подаётся. Спим короткими срезами —
+        // снятие паузы не должно зависеть от жетонов Wake: пока воркер
+        // добирался сюда, сосед мог съесть предназначенный ему токен.
+        if (pausedFlag.load (std::memory_order_relaxed))
+        {
+            if (quit.load (std::memory_order_relaxed)) break;
+            wake.waitMs (200);
+            continue;
+        }
+
         QueueItemPtr next;
         {
             const std::lock_guard<std::mutex> sl (mutex);
@@ -469,7 +489,55 @@ void Engine::workerLoop()
             wake.waitForever();
             continue;
         }
+
+        // Если ждущих заданий ещё много — разбудить второго воркера
+        // (Wake с notify_all, но флаг потребляет первый проснувшийся).
+        bool more = false;
+        {
+            const std::lock_guard<std::mutex> sl (mutex);
+            for (auto& i : items)
+                if (i != next && i->state == QueueItem::State::queued) { more = true; break; }
+        }
+        if (more) wake.signal();
+
         processItem (next);
+    }
+}
+
+void Engine::pauseItem (const QueueItemPtr& item)
+{
+    item->state = QueueItem::State::paused;
+    item->stage = "ПРИОСТАНОВИЛ...";
+    fireChanged();
+}
+
+void Engine::setPaused (bool p)
+{
+    if (p)
+    {
+        pauseRequested.store (true, std::memory_order_relaxed);
+        pausedFlag.store (true, std::memory_order_relaxed);
+        wake.signal(); // воркер в waitForever выйдет из сна и уснёт до снятия паузы
+        fireChanged();
+    }
+    else
+    {
+        pauseRequested.store (false, std::memory_order_relaxed);
+        pausedFlag.store (false, std::memory_order_relaxed);
+        {
+            const std::lock_guard<std::mutex> sl (mutex);
+            for (auto& i : items)
+                if (i->state == QueueItem::State::paused)
+                {
+                    // yt-dlp продолжит .part с сохранённой позиции; если
+                    // источник не умеет — докачает файл заново, остальные
+                    // задания очереди не затрагиваются.
+                    i->state = QueueItem::State::queued;
+                    i->stage = "В очереди";
+                }
+        }
+        wake.signal();
+        fireChanged();
     }
 }
 
@@ -635,7 +703,8 @@ static bool captureOut (const StrVec& args, Str& out, int* code = nullptr)
     return true;
 }
 
-bool Engine::runYtDlp (const QueueItemPtr& item, const StrVec& args, int* exitCodeOut)
+bool Engine::runYtDlp (const QueueItemPtr& item, const StrVec& args,
+                       RunState& rs, int* exitCodeOut)
 {
     const auto tools = findToolsDir();
     if (tools.empty())
@@ -651,13 +720,13 @@ bool Engine::runYtDlp (const QueueItemPtr& item, const StrVec& args, int* exitCo
     all.insert (all.end(), args.begin(), args.end());
 
     engineLog ("запуск: " + kd::join (all, " "));
-    current = std::make_unique<kd::ChildProcess>();
-    errTail = {};
-    buffer = {};
-    if (! current->start (all, childPath (tools)))
+    rs.current = std::make_unique<kd::ChildProcess>();
+    rs.errTail = {};
+    rs.buffer = {};
+    if (! rs.current->start (all, childPath (tools)))
     {
         engineLog ("ошибка: процесс не запустился");
-        current = nullptr;
+        rs.current = nullptr;
         finish (item, QueueItem::State::failed, "Не удалось запустить загрузчик");
         return false;
     }
@@ -669,27 +738,38 @@ bool Engine::runYtDlp (const QueueItemPtr& item, const StrVec& args, int* exitCo
     {
         if (item->cancelled() || quit.load (std::memory_order_relaxed)) { cancelled = true; break; }
 
-        const int n = current->read (chunk, (int) sizeof (chunk), 40);
+        // Глобальная пауза: процесс останавливается корректно (SIGTERM —
+        // yt-dlp закрывает .part), задание переходит в состояние paused.
+        if (pauseRequested.load (std::memory_order_relaxed))
+        {
+            rs.current->kill();
+            pauseItem (item);
+            rs.current->closeOutput(); // иначе дескриптор трубы живёт до деструктора
+            rs.current = nullptr;
+            return false;
+        }
+
+        const int n = rs.current->read (chunk, (int) sizeof (chunk), 40);
         // Сеть пропала, а процесс висит: 90 с без единого байта вывода —
         // глушим и честно помечаем сетевой причиной (повтор после VPN).
         const auto now = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::seconds> (now - lastOutput).count() > 90)
         {
             engineLog ("нет вывода 90 с — глушу зависший процесс");
-            errTail = "ERROR: network stalled - no output for 90 seconds";
-            current->kill();
+            rs.errTail = "ERROR: network stalled - no output for 90 seconds";
+            rs.current->kill();
             cancelled = false;
             break;
         }
         if (n > 0)
         {
             lastOutput = std::chrono::steady_clock::now();
-            buffer += Str (chunk, (size_t) n);
+            rs.buffer += Str (chunk, (size_t) n);
             int nl;
-            while ((nl = kd::indexOfChar (buffer, '\n')) >= 0)
+            while ((nl = kd::indexOfChar (rs.buffer, '\n')) >= 0)
             {
-                consume (buffer.substr (0, (size_t) nl), item);
-                buffer = buffer.substr ((size_t) nl + 1);
+                consume (rs.buffer.substr (0, (size_t) nl), item, rs.errTail);
+                rs.buffer = rs.buffer.substr ((size_t) nl + 1);
             }
         }
         else if (n == 0)
@@ -698,22 +778,22 @@ bool Engine::runYtDlp (const QueueItemPtr& item, const StrVec& args, int* exitCo
         }
     }
 
-    if (cancelled) current->kill();
+    if (cancelled) rs.current->kill();
 
     // Хвост без перевода строки — тоже строка вывода.
-    if (! buffer.empty()) consume (buffer, item);
-    buffer = {};
-    const auto code = current->waitExitCode();
-    current->closeOutput();
+    if (! rs.buffer.empty()) consume (rs.buffer, item, rs.errTail);
+    rs.buffer = {};
+    const auto code = rs.current->waitExitCode();
+    rs.current->closeOutput();
     engineLog ("завершён: код " + std::to_string (code)
-               + (errTail.empty() ? Str() : " | " + errTail));
-    current = nullptr;
+               + (rs.errTail.empty() ? Str() : " | " + rs.errTail));
+    rs.current = nullptr;
 
     if (exitCodeOut != nullptr) *exitCodeOut = code;
     return ! cancelled;
 }
 
-void Engine::consume (const Str& line, const QueueItemPtr& item)
+void Engine::consume (const Str& line, const QueueItemPtr& item, Str& errTail)
 {
     const auto raw = kd::trimStart (kd::trimEnd (line));
 
@@ -772,8 +852,8 @@ void Engine::consume (const Str& line, const QueueItemPtr& item)
         item->progress = 0;
         item->state = QueueItem::State::working;
         item->stage = item->itemTotal > 1
-            ? "Качаем " + std::to_string (item->itemIndex) + " из " + std::to_string (item->itemTotal)
-            : "Качаем…";
+            ? "Качаю " + std::to_string (item->itemIndex) + " из " + std::to_string (item->itemTotal)
+            : "Качаю…";
         fireChanged();
     }
     else if (parts.size() >= 2 && parts[0] == "@F")
@@ -855,7 +935,7 @@ void Engine::startPlaylist (const QueueItemPtr& item)
             item->itemIndex = (int) i + 1;
             item->itemTotal = (int) urls.size();
             item->progress = (float) i / (float) urls.size();
-            setStage (item, "Качаем " + std::to_string (i + 1)
+            setStage (item, "Качаю " + std::to_string (i + 1)
                           + " из " + std::to_string (urls.size()));
 
             StrVec args = baseArgs (item->dest, attempts[attempt]);
@@ -890,14 +970,16 @@ void Engine::startPlaylist (const QueueItemPtr& item)
             args.push_back (urls[i]);
 
             const int before = (int) item->files.size();
-            runYtDlp (item, args);
+            RunState rs;
+            runYtDlp (item, args, rs);
+            if (item->state == QueueItem::State::paused) return; // пауза — остальные ждут
             if (item->cancelled())
             {
                 finish (item, QueueItem::State::failed, "Отменено");
                 return;
             }
             if ((int) item->files.size() > before) ++done; else ++failed;
-            lastError = errTail;
+            lastError = rs.errTail;
         }
         if (done > 0) break;
         if (attempt + 1 < attempts.size()
@@ -934,6 +1016,7 @@ void Engine::startNative (const QueueItemPtr& item)
 
     // Одноразовый повтор без вшивания обложки после её сбоя.
     bool dropThumb = false;
+    Str lastErr;
     for (int attempt = 0; attempt < (int) attempts.size(); ++attempt)
     {
         if (item->cancelled() || quit.load (std::memory_order_relaxed)) break;
@@ -1076,7 +1159,10 @@ void Engine::startNative (const QueueItemPtr& item)
         args.push_back (item->link);
 
         int code = -1;
-        const bool ran = runYtDlp (item, args, &code);
+        RunState rs;
+        const bool ran = runYtDlp (item, args, rs, &code);
+        lastErr = rs.errTail;
+        if (item->state == QueueItem::State::paused) return; // пауза
         if (item->cancelled())
         {
             finish (item, QueueItem::State::failed, "Отменено");
@@ -1166,6 +1252,7 @@ void Engine::startNative (const QueueItemPtr& item)
             // содержит звуковую дорожку (проверка длительности).
             if (item->isAudio && ! item->files.empty())
             {
+                setStage (item, "Проверяю файл…");
                 bool audioOk = true;
                 for (const auto& f : item->files)
                     if (probeFileDuration (fs::u8path (f)) <= 0.0)
@@ -1231,19 +1318,19 @@ void Engine::startNative (const QueueItemPtr& item)
         // Сбой вшивания обложки (бывает на фрагментах) — повтор той же
         // попытки без обложки, загрузка не должна падать из-за картинки.
         if (item->isAudio && ! dropThumb
-            && kd::contains (kd::lower (errTail), "thumbnail embedding"))
+            && kd::contains (kd::lower (rs.errTail), "thumbnail embedding"))
         {
             dropThumb = true;
             attempt -= 1;
             engineLog ("сбой вшивания обложки — повторяю без неё");
             continue;
         }
-        const bool canRetry = retryWithCookies (errTail) && attempt < attempts.size() - 1;
+        const bool canRetry = retryWithCookies (rs.errTail) && attempt < attempts.size() - 1;
         if (! canRetry) break;
         engineLog ("попытка без входа не удалась, перехожу к следующему источнику");
     }
 
-    finish (item, QueueItem::State::failed, humanError (errTail));
+    finish (item, QueueItem::State::failed, humanError (lastErr));
 }
 
 bool Engine::retryWithCookies (const Str& raw)
@@ -1458,10 +1545,10 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
     item->itemIndex = index + 1;
     item->title = query;
     item->progress = 0;
-    // Одиночный трек качается без счётчиков: «Загружаем…», а не «1 из 1».
+    // Одиночный трек качается без счётчиков: «Качаю…», а не «1 из 1».
     setStage (item, item->itemTotal > 1
-        ? "Качаем " + std::to_string (index + 1) + " из " + std::to_string (item->itemTotal)
-        : Str ("Качаем…"));
+        ? "Качаю " + std::to_string (index + 1) + " из " + std::to_string (item->itemTotal)
+        : Str ("Качаю…"));
 
     // Общая часть: звук, теги, имя файла, хрон.
     auto makeArgs = [&]() -> StrVec
@@ -1530,7 +1617,8 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
         }
         StrVec args = makeArgs();
         args.push_back (url);
-        if (! runYtDlp (item, args)) return; // отменено — состояние уже выставлено
+        RunState rs;
+        if (! runYtDlp (item, args, rs)) return; // отменено/пауза — состояние выставлено
         if (item->files.size() > before) return; // точный кандидат скачан
     }
 
@@ -1550,7 +1638,8 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
         args.push_back (searchSite == Detector::Service::soundcloud
                       ? "scsearch5:" + query
                       : "ytsearch5:" + query);
-        if (! runYtDlp (item, args)) return; // отменено
+        RunState rs;
+        if (! runYtDlp (item, args, rs)) return; // отменено
     }
 
     if (item->files.size() == before && searchSite == Detector::Service::youtube

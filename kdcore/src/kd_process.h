@@ -26,6 +26,7 @@ public:
             kill();
             waitExitCode();
         }
+        closeOutput();
     }
 
     ChildProcess (const ChildProcess&) = delete;
@@ -116,7 +117,11 @@ public:
     void kill()
     {
         if (pid > 0 && ! reaped)
-            ::kill (pid, SIGKILL);
+        {
+            // SIGTERM: yt-dlp успевает корректно закрыть .part-файл —
+            // после паузы загрузка продолжится с сохранённой позиции.
+            ::kill (pid, SIGTERM);
+        }
     }
 
     void closeOutput()

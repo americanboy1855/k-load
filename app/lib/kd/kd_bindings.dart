@@ -88,6 +88,12 @@ class KdBindings {
     _clearFinished = lib
         .lookup<NativeFunction<_VoidEngineNative>>('kd_clear_finished')
         .asFunction();
+    _setPaused = lib
+        .lookup<NativeFunction<_IdNative>>('kd_set_paused')
+        .asFunction();
+    _isPaused = lib
+        .lookup<NativeFunction<_IntEngineNative>>('kd_is_paused')
+        .asFunction();
     _retryNetworkFailed = lib
         .lookup<NativeFunction<_IntEngineNative>>('kd_retry_network_failed')
         .asFunction();
@@ -166,6 +172,8 @@ class KdBindings {
   late final _Id _cancel;
   late final _Id _remove;
   late final _VoidEngineDart _clearFinished;
+  late final _Id _setPaused;
+  late final _IntEngine _isPaused;
   late final _IntEngine _retryNetworkFailed;
   late final _StringEngineString _probeBlocking;
   late final _VoidEngineStringDart _probeAsync;
@@ -424,6 +432,12 @@ class KdCore {
   void cancel(int id) => _b._cancel(_engine, id);
   void remove(int id) => _b._remove(_engine, id);
   void clearFinished() => _b._clearFinished(_engine);
+
+
+  /// Глобальная пауза очереди: текущие загрузки останавливаются (.part
+  /// сохраняется), следующие задания не подаются до setPaused(false).
+  void setPaused(bool paused) => _b._setPaused(_engine, paused ? 1 : 0);
+  bool isPaused() => _b._isPaused(_engine) != 0;
 
   /// Повтор сетевых сбоев очереди после восстановления VPN.
   int retryNetworkFailed() => _b._retryNetworkFailed(_engine);

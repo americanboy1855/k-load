@@ -70,6 +70,7 @@ static const char* stateName (QueueItem::State s)
     {
         case QueueItem::State::queued:  return "queued";
         case QueueItem::State::working: return "working";
+        case QueueItem::State::paused:  return "paused";
         case QueueItem::State::done:    return "done";
         case QueueItem::State::failed:  return "failed";
     }
@@ -274,6 +275,9 @@ int kd_enqueue_photo (kd_engine* e, const char* link, const char* options_json)
 void kd_cancel (kd_engine* e, int id)            { if (e && e->engine) e->engine->cancel (id); }
 void kd_remove (kd_engine* e, int id)            { if (e && e->engine) e->engine->remove (id); }
 void kd_clear_finished (kd_engine* e)            { if (e && e->engine) e->engine->clearFinished(); }
+
+void kd_set_paused (kd_engine* e, int paused)    { if (e && e->engine) e->engine->setPaused (paused != 0); }
+int  kd_is_paused (kd_engine* e)                 { return e && e->engine && e->engine->isPaused() ? 1 : 0; }
 int kd_retry_network_failed (kd_engine* e)       { return e && e->engine ? e->engine->retryNetworkFailed() : 0; }
 
 char* kd_probe_blocking (kd_engine* e, const char* text)

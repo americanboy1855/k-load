@@ -58,6 +58,12 @@ KD_EXPORT void kd_cancel (kd_engine* e, int id);
 KD_EXPORT void kd_remove (kd_engine* e, int id);
 KD_EXPORT void kd_clear_finished (kd_engine* e);
 
+// Глобальная пауза очереди: текущие процессы останавливаются (yt-dlp
+// закрывает .part — продолжение с той же позиции), следующие задания не
+// подаются. kd_set_paused(e, 0) возвращает приостановленное к докачке.
+KD_EXPORT void kd_set_paused (kd_engine* e, int paused);
+KD_EXPORT int kd_is_paused (kd_engine* e);
+
 // Повтор заданий, упавших по сети (VPN вернулся). Возвращает число
 // поставленных обратно в очередь.
 KD_EXPORT int kd_retry_network_failed (kd_engine* e);

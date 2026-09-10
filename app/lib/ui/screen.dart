@@ -102,7 +102,7 @@ UserMessage mapUserMessage(String raw) {
     return const UserMessage('КОНТЕНТ НЕДОСТУПЕН ДЛЯ ЗАГРУЗКИ', 'openLink');
   }
   if (has(['не удалось получить данные', 'нет ядра'])) {
-    return const UserMessage('НЕ УДАЛОСЬ ПОЛУЧИТЬ ДАННЫЕ О ФАЙЛЕ', 'retry');
+    return const UserMessage('НЕ МОГУ ПОЛУЧИТЬ ДАННЫЕ', 'retry');
   }
   if (has(['отменено'])) {
     return const UserMessage('ЗАГРУЗКА ОТМЕНЕНА', 'retry');
@@ -112,12 +112,12 @@ UserMessage mapUserMessage(String raw) {
   }
   if (has(['сеть', 'vpn', 'timed out', 'connection', 'stalled', 'unreachable',
            'не робот', 'sign in', 'отказал', 'ssl', 'no video formats'])) {
-    return const UserMessage('НЕТ СОЕДИНЕНИЯ С ИСТОЧНИКОМ — ПРОВЕРЬТЕ VPN', 'retry');
+    return const UserMessage('НЕ МОГУ ПОДКЛЮЧИТЬСЯ — ПРОВЕРЬТЕ VPN', 'retry');
   }
   if (has(['видео недоступно', 'нет видео', 'no video'])) {
     return const UserMessage('ВИДЕО НЕДОСТУПНО', 'selectMusic');
   }
-  return const UserMessage('НЕ УДАЛОСЬ ПОЛУЧИТЬ ДАННЫЕ О ФАЙЛЕ', 'retry');
+  return const UserMessage('НЕ МОГУ ПОЛУЧИТЬ ДАННЫЕ', 'retry');
 }
 
 class KLoadScreen extends StatefulWidget {
@@ -177,7 +177,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   String? resultError; // причина, почему результат недоступен
   // одноразовый догруз хронометража для текущей ссылки
   bool durationRetried = false;
-  // текстовый запрос в поиске: неопределённая шкала «ИЩЕМ...» вместо %
+  // любой разбор: неопределённая шкала «ИЩУ...» вместо процентов
   bool searchingNow = false;
   // сторожевой таймер разбора: зависший запрос → честная ошибка
   Timer? _probeWatchdog;
@@ -217,6 +217,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   // очередь
   List<KdItem> items = [];
+  bool queuePaused = false; // глобальная пауза очереди (кнопка [ПАУЗА])
   String destFolder = '';
   bool toolsFound = true;
 
@@ -500,7 +501,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       // Прямой ссылке — никогда не показывать окно текстовых результатов:
       // старая выдача гасится вместе с началом нового разбора.
       showResultList = false;
-      // Процентов больше нет: любой разбор — честное «ИЩЕМ...» с бегущей
+      // Процентов больше нет: любой разбор — честное «ИЩУ...» с бегущей
       // шкалой, пока данные не приехали.
       searchingNow = true;
       if (links.length > 1) {
@@ -521,7 +522,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     } else {
       _animateSeek(null);
       // Сторожевой таймер — только для разбора ССЫЛКИ: у текстового
-      // поиска свои честные состояния (ИЩЕМ... / ошибка поиска).
+      // поиска свои честные состояния (ИЩУ... / ошибка поиска).
       if (!searchingNow) _armProbeWatchdog();
       core?.probeAsync(rawText);
     }
@@ -802,9 +803,13 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     if (c == null) return;
     final secs = sectionsArg;
     final audio = mode == 'music';
-    // Ссылки, которые уже стоят в очереди — второй раз не ставим.
+    // Ссылки, которые уже стоят в очереди (в том числе на паузе) —
+    // второй раз не ставим.
     final busy = items
-        .where((it) => it.state == 'queued' || it.state == 'working')
+        .where((it) =>
+            it.state == 'queued' ||
+            it.state == 'working' ||
+            it.state == 'paused')
         .map((it) => it.link)
         .toSet();
     String targetLink(String fallback) {
@@ -1334,14 +1339,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   // ---- ПОИСК: LED-шкала ----
 
   Widget _seekBlock() {
-    // Текстовый запрос: честное неопределённое состояние — «ИЩЕМ...» и
+    // Честное неопределённое состояние — «ИЩУ...» и
     // сегменты, плавно бегающие туда-обратно. Проценты не показываем:
     // они добегают до 100 раньше настоящей выдачи.
     if (searchingNow) {
       return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
           Text('ПОИСК', style: T.ps(10, c: Pal.soft, ls: .2)),
-          Text('ИЩЕМ...', style: T.ps(14, c: Pal.amber)),
+          Text('ИЩУ...', style: T.ps(14, c: Pal.amber)),
         ]),
         const SizedBox(height: 9),
         const SweepLedRow(count: 16, cellHeight: 16),
@@ -2257,17 +2262,21 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         child: CustomPaint(
           foregroundPainter:
               const DashedBorderPainter(color: Color(0x80FFB000)),
-          child: Column(children: [
-            _queueHeader(compact: true),
-            Expanded(
-              child: ListView.builder(
-                padding: EdgeInsets.zero,
-                itemCount: math.min(2, items.length),
-                // Две самые свежие плашки (очередь реверсируется).
-                itemBuilder: (context, i) =>
-                    _queueRow(items[items.length - 1 - i]),
+          child: Stack(children: [
+            Column(children: [
+              _queueHeader(compact: true),
+              Expanded(
+                child: Builder(builder: (context) {
+                  final sorted = _sortedItems();
+                  return ListView.builder(
+                    padding: const EdgeInsets.only(bottom: 40),
+                    itemCount: math.min(2, sorted.length),
+                    itemBuilder: (context, i) => _queueRow(sorted[i]),
+                  );
+                }),
               ),
-            ),
+            ]),
+            if (hasActiveTasks) _pauseButton(),
           ]),
         ),
       ),
@@ -2291,6 +2300,94 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           ),
       ]),
     );
+  }
+
+  /// Активные (качается/ждёт/приостановлено) — сверху, старое и готовое —
+  /// ниже; внутри групп: очередь по порядку скачивания, завершённые —
+  /// свежие сверху. Порядок работы ядра не меняется.
+  List<KdItem> _sortedItems() {
+    int rank(KdItem it) {
+      switch (it.state) {
+        case 'working': return 0;
+        case 'queued': return 1;
+        case 'paused': return 2;
+        case 'done': return 3;
+        default: return 4;
+      }
+    }
+
+    final indexed = <(int, KdItem)>[
+      for (var i = 0; i < items.length; i++) (i, items[i]),
+    ];
+    indexed.sort((a, b) {
+      final r = rank(a.$2).compareTo(rank(b.$2));
+      if (r != 0) return r;
+      final queueRank = rank(a.$2) <= 1; // очередь — по порядку скачивания
+      return queueRank ? a.$1.compareTo(b.$1) : b.$1.compareTo(a.$1);
+    });
+    return [for (final e in indexed) e.$2];
+  }
+
+  bool get hasActiveTasks => items.any((it) =>
+      it.state == 'queued' ||
+      it.state == 'working' ||
+      it.state == 'paused');
+
+  /// Квадратная кнопка паузы/возобновления: липнет к правому нижнему углу
+  /// диспетчера, видна только пока есть живые задания.
+  Widget _pauseButton() {
+    return Positioned(
+      bottom: 8,
+      right: 13,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _toggleQueuePause,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(end: queuePaused ? 1.0 : 0.0),
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOut,
+            builder: (context, t, child) => Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: const Color(0xF50D0902),
+                border: Border.all(
+                    color: Color.lerp(Pal.amberFaint, Pal.amber, t)!),
+                borderRadius: const BorderRadius.all(Radius.circular(2)),
+                boxShadow: [
+                  BoxShadow(
+                      color: Colors.black.withValues(alpha: .55),
+                      blurRadius: 6),
+                  BoxShadow(
+                      color: Pal.amber.withValues(alpha: .25 * t),
+                      blurRadius: 8 * t),
+                ],
+              ),
+              child: Icon(
+                queuePaused ? Icons.play_arrow : Icons.pause,
+                size: 20,
+                color: Color.lerp(Pal.dim, Pal.amber, t),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Глобальная пауза: ядро глушит текущие процессы (yt-dlp сохраняет
+  /// .part) и не подаёт следующие задания; снятие — докачка с позиции.
+  void _toggleQueuePause() {
+    final next = !queuePaused;
+    core?.setPaused(next);
+    setState(() {
+      queuePaused = next;
+      items = core?.snapshot() ?? items;
+      queueShown = true;
+    });
+    _scheduleDragZones();
   }
 
   /// Очистка истории: убирает записи диспетчера. Файлы на диске не
@@ -2349,7 +2446,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
               gap: 3),
         ),
         const SizedBox(width: 8),
-        if (it.state == 'working' || it.state == 'queued')
+        if (it.state == 'working' || it.state == 'queued' || it.state == 'paused')
           _ActButton(
             icon: (_) => const Icon(Icons.close, size: 13, color: Pal.soft),
             onTap: () => core?.cancel(it.id),
