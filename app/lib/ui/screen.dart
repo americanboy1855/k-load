@@ -13,6 +13,13 @@ import 'widgets.dart';
 
 const tvW = 560.0, tvH = 670.0;
 
+/// Источники текстового поиска — зеркально агрегатору ядра
+/// (Engine::probeSearch: YouTube, SoundCloud, Spotify, Apple Music).
+/// Если источник убирается из поиска, его ярлык уходит и из подсказки.
+const textSearchHints = ['YT', 'SC', 'SP', 'AM'];
+String get searchHintText =>
+    'ВСТАВЬТЕ ССЫЛКУ ИЛИ НАПИШИТЕ НАЗВАНИЕ (${textSearchHints.join(', ')})';
+
 // Классификатор сервисов — зеркально design/main-screen.html.
 class ServiceInfo {
   const ServiceInfo(this.id, this.name, {this.music = false, this.playlist = false});
@@ -208,6 +215,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   double panelX = 0;
 
   final _queueKey = GlobalKey(); // верх диспетчера — граница панели результатов
+  // Прокрутка диспетчера и окна результатов: контроллеры живут, пока жив
+  // экран, — возврат к результатам не сбрасывает позицию списка.
+  final _queueScroll = ScrollController();
+  final _resultsScroll = ScrollController();
+  // Карточка открыта из текстового поиска: показываем [К РЕЗУЛЬТАТАМ].
+  bool cameFromSearch = false;
 
   // пачка: последовательный сбор метаданных (общий хронометраж)
   bool batchProbing = false;
@@ -252,6 +265,54 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   bool _looksLikeLink(String s) {
     final t = s.trim();
     return t.contains('.') && t.contains('/');
+  }
+
+  /// Карточка открыта из текстового поиска — показываем [К РЕЗУЛЬТАТАМ].
+  /// Прямым ссылкам кнопка не нужна.
+  bool get _showBackToResults =>
+      cameFromSearch && cardVisible && searchResults.isNotEmpty;
+
+  /// Квадратная кнопка возврата к прежней выдаче текстового поиска.
+  bool backHover = false;
+
+  Widget _backToResultsButton() {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => setState(() => showResultList = true),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => backHover = true),
+        onExit: (_) => setState(() => backHover = false),
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(end: backHover ? 1.0 : 0.0),
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+          builder: (context, t, _) => Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: Color.lerp(Colors.transparent,
+                  Pal.amber.withValues(alpha: .08), t),
+              boxShadow: t > 0.01
+                  ? [BoxShadow(
+                      color: Pal.amber.withValues(alpha: .2 * t),
+                      blurRadius: 8 * t)]
+                  : null,
+            ),
+            child: CustomPaint(
+              foregroundPainter: DashedBorderPainter(
+                  color: Color.lerp(Pal.amberFaint, Pal.amber, t)!),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                child: Text('К РЕЗУЛЬТАТАМ',
+                    style: T.ps(7,
+                        c: Color.lerp(Pal.dim, Pal.amber, t)!, ls: .08)),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -454,6 +515,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       showResultList = false;
       selectedResultUrl = null;
       searchResults = const [];
+      cameFromSearch = false;
       durationRetried = false;
     });
     debounce?.cancel();
@@ -657,6 +719,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         resultError = results.isEmpty
             ? (p.error.isEmpty ? 'По запросу ничего не нашлось' : p.error)
             : null;
+        // Новая выдача — список начинается с первой строки.
+        if (_resultsScroll.hasClients) _resultsScroll.jumpTo(0);
       });
       return;
     }
@@ -720,6 +784,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     if (selectedResultUrl != null) return; // разбор уже идёт
     final svc = ((row?['service'] ?? 0) as num).toInt();
     setState(() {
+      cameFromSearch = true;
       selectedResultUrl = url;
       resultError = null;
       showResultList = false;
@@ -780,20 +845,63 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     return '$from-$to';
   }
 
-  /// Подпись варианта файла: контент + режим + формат + качество + ХРОН.
-  String _variantSig(String link, bool audio, String fmt, String chron, String quality) {
-    return '$link|$audio|$fmt|$chron|$quality';
+  /// Канонический ID контента: одна запись, найденная по разным ссылкам
+  /// (youtu.be/ID, watch?v=ID&t=30, с utm-хвостом) — один и тот же контент.
+  String _contentKey(String link) {
+    var u = link.trim().toLowerCase();
+    u = u.replaceFirst(RegExp(r'^https?://'), '');
+    u = u.replaceFirst(RegExp(r'^www\.'), '');
+    String idOf(String tail) => tail
+        .split('?').first.split('#').first
+        .replaceAll(RegExp(r'^/+|/+$'), '');
+    // YouTube: короткая форма, watch, shorts, embed, music — один хост-семья.
+    final yt = RegExp(r'(?:(?:m|music)\.)?youtube\.com/(?:watch\?(?:[^#]*&)?v=|shorts/|embed/|live/)([\w-]{4,})')
+        .firstMatch(u);
+    if (yt != null) return 'yt:${yt.group(1)}';
+    if (u.startsWith('youtu.be/')) return 'yt:${idOf(u.substring(9))}';
+    String hostPath(String prefix) => '$prefix:${idOf(u.contains('/') ? u.substring(u.indexOf('/')) : u)}';
+    if (u.startsWith('tiktok.com') || u.startsWith('vm.tiktok.com') || u.startsWith('vt.tiktok.com')) {
+      return hostPath('tt');
+    }
+    if (u.startsWith('instagram.com')) return hostPath('ig');
+    if (u.startsWith('pinterest.') || u.startsWith('pin.it')) return hostPath('pin');
+    if (u.startsWith('soundcloud.com') || u.startsWith('on.soundcloud.com')) {
+      return hostPath('sc');
+    }
+    if (u.startsWith('open.spotify.com') || u.startsWith('spotify.link')) return hostPath('sp');
+    if (u.startsWith('music.apple.com')) return hostPath('am');
+    if (u.startsWith('vk.com') || u.startsWith('vkvideo.ru')) return hostPath('vk');
+    // Остальные сайты: хост + путь без query — уже каноничная форма.
+    final host = u.split('/').first;
+    return '$host/${idOf(u.startsWith(host) ? u.substring(host.length) : u)}';
   }
 
-  /// Уже скачан такой же вариант? (полный ≠ фрагмент, видео ≠ музыка,
-  /// разные форматы и диапазоны — разные варианты.)
+  /// Подпись варианта файла: контент + режим + формат + качество + ХРОН.
+  /// Видео и музыка одного ролика, полный файл и фрагмент, разные форматы,
+  /// разные диапазоны и разное качество — разные варианты.
+  String _variantSig(String link, bool audio, String fmt, String chron, String quality) {
+    return '${_contentKey(link)}|${audio ? 'music' : 'video'}|$fmt|${chron.trim()}|${quality.trim()}';
+  }
+
+  /// Подпись уже существующей задачи (ядро хранит режим и параметры так).
+  String _itemSig(KdItem it) {
+    final fmt = it.isAudio ? it.audioFormat : it.container;
+    final quality = it.isAudio || it.maxHeight <= 0 ? 'best' : '${it.maxHeight}';
+    return _variantSig(it.link, it.isAudio, fmt, it.sections, quality);
+  }
+
+  /// Такой же вариант уже скачан или прямо сейчас качается/ждёт в очереди?
+  /// Полный ≠ фрагмент, видео ≠ музыка, разные форматы и диапазоны —
+  /// разные варианты, их проверка не задевает.
   KdItem? _findDupe(String link, bool audio, String fmt, String chron, String quality) {
     final sig = _variantSig(link, audio, fmt, chron, quality);
     for (final it in items) {
-      if (it.state != 'done' || it.files.isEmpty) continue;
-      final other = _variantSig(it.link, it.isAudio, it.audioFormat,
-          it.sections, it.maxHeight > 0 ? '${it.maxHeight}' : 'best');
-      if (other == sig) return it;
+      if (it.isPhoto) continue;
+      final finished = it.state == 'done' && it.files.isNotEmpty;
+      final pending =
+          it.state == 'queued' || it.state == 'working' || it.state == 'paused';
+      if (!finished && !pending) continue;
+      if (_itemSig(it) == sig) return it;
     }
     return null;
   }
@@ -803,15 +911,30 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     if (c == null) return;
     final secs = sectionsArg;
     final audio = mode == 'music';
-    // Ссылки, которые уже стоят в очереди (в том числе на паузе) —
-    // второй раз не ставим.
-    final busy = items
-        .where((it) =>
-            it.state == 'queued' ||
-            it.state == 'working' ||
-            it.state == 'paused')
-        .map((it) => it.link)
-        .toSet();
+    // Формат и качество варианта, который уйдёт в очередь прямо сейчас.
+    final fmt = audio ? audioFormat : videoContainer;
+    final qualitySig = audio ? 'best' : quality;
+    // Занятый вариант: контент+режим+формат+качество+ХРОН. Видео и музыка
+    // одного ролика — разные варианты и качаются параллельно; дубль
+    // конкретного варианта второй раз не ставим.
+    final busy = <String>{
+      for (final it in items)
+        if (!it.isPhoto &&
+            (it.state == 'queued' ||
+                it.state == 'working' ||
+                it.state == 'paused'))
+          _itemSig(it),
+    };
+    final photoBusy = <String>{
+      for (final it in items)
+        if (it.isPhoto &&
+            (it.state == 'queued' ||
+                it.state == 'working' ||
+                it.state == 'paused'))
+          _contentKey(it.link),
+    };
+    bool busyVariant(String link) =>
+        busy.contains(_variantSig(link, audio, fmt, secs ?? '', qualitySig));
     String targetLink(String fallback) {
       final p = probe;
       for (final candidate in [p?.resolved ?? '', p?.link ?? '']) {
@@ -824,15 +947,20 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     final playlist = !isBatch && (p?.isPlaylist ?? false);
     final limit = playlist && playlistLimit > 0 ? playlistLimit : 0;
 
-    // Уже скачан такой же вариант (контент+режим+формат+качество+ХРОН)?
-    // Полный файл, видео- и аудио-фрагменты — разные варианты.
+    // Такой же вариант уже скачан или стоит в очереди? Полный файл,
+    // видео- и аудио-варианты, другие форматы и диапазоны — не совпадают.
+    // Готовый — плашка с действиями; качающийся/ждущий — тост: второй
+    // воркер на тот же .part не запускаем.
     if (!forceDownload && !isBatch && p != null && p.ok && !p.isPlaylist) {
       final link = targetLink(rawText);
       if (link.isNotEmpty) {
-        final dupe = _findDupe(link, audio,
-            audio ? audioFormat : videoContainer, secs ?? '', quality);
+        final dupe = _findDupe(link, audio, fmt, secs ?? '', qualitySig);
         if (dupe != null) {
-          setState(() { dupeNotice = dupe; });
+          if (dupe.state == 'done') {
+            setState(() { dupeNotice = dupe; });
+          } else {
+            _showToast('ТАКОЙ ФАЙЛ УЖЕ СТОИТ В ОЧЕРЕДИ');
+          }
           return;
         }
       }
@@ -840,7 +968,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     forceDownload = false;
 
     if (isBatch) {
-      final fresh = batchLinks.where((l) => !busy.contains(l)).toList();
+      final fresh =
+          batchLinks.where((l) => !busyVariant(l)).toList();
       if (fresh.isEmpty) return;
       c.enqueueBatch(fresh,
           audio: audio,
@@ -857,7 +986,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       }
       if (p.isPhoto) {
         final link = targetLink(rawText);
-        if (busy.contains(link)) return;
+        if (photoBusy.contains(_contentKey(link))) return;
         c.enqueuePhoto(link, imageFormat: imageFormat);
       } else if (playlist) {
         // Плейлист раскладывается на ОТДЕЛЬНЫЕ задачи: у каждого ролика
@@ -872,7 +1001,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             i += 1;
             if (limit > 0 && i > limit) break;
             final url = (e['url'] ?? '') as String;
-            if (url.isEmpty || busy.contains(url)) continue;
+            if (url.isEmpty || busyVariant(url)) continue;
             final t = (e['title'] ?? '') as String;
             c.enqueueBatch([url],
                 dest: folder,
@@ -887,7 +1016,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         } else {
           // Разбор без списка роликов — прежний путь целиком.
           final link = p.link;
-          if (busy.contains(link)) return;
+          if (busyVariant(link)) return;
           c.enqueueBatch([link],
               audio: audio,
               wholePlaylist: 1,
@@ -899,7 +1028,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       } else if (p.isSearch) {
         // найденный по названию трек: файл называется запросом
         final link = targetLink('');
-        if (link.isEmpty || busy.contains(link)) return;
+        if (link.isEmpty || busyVariant(link)) return;
         c.enqueueBatch([link],
             audio: audio,
             sections: secs,
@@ -910,7 +1039,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             durationHint: p.duration);
       } else {
         final link = targetLink(rawText);
-        if (busy.contains(link)) return;
+        if (busyVariant(link)) return;
         c.enqueueBatch([link],
             audio: audio,
             sections: secs,
@@ -996,6 +1125,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     searchFocus.dispose();
     chronFrom.dispose();
     chronTo.dispose();
+    _queueScroll.dispose();
+    _resultsScroll.dispose();
     super.dispose();
   }
 
@@ -1143,8 +1274,18 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
               const SizedBox(height: 14),
               _searchErrorPanel(),
             ] else ...[
+              if (_showBackToResults) ...[
+                const SizedBox(height: 8),
+                // Возврат к прежней выдаче: справа под строкой поиска,
+                // на уровне верхней границы обложки. Запрос, результаты
+                // и позиция прокрутки сохранены.
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: _backToResultsButton(),
+                ),
+              ],
               if (cardVisible) ...[
-                const SizedBox(height: 18),
+                SizedBox(height: _showBackToResults ? 6 : 18),
                 _foundCard(),
                 if (!(probe?.drm ?? false)) ...[
                   const SizedBox(height: 18),
@@ -1249,11 +1390,13 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                           ),
                           if (rawText.isEmpty)
                             // Подсказка не должна перехватывать клики поля.
+                            // Крупный пиксельный кегль: читается сразу после
+                            // запуска; на узкой ширине честно переносится.
                             IgnorePointer(
                               child: Text(
-                                'Вставьте ссылку или напишите название',
-                                style: T.mono(12, c: Pal.dim),
-                                maxLines: 1,
+                                searchHintText,
+                                style: T.ps(9, c: Pal.soft, ls: .04),
+                                maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -1276,6 +1419,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   /// Крестик очистки: появляется с текстом, гасит поле, выдачу и все
   /// временные состояния поиска. Диспетчер и файлы не трогает.
+  /// Геометрия — та же, что у остальных квадратных кнопок интерфейса:
+  /// тёмный фон, пунктирная рамка, отдельное плавное hover-состояние.
   Widget _searchClear() {
     return GestureDetector(
       onTap: _clearSearch,
@@ -1288,26 +1433,31 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           duration: const Duration(milliseconds: 220),
           curve: Curves.easeOut,
           builder: (context, t, _) => Container(
-            width: 22,
-            height: 22,
+            width: 24,
+            height: 24,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                  color: Color.lerp(Pal.amberFaint, Pal.amber, t)!),
+              color: Color.lerp(Colors.transparent,
+                  Pal.amber.withValues(alpha: .08), t),
               boxShadow: t > 0.01
                   ? [BoxShadow(
-                      color: Pal.amber.withValues(alpha: .25 * t),
+                      color: Pal.amber.withValues(alpha: .22 * t),
                       blurRadius: 8 * t)]
                   : null,
             ),
-            child: Text('×',
-                style: TextStyle(
-                    fontFamily: T.plex,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    height: 1,
-                    color: Color.lerp(Pal.dim, Pal.amber, t))),
+            child: CustomPaint(
+              foregroundPainter: DashedBorderPainter(
+                  color: Color.lerp(Pal.amberFaint, Pal.amber, t)!),
+              child: Center(
+                child: Text('×',
+                    style: TextStyle(
+                        fontFamily: T.plex,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        height: 1,
+                        color: Color.lerp(Pal.dim, Pal.amber, t))),
+              ),
+            ),
           ),
         ),
       ),
@@ -1323,6 +1473,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       showResultList = false;
       selectedResultUrl = null;
       searchResults = const [];
+      cameFromSearch = false;
       resultError = null;
       durationRetried = false;
       searchingNow = false;
@@ -1484,10 +1635,15 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                   ]),
                   const SizedBox(height: 6),
                   Expanded(
-                    child: ListView.builder(
-                      padding: EdgeInsets.zero,
-                      itemCount: rows.length,
-                      itemBuilder: (context, i) => _resultRow(rows[i]),
+                    child: Scrollbar(
+                      controller: _resultsScroll,
+                      thumbVisibility: true,
+                      child: ListView.builder(
+                        controller: _resultsScroll,
+                        padding: const EdgeInsets.only(right: 4),
+                        itemCount: rows.length,
+                        itemBuilder: (context, i) => _resultRow(rows[i]),
+                      ),
                     ),
                   ),
                 ]),
@@ -1593,27 +1749,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                     ? 'ПЛЕЙЛИСТ · ${p.serviceTitle.toUpperCase()}'
                     : p.serviceTitle.toUpperCase(),
                 src: src),
-            // Вернуться к списку результатов текстового поиска: повторное
-            // нажатие закрывает панель, крестик в самой панели тоже.
-            if (p.isSearch && searchResults.isNotEmpty) ...[
-              const SizedBox(width: 9),
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () => setState(() {
-                  showResultList = !showResultList;
-                  resultError = null;
-                }),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 6, vertical: 6),
-                  child: Text(showResultList
-                      ? 'ЗАКРЫТЬ РЕЗУЛЬТАТЫ'
-                      : 'К РЕЗУЛЬТАТАМ',
-                      style: T.ps(7,
-                          c: showResultList ? Pal.amber : Pal.dim, ls: .06)),
-                ),
-              ),
-            ],
           ]),
           // Качество/формат: компактный блок под источником.
           const SizedBox(height: 6),
@@ -2220,6 +2355,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   // ---- очередь ----
 
   Widget _queue() {
+    final sorted = _sortedItems();
     return Container(
       key: _queueKey,
       decoration: const BoxDecoration(
@@ -2236,14 +2372,33 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                 _scheduleDragZones();
                 return false;
               },
-              child: ListView.builder(
-                padding: EdgeInsets.zero,
-                // Новое сверху: очередь показывается в обратном порядке.
-                itemCount: items.length,
-                itemBuilder: (context, i) => _queueRow(items[items.length - 1 - i]),
+              child: Scrollbar(
+                controller: _queueScroll,
+                thumbVisibility: true,
+                child: ListView.builder(
+                  controller: _queueScroll,
+                  // Активные сверху, очередь под ними, история внизу
+                  // (см. _sortedItems): порядок сортированный, не обратный.
+                  padding: EdgeInsets.zero,
+                  itemCount: sorted.length,
+                  itemBuilder: (context, i) => _queueRow(sorted[i]),
+                ),
               ),
             ),
           ),
+          // Резервная полоса под кнопку паузы: строки, папка, корзина и
+          // полоса прогресса никогда не оказываются под ней.
+          if (hasActiveTasks)
+            SizedBox(
+              height: 40,
+              child: Align(
+                alignment: Alignment.bottomRight,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 13, bottom: 8),
+                  child: _pauseButton(),
+                ),
+              ),
+            ),
         ]),
       ),
     );
@@ -2262,21 +2417,35 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         child: CustomPaint(
           foregroundPainter:
               const DashedBorderPainter(color: Color(0x80FFB000)),
-          child: Stack(children: [
-            Column(children: [
-              _queueHeader(compact: true),
-              Expanded(
-                child: Builder(builder: (context) {
-                  final sorted = _sortedItems();
-                  return ListView.builder(
-                    padding: const EdgeInsets.only(bottom: 40),
+          child: Column(children: [
+            _queueHeader(compact: true),
+            Expanded(
+              child: Builder(builder: (context) {
+                final sorted = _sortedItems();
+                return Scrollbar(
+                  controller: _queueScroll,
+                  thumbVisibility: true,
+                  child: ListView.builder(
+                    controller: _queueScroll,
+                    padding: EdgeInsets.zero,
                     itemCount: math.min(2, sorted.length),
                     itemBuilder: (context, i) => _queueRow(sorted[i]),
-                  );
-                }),
+                  ),
+                );
+              }),
+            ),
+            // Кнопка паузы на своей полосе снизу: строки не перекрывает.
+            if (hasActiveTasks)
+              SizedBox(
+                height: 34,
+                child: Align(
+                  alignment: Alignment.bottomRight,
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 13, bottom: 5),
+                    child: _pauseButton(),
+                  ),
+                ),
               ),
-            ]),
-            if (hasActiveTasks) _pauseButton(),
           ]),
         ),
       ),
@@ -2333,13 +2502,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       it.state == 'working' ||
       it.state == 'paused');
 
-  /// Квадратная кнопка паузы/возобновления: липнет к правому нижнему углу
-  /// диспетчера, видна только пока есть живые задания.
+  /// Квадратная кнопка паузы/возобновления. В главном диспетчере живёт на
+  /// резервной полосе справа снизу, в компактном — под списком справа:
+  /// строки, папка, корзина и полоса прогресса не перекрываются.
   Widget _pauseButton() {
-    return Positioned(
-      bottom: 8,
-      right: 13,
-      child: GestureDetector(
+    return GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: _toggleQueuePause,
         child: MouseRegion(
@@ -2349,13 +2516,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             duration: const Duration(milliseconds: 220),
             curve: Curves.easeOut,
             builder: (context, t, child) => Container(
-              width: 34,
-              height: 34,
+              width: 44,
+              height: 30,
+              alignment: Alignment.center,
               decoration: BoxDecoration(
                 color: const Color(0xF50D0902),
-                border: Border.all(
-                    color: Color.lerp(Pal.amberFaint, Pal.amber, t)!),
-                borderRadius: const BorderRadius.all(Radius.circular(2)),
                 boxShadow: [
                   BoxShadow(
                       color: Colors.black.withValues(alpha: .55),
@@ -2365,15 +2530,18 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                       blurRadius: 8 * t),
                 ],
               ),
-              child: Icon(
-                queuePaused ? Icons.play_arrow : Icons.pause,
-                size: 20,
-                color: Color.lerp(Pal.dim, Pal.amber, t),
+              child: CustomPaint(
+                foregroundPainter: DashedBorderPainter(
+                    color: Color.lerp(Pal.amberFaint, Pal.amber, t)!),
+                child: Center(
+                  child: Text(queuePaused ? 'PLAY' : 'ПАУЗА',
+                      style: T.ps(7,
+                          c: Color.lerp(Pal.dim, Pal.amber, t)!, ls: .06)),
+                ),
               ),
             ),
           ),
         ),
-      ),
     );
   }
 

@@ -2805,6 +2805,73 @@ Probe Engine::probeDrm (const Str& link, const Detector::Service service) const
     return p;
 }
 
+// SoundCloud-выдача с проверкой скачиваемости. Flat-поиск даёт кандидатов,
+// но DRM/подписочные треки (сейчас — весь мейнстрим) падают только на
+// полном разборе: пользователь выбирал строку и получал «не могу получить
+// данные». Поэтому каждый кандидат проверяем тем же полным -J, каким ядро
+// разбирает выбор строки; проверки идут параллельно, чтобы не растягивать
+// поиск. В выдачу попадают только реально разбирающиеся треки.
+static Probe searchSoundcloudList (const Str& query, size_t cap)
+{
+    Probe sc;
+    sc.link = query;
+    sc.isSearch = true;
+    sc.service = Detector::Service::soundcloud;
+
+    Str scOut;
+    StrVec scArgs { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
+                    "scsearch" + std::to_string (cap + 3) + ":" + query };
+    int scCode = -1;
+    if (! captureOut (scArgs, scOut, &scCode) || scCode != 0 || scOut.empty())
+        return sc;
+
+    const auto data = json::parse (scOut, nullptr, false);
+    const auto entries = data.is_object() ? data.find ("entries") : data.end();
+    if (entries == data.end() || ! entries->is_array())
+        return sc;
+
+    std::vector<SearchResult> candidates;
+    for (const auto& e : *entries)
+    {
+        if (! e.is_object()) continue;
+        const auto url = jtext (e, "webpage_url");
+        if (url.empty()) continue;
+        SearchResult r;
+        r.title = jtext (e, "title", query);
+        r.uploader = jtext (e, "uploader");
+        r.url = url;
+        r.duration = (int) jnum (e, "duration");
+        r.service = Detector::Service::soundcloud;
+        candidates.push_back (r);
+        if (candidates.size() >= cap + 3) break;
+    }
+
+    std::vector<int> usable (candidates.size(), 0);
+    std::vector<std::thread> checks;
+    for (size_t i = 0; i < candidates.size(); ++i)
+        checks.emplace_back ([&candidates, &usable, i]
+        {
+            Str out;
+            int code = -1;
+            usable[i] = captureOut ({ "--ignore-config", "--no-warnings", "-J",
+                                      candidates[i].url }, out, &code)
+                        && code == 0 && ! out.empty();
+        });
+    for (auto& t : checks) t.join();
+
+    for (size_t i = 0; i < candidates.size() && sc.results.size() < cap; ++i)
+        if (usable[i]) sc.results.push_back (candidates[i]);
+
+    if (! sc.results.empty())
+    {
+        sc.ok = true;
+        sc.resolved = sc.results.front().url;
+        sc.title = sc.results.front().title;
+        sc.duration = sc.results.front().duration;
+    }
+    return sc;
+}
+
 Probe Engine::probeSearch (const Str& query, const Str& site) const
 {
     Probe p;
@@ -2959,38 +3026,11 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
 
         if (yt.ok) append (yt, 8);
 
-        // SoundCloud: быстрая выдача даёт кандидатов; скачиваемость
-        // конкретного трека проверяется при выборе результата.
+        // SoundCloud: только проверенные на скачиваемость треки (DRM и
+        // недоступные отсеиваются до показа строки).
         if (wantSoundcloud)
         {
-            Probe sc;
-            sc.link = query;
-            sc.isSearch = true;
-            sc.service = Detector::Service::soundcloud;
-            Str scOut;
-            StrVec scArgs { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
-                            "scsearch5:" + query };
-            int scCode = -1;
-            if (captureOut (scArgs, scOut, &scCode) && scCode == 0 && ! scOut.empty())
-            {
-                const auto data = json::parse (scOut, nullptr, false);
-                const auto entries = data.is_object() ? data.find ("entries") : data.end();
-                if (entries != data.end() && entries->is_array())
-                    for (const auto& e : *entries)
-                    {
-                        if (! e.is_object()) continue;
-                        const auto url = jtext (e, "webpage_url");
-                        if (url.empty()) continue;
-                        SearchResult r;
-                        r.title = jtext (e, "title", query);
-                        r.uploader = jtext (e, "uploader");
-                        r.url = url;
-                        r.duration = (int) jnum (e, "duration");
-                        r.service = Detector::Service::soundcloud;
-                        sc.results.push_back (r);
-                        if (sc.results.size() >= 5) break;
-                    }
-            }
+            const auto sc = searchSoundcloudList (query, 5);
             if (! sc.results.empty()) append (sc, 5);
         }
 
@@ -3034,42 +3074,7 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
     }
     else if (site == "soundcloud")
     {
-        Probe sc;
-        sc.link = query;
-        sc.isSearch = true;
-        sc.service = Detector::Service::soundcloud;
-        Str scOut;
-        StrVec scArgs { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
-                        "scsearch5:" + query };
-        int scCode = -1;
-        if (captureOut (scArgs, scOut, &scCode) && scCode == 0 && ! scOut.empty())
-        {
-            const auto data = json::parse (scOut, nullptr, false);
-            const auto entries = data.is_object() ? data.find ("entries") : data.end();
-            if (entries != data.end() && entries->is_array())
-                for (const auto& e : *entries)
-                {
-                    if (! e.is_object()) continue;
-                    const auto url = jtext (e, "webpage_url");
-                    if (url.empty()) continue;
-                    SearchResult r;
-                    r.title = jtext (e, "title", query);
-                    r.uploader = jtext (e, "uploader");
-                    r.url = url;
-                    r.duration = (int) jnum (e, "duration");
-                    r.service = Detector::Service::soundcloud;
-                    sc.results.push_back (r);
-                    if (sc.results.size() >= 5) break;
-                }
-            if (! sc.results.empty())
-            {
-                sc.ok = true;
-                sc.resolved = sc.results.front().url;
-                sc.title = sc.results.front().title;
-                sc.duration = sc.results.front().duration;
-            }
-        }
-        p = sc;
+        p = searchSoundcloudList (query, 5);
     }
 
     if (! p.ok && p.error.empty())

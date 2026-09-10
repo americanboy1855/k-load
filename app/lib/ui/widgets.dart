@@ -139,6 +139,10 @@ class VpnIcon extends StatelessWidget {
 // Метла удалена: очистка диспетчера будет переработана отдельно.
 
 // Бегущая туда-обратно LED-полоса: неопределённое состояние поиска.
+// Окно движется в ПИКСЕЛЯХ (эквивалент translateX) по всей реальной
+// ширине ряда: при 0 оно прижато к левому краю, в крайней правой точке —
+// к правому. Никаких пустых зазоров по краям быть не может конструктивно:
+// границы свечения считаются от ширины контейнера, а не от клеток.
 class SweepLedRow extends StatefulWidget {
   const SweepLedRow(
       {super.key, required this.count, this.cellHeight = 16, this.gap = 4});
@@ -164,28 +168,36 @@ class _SweepLedRowState extends State<SweepLedRow>
 
   @override
   Widget build(BuildContext context) {
-    const win = 3.0; // ширина бегущего окна в сегментах
+    const winCells = 3.0; // ширина бегущего окна в сегментах
     return LayoutBuilder(builder: (context, box) {
-      final cell = (box.maxWidth - widget.gap * (widget.count - 1)) / widget.count;
+      final w = box.maxWidth;
+      final cell = (w - widget.gap * (widget.count - 1)) / widget.count;
+      // Пиксельная геометрия клеток: клетка i занимает [i*(cell+gap), +cell].
+      final winW = winCells * cell + (winCells - 1) * widget.gap;
       return AnimatedBuilder(
         animation: _c,
         builder: (context, _) {
-          // Линейная треугольная волна: окно доходит ровно до первого и
-          // до последнего сегмента (lead 0..count-win) на реальной ширине.
+          // Треугольная волна 0..1..0 с мягким входом/выходом у краёв:
+          // окно видно прижатым к первому и последнему сегменту, разворот
+          // без рывка. Скорость в середине хода максимальная.
           final t = _c.value;
           final tri = t < 0.5 ? t * 2 : 2 - t * 2;
-          final lead = tri * (widget.count - win);          return Row(
+          final eased = Curves.easeInOutSine.transform(tri.clamp(0.0, 1.0));
+          // Единственный источник истины — пиксельная позиция окна:
+          // 0 -> вплотную к левому краю, w-winW -> вплотную к правому.
+          final winLeft = eased * (w - winW);
+          final winRight = winLeft + winW;
+          return Row(
             children: [
               for (var i = 0; i < widget.count; i++)
                 Builder(builder: (context) {
-                  final cellLit = i >= lead && i < lead + win;
-                  // Краевые сегменты окна подсвечены частично — движение
-                  // выглядит непрерывным, а не прыгающим по клеткам.
-                  final frac = (math.min(lead + win, i + 1.0) -
-                              math.max(lead, i.toDouble()))
-                          .clamp(0.0, 1.0)
-                          .toDouble();
-                  final a = cellLit ? frac : 0.0;
+                  final left = i * (cell + widget.gap);
+                  final right = left + cell;
+                  // Пересечение клетки с окном в пикселях — доля свечения.
+                  final overlap =
+                      (math.min(winRight, right) - math.max(winLeft, left))
+                          .clamp(0.0, cell);
+                  final a = overlap / cell;
                   return Container(
                     width: cell,
                     height: widget.cellHeight.toDouble(),
