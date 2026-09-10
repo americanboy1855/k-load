@@ -78,6 +78,8 @@ struct QueueItem
     int durationHint = 0;
     /// Итоговый файл короче ожидаемого отрезка — скачивание не засчитано.
     Str sectionsWarning;
+    /// Сколько раз задание уже автоматически повторялось после сети.
+    int autoRetries = 0;
 
     std::shared_ptr<Flags> flags = std::make_shared<Flags>();
 
@@ -193,6 +195,10 @@ public:
     void remove (int id);
     void clearFinished();
     std::vector<QueueItem> snapshot() const;
+
+    /// Повтор заданий, упавших по сети (VPN мигнул): максимум два
+    /// автоповтора на задание; отменённое человеком не трогается.
+    int retryNetworkFailed();
 
     /// Сколько ссылок в тексте выглядят как ссылки — для подписи на кнопке.
     static StrVec splitLinks (const Str& text);

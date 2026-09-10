@@ -58,6 +58,10 @@ KD_EXPORT void kd_cancel (kd_engine* e, int id);
 KD_EXPORT void kd_remove (kd_engine* e, int id);
 KD_EXPORT void kd_clear_finished (kd_engine* e);
 
+// Повтор заданий, упавших по сети (VPN вернулся). Возвращает число
+// поставленных обратно в очередь.
+KD_EXPORT int kd_retry_network_failed (kd_engine* e);
+
 // Блокирующий разбор ссылки/названия (JSON Probe). Освободить kd_string_free.
 KD_EXPORT char* kd_probe_blocking (kd_engine* e, const char* text);
 

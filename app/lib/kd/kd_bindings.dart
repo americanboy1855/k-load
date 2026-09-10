@@ -88,6 +88,9 @@ class KdBindings {
     _clearFinished = lib
         .lookup<NativeFunction<_VoidEngineNative>>('kd_clear_finished')
         .asFunction();
+    _retryNetworkFailed = lib
+        .lookup<NativeFunction<_IntEngineNative>>('kd_retry_network_failed')
+        .asFunction();
     _probeBlocking = lib
         .lookup<NativeFunction<_StringEngineStringNative>>('kd_probe_blocking')
         .asFunction();
@@ -163,6 +166,7 @@ class KdBindings {
   late final _Id _cancel;
   late final _Id _remove;
   late final _VoidEngineDart _clearFinished;
+  late final _IntEngine _retryNetworkFailed;
   late final _StringEngineString _probeBlocking;
   late final _VoidEngineStringDart _probeAsync;
   late final _ProbeSourceDart _probeAsyncSource;
@@ -412,6 +416,9 @@ class KdCore {
   void cancel(int id) => _b._cancel(_engine, id);
   void remove(int id) => _b._remove(_engine, id);
   void clearFinished() => _b._clearFinished(_engine);
+
+  /// Повтор сетевых сбоев очереди после восстановления VPN.
+  int retryNetworkFailed() => _b._retryNetworkFailed(_engine);
   int vpnState() => _b._vpnState(_engine);
   Map<String, dynamic> defaultDest() =>
       jsonDecode(_b._take(_b._defaultDest(_engine))) as Map<String, dynamic>;

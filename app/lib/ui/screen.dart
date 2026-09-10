@@ -126,6 +126,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   bool durationRetried = false;
   // текстовый запрос в поиске: неопределённая шкала «ИЩЕМ...» вместо %
   bool searchingNow = false;
+  // сторожевой таймер разбора: зависший запрос → честная ошибка
+  Timer? _probeWatchdog;
+  bool clearHover = false;
   // качество видео: реальные высоты (дефолт 1080P); МАКСИМУМ убран
   String quality = '1080';
   bool qualityOpen = false;
@@ -261,16 +264,19 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   /// Безопасно: новое поколение разбора отменяет старое, состояние экрана
   /// (запрос, источник, очередь) остаётся как было.
   void _recoverAfterVpn() {
+    // Очередь: задания, упавшие по сети, встают обратно (лимит автоповторов).
+    core?.retryNetworkFailed();
+    setState(() => items = core?.snapshot() ?? items);
+    _scheduleDragZones();
     if (!mounted || rawText.isEmpty) return;
+    _probeWatchdog?.cancel();
     if (selectedResultUrl != null) {
       // Дозапрашиваем разбор выбранного результата.
+      _armProbeWatchdog();
       core?.probeAsync(selectedResultUrl!);
       return;
     }
-    if (phase == Phase.seeking ||
-        phase == Phase.idle ||
-        probe == null ||
-        !probe!.ok) {
+    if (phase == Phase.seeking || phase == Phase.idle || probe == null || !probe!.ok) {
       _startSeek();
     }
   }
@@ -416,8 +422,43 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       });
     } else {
       _animateSeek(null);
+      _armProbeWatchdog();
       core?.probeAsync(rawText);
     }
+  }
+
+  /// Разбор завис (сеть/VPN пропал) — вместо вечной шкалы честная ошибка
+  /// с кнопкой ПОВТОРИТЬ. Приезд разбора таймер гасит.
+  void _armProbeWatchdog() {
+    _probeWatchdog?.cancel();
+    _probeWatchdog = Timer(const Duration(seconds: 25), () {
+      if (!mounted) return;
+      if (selectedResultUrl != null) {
+        final url = selectedResultUrl!;
+        setState(() {
+          selectedResultUrl = null;
+          phase = Phase.found;
+          seekingFailed(url);
+        });
+        return;
+      }
+      if (phase == Phase.seeking && !isBatch) {
+        setState(() {
+          phase = Phase.found;
+          seekingFailed(rawText);
+        });
+      }
+    });
+  }
+
+  void seekingFailed(String text) {
+    searchingNow = false;
+    probe = KdProbeEvent({
+      'ok': false,
+      'isSearch': false,
+      'link': text,
+      'error': 'Не удалось получить данные — проверьте сеть и VPN',
+    });
   }
 
   // Пачка: последовательно собираем длительности, очередь событий ядра
@@ -468,6 +509,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   void _onProbe(KdProbeEvent p) {
     if (!mounted || rawText.isEmpty) return;
+    _probeWatchdog?.cancel();
 
     // Ждём разбор выбранного результата поиска: если трек защищён или
     // недоступен — честно помечаем строку и остаёмся в списке.
@@ -567,18 +609,50 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     });
   }
 
-  /// Выбор результата текстового поиска: полный разбор по ссылке —
-  /// подтянутся превью, высоты кадра и честные ошибки (DRM и т.п.).
-  void _selectResult(String url) {
+  /// Выбор результата текстового поиска: карточка открывается МГНОВЕННО
+  /// из данных строки (название, источник, длительность, плазма-обложка),
+  /// а полный разбор — превью, высоты, хронометраж — догружается в неё же.
+  /// Никакой ложной шкалы и зависаний: повторные клики игнорируются,
+  /// зависший разбор гасит сторожевой таймер.
+  void _selectResult(String url, {Map<String, dynamic>? row}) {
     if (core == null) return;
+    if (selectedResultUrl != null) return; // разбор уже идёт
+    final svc = ((row?['service'] ?? 0) as num).toInt();
     setState(() {
       selectedResultUrl = url;
       resultError = null;
       showResultList = false;
-      phase = Phase.seeking;
-      seekPct = 40;
-      _animateSeek(null);
+      searchingNow = false;
+      probe = KdProbeEvent({
+        'ok': true,
+        'isSearch': false,
+        'link': url,
+        'resolved': url,
+        'service': svc,
+        'serviceTitle': serviceLabel(svc),
+        'title': (row?['title'] ?? '') as String,
+        'uploader': (row?['uploader'] ?? '') as String,
+        'duration': (row?['duration'] ?? 0) as int,
+        'count': 1,
+      });
+      phase = Phase.found;
+      seekPct = 100;
+      mediaMode = false;
+      musicOnly = false;
+      mode = 'video';
+      chronLocked = false;
+      chronOn = false;
+      chronOpen = false;
+      openPanel = '';
+      quality = '1080';
+      qualityOpen = false;
+      videoContainer = 'mp4';
+      audioFormat = 'mp3';
+      imageFormat = 'jpg';
+      playlistLimit = 0;
+      durationRetried = false;
     });
+    _armProbeWatchdog();
     core?.probeAsync(url);
   }
 
@@ -736,6 +810,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     debounce?.cancel();
     seekAnim?.cancel();
     toastTimer?.cancel();
+    _probeWatchdog?.cancel();
     beamC.dispose();
     trackC.dispose();
     query.dispose();
@@ -968,6 +1043,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                             ),
                         ]),
                       ),
+                      if (rawText.isNotEmpty) ...[
+                        const SizedBox(width: 8),
+                        _searchClear(),
+                      ],
                     ]),
                   ),
                 );
@@ -977,6 +1056,68 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         ),
       ),
     );
+  }
+
+  /// Крестик очистки: появляется с текстом, гасит поле, выдачу и все
+  /// временные состояния поиска. Диспетчер и файлы не трогает.
+  Widget _searchClear() {
+    return GestureDetector(
+      onTap: _clearSearch,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => clearHover = true),
+        onExit: (_) => setState(() => clearHover = false),
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(end: clearHover ? 1.0 : 0.0),
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+          builder: (context, t, _) => Container(
+            width: 22,
+            height: 22,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                  color: Color.lerp(Pal.amberFaint, Pal.amber, t)!),
+              boxShadow: t > 0.01
+                  ? [BoxShadow(
+                      color: Pal.amber.withValues(alpha: .25 * t),
+                      blurRadius: 8 * t)]
+                  : null,
+            ),
+            child: Text('×',
+                style: TextStyle(
+                    fontFamily: T.plex,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    height: 1,
+                    color: Color.lerp(Pal.dim, Pal.amber, t))),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _clearSearch() {
+    setState(() {
+      query.clear();
+      phase = Phase.idle;
+      probe = null;
+      isBatch = false;
+      showResultList = false;
+      selectedResultUrl = null;
+      searchResults = const [];
+      resultError = null;
+      durationRetried = false;
+      searchingNow = false;
+      openPanel = '';
+      chronOn = false;
+      chronOpen = false;
+      clearHover = false;
+      seekAnim?.cancel();
+      debounce?.cancel();
+      _probeWatchdog?.cancel();
+    });
   }
 
   // ---- ПОИСК: LED-шкала ----
@@ -1018,7 +1159,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     return GestureDetector(
       onTap: () {
         setState(() => showResultList = false); // карточка возвращается сама
-        _selectResult(url);
+        _selectResult(url, row: r);
       },
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
@@ -1375,6 +1516,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   /// Раскрывающийся ярлык с шевроном.
   Widget _dropChip({required String label, required bool open, required VoidCallback onTap}) {
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
@@ -2123,6 +2265,7 @@ class _ModeChipState extends State<_ModeChip> {
     return Padding(
       padding: const EdgeInsets.only(right: 6),
       child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: widget.onTap,
         child: MouseRegion(
           cursor: widget.locked

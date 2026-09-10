@@ -388,6 +388,36 @@ void Engine::clearFinished()
     fireChanged();
 }
 
+int Engine::retryNetworkFailed()
+{
+    int n = 0;
+    {
+        const std::lock_guard<std::mutex> sl (mutex);
+        for (auto& i : items)
+        {
+            if (i->state != QueueItem::State::failed) continue;
+            if (i->autoRetries >= 2) continue;      // предел автоповторов
+            if (i->cancelled()) continue;           // отменённое не трогаем
+            // Только сетевые причины: остальным повтор не поможет.
+            const auto low = kd::lower (i->stage);
+            if (! kd::containsAny (low, { "сеть", "отказал",
+                                          "timed out", "connection", "unreachable" }))
+                continue;
+            i->autoRetries += 1;
+            i->state = QueueItem::State::queued;
+            i->progress = 0;
+            i->stage = "В очереди — повтор после VPN";
+            ++n;
+        }
+    }
+    if (n > 0)
+    {
+        wake.signal();
+        fireChanged();
+    }
+    return n;
+}
+
 std::vector<QueueItem> Engine::snapshot() const
 {
     const std::lock_guard<std::mutex> sl (mutex);
@@ -710,8 +740,8 @@ void Engine::consume (const Str& line, const QueueItemPtr& item)
         item->progress = 0;
         item->state = QueueItem::State::working;
         item->stage = item->itemTotal > 1
-            ? "Качаю " + std::to_string (item->itemIndex) + " из " + std::to_string (item->itemTotal)
-            : "Качаю…";
+            ? "Загружаем " + std::to_string (item->itemIndex) + " из " + std::to_string (item->itemTotal)
+            : "Загружаем…";
         fireChanged();
     }
     else if (parts.size() >= 2 && parts[0] == "@F")
@@ -773,10 +803,9 @@ void Engine::startPlaylist (const QueueItemPtr& item)
     item->itemTotal = (int) urls.size();
     const auto subdir = safeName (listTitle);
 
-    // Попытки входа: без cookies, затем браузеры — как у одиночных файлов.
+    // Только анонимные попытки: автоматические cookie браузера вызывают
+    // диалог пароля ключницы — запрещено спецификацией.
     StrVec attempts { "" };
-    for (const auto& b : item->cookieChain)
-        if (! kd::containsVec (attempts, b)) attempts.push_back (b);
 
     int done = 0, failed = 0;
     Str lastError;
@@ -794,7 +823,7 @@ void Engine::startPlaylist (const QueueItemPtr& item)
             item->itemIndex = (int) i + 1;
             item->itemTotal = (int) urls.size();
             item->progress = (float) i / (float) urls.size();
-            setStage (item, "Качаю " + std::to_string (i + 1)
+            setStage (item, "Загружаем " + std::to_string (i + 1)
                           + " из " + std::to_string (urls.size()));
 
             StrVec args = baseArgs (item->dest, attempts[attempt]);
@@ -866,12 +895,10 @@ void Engine::startNative (const QueueItemPtr& item)
         return;
     }
 
-    // Порядок попыток: сначала без входа (открытые материалы качаются и так),
-    // затем невидимо через браузеры — браузер по умолчанию, потом остальные.
-    StrVec attempts { "" };
-    for (const auto& b : item->cookieChain)
-        if (! kd::containsVec (attempts, b))
-            attempts.push_back (b);
+    // Одна анонимная попытка: автоматические cookie браузера вызывали
+    // диалог пароля ключницы — запрещено спецификацией. Контент, который
+    // требует входа, честно отклоняется с объяснением.
+    const StrVec attempts { "" };
 
     // Одноразовый повтор без вшивания обложки после её сбоя.
     bool dropThumb = false;
@@ -1172,10 +1199,13 @@ Str Engine::humanError (const Str& raw)
     const auto first = kd::upToFirst (raw, "\n");
     const auto low = kd::lower (first);
 
+    if (kd::contains (low, "sign in to confirm")
+        || kd::contains (low, "not a bot"))
+        return "YouTube просит подтвердить доступ (проверка «не робот») — включите VPN и повторите";
     if (kd::containsAny (low, { "login", "cookies", "private", "rate-limit", "sign in" }))
     {
         // Источники входа в интерфейсе не называем: качаются только
-        // открытые материалы.
+        // открытые материалы. Пароль ключницы не запрашиваем.
         return "Не получилось: запись закрыта. Качаются только открытые материалы";
     }
     if (kd::contains (low, "403") || kd::contains (low, "forbidden"))
@@ -1358,10 +1388,10 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
     item->itemIndex = index + 1;
     item->title = query;
     item->progress = 0;
-    // Одиночный трек качается без счётчиков: «Качаю…», а не «1 из 1».
+    // Одиночный трек качается без счётчиков: «Загружаем…», а не «1 из 1».
     setStage (item, item->itemTotal > 1
-        ? "Качаю " + std::to_string (index + 1) + " из " + std::to_string (item->itemTotal)
-        : Str ("Качаю…"));
+        ? "Загружаем " + std::to_string (index + 1) + " из " + std::to_string (item->itemTotal)
+        : Str ("Загружаем…"));
 
     // Общая часть: звук, теги, имя файла, хрон.
     auto makeArgs = [&]() -> StrVec
@@ -1700,11 +1730,15 @@ StrVec Engine::resolveSpotify (const Str& link, Str& album,
     if (durationSec != nullptr) *durationSec = 0;
 
     StrVec tracks;
-    // Список треков бывает только у альбома/подборки: у ссылки на трек
-    // entity.trackList может отражать весь альбом — сверяемся с типом.
+    // Список треков — только когда тип сущности ЯВНО альбом/подборка.
+    // У отсутствующего/нестандартного type трековая ссылка иначе
+    // разворачивалась в весь альбом (счётчики «1 из 5»).
     const auto type = kd::lower (jtext (entity, "type"));
+    const auto uri = kd::lower (jtext (entity, "uri"));
+    const bool looksLikeTrack = type == "track"
+        || (type.empty() && kd::contains (uri, "track"));
     const auto list = entity.find ("trackList");
-    if (type != "track" && list != entity.end() && list->is_array())
+    if (! looksLikeTrack && list != entity.end() && list->is_array())
     {
         for (const auto& t : *list)
         {
@@ -2182,7 +2216,12 @@ Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
             if (kd::contains (kd::lower (out), "drm"))
                 return probeDrm (link, service);
             p.ok = false;
-            if (Detector::cookieSensitive (service))
+            // YouTube-проверка «не робот»: не блокируем интерфейс молча —
+            // объясняем и предлагаем повтор.
+            if (kd::contains (kd::lower (out), "sign in to confirm")
+                || kd::contains (kd::lower (out), "confirm you're not a bot"))
+                p.error = "YouTube просит подтвердить доступ (проверка «не робот») — включите VPN и повторите";
+            else if (Detector::cookieSensitive (service))
                 p.error = "Качаются только открытые материалы: запись скрыта или требует входа";
             else
                 p.error = "По ссылке ничего нет: запись удалена, скрыта или требует входа";

@@ -266,6 +266,7 @@ int kd_enqueue_photo (kd_engine* e, const char* link, const char* options_json)
 void kd_cancel (kd_engine* e, int id)            { if (e && e->engine) e->engine->cancel (id); }
 void kd_remove (kd_engine* e, int id)            { if (e && e->engine) e->engine->remove (id); }
 void kd_clear_finished (kd_engine* e)            { if (e && e->engine) e->engine->clearFinished(); }
+int kd_retry_network_failed (kd_engine* e)       { return e && e->engine ? e->engine->retryNetworkFailed() : 0; }
 
 char* kd_probe_blocking (kd_engine* e, const char* text)
 {

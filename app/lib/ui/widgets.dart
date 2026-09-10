@@ -164,15 +164,17 @@ class _SweepLedRowState extends State<SweepLedRow>
 
   @override
   Widget build(BuildContext context) {
-    const win = 5.0; // ширина бегущего окна в сегментах
+    const win = 3.0; // ширина бегущего окна в сегментах
     return LayoutBuilder(builder: (context, box) {
       final cell = (box.maxWidth - widget.gap * (widget.count - 1)) / widget.count;
       return AnimatedBuilder(
         animation: _c,
         builder: (context, _) {
-          // Косинус: плавный разгон у краёв, без щелчков при развороте.
-          final k = (1 - math.cos(2 * math.pi * _c.value)) / 2;
-          final lead = k * (widget.count - win);          return Row(
+          // Линейная треугольная волна: окно доходит ровно до первого и
+          // до последнего сегмента (lead 0..count-win) на реальной ширине.
+          final t = _c.value;
+          final tri = t < 0.5 ? t * 2 : 2 - t * 2;
+          final lead = tri * (widget.count - win);          return Row(
             children: [
               for (var i = 0; i < widget.count; i++)
                 Builder(builder: (context) {
