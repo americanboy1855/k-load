@@ -27,6 +27,31 @@ else
   echo "yt-dlp: уже на месте"
 fi
 
+# ---- deno: JS-рантайм для yt-dlp (челленджи YouTube) ----
+# MIT-лицензия, один статический бинарник. Не обязателен: без него
+# yt-dlp работает слабее и чаще упирается в проверки YouTube.
+DENO_ARCH=$(uname -m)
+case "$DENO_ARCH" in
+  arm64) DENO_TARGET="aarch64-apple-darwin" ;;
+  *)     DENO_TARGET="x86_64-apple-darwin" ;;
+esac
+if [ ! -x "$HERE/deno" ]; then
+  echo "deno: качаю…"
+  TMP=$(mktemp -d)
+  if curl -L --fail -A "$UA" -o "$TMP/deno.zip" \
+      "https://github.com/denoland/deno/releases/latest/download/deno-$DENO_TARGET.zip"; then
+    unzip -o -q "$TMP/deno.zip" -d "$TMP"
+    mv "$TMP/deno" "$HERE/deno"
+    chmod 755 "$HERE/deno"
+    echo "deno: готово ($HERE/deno)"
+  else
+    echo "deno: не скачался (не критично, продолжаю без него)"
+  fi
+  rm -rf "$TMP"
+else
+  echo "deno: уже на месте"
+fi
+
 # ---- ffmpeg и ffprobe: статические сборки с evermeet.cx ----
 # Со статикой папка libs/ не нужна вовсе: всё зашито внутрь исполняемого
 # файла. Если предпочитаете сборку с общими библиотеками (как раньше,

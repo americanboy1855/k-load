@@ -233,6 +233,10 @@ class KdProbeEvent extends KdEvent {
   ];
   bool get drm => json['drm'] == true;
   bool get shortVideo => json['shortVideo'] == true;
+  List<Map<String, dynamic>> get entries => [
+    for (final e in (json['entries'] ?? []) as List)
+      Map<String, dynamic>.from(e as Map),
+  ];
   int get service => (json['service'] ?? 0) as int;
 }
 
@@ -268,6 +272,9 @@ class KdItem {
   double get progress => (json['progress'] as num?)?.toDouble() ?? 0;
   bool get isAudio => json['isAudio'] == true;
   bool get isPhoto => json['isPhoto'] == true;
+  String get audioFormat => (json['audioFormat'] ?? 'mp3') as String;
+  String get container => (json['container'] ?? 'mp4') as String;
+  int get maxHeight => (json['maxHeight'] ?? 0) as int;
   int get itemIndex => (json['itemIndex'] ?? 0) as int;
   int get itemTotal => (json['itemTotal'] ?? 1) as int;
   int get batchIndex => (json['batchIndex'] ?? 0) as int;

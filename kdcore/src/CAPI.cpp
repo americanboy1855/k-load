@@ -225,6 +225,14 @@ static json probeToJson (const Probe& p, const Str& text)
         { "isSearch", p.isSearch },
         { "drm", p.drm },
         { "shortVideo", p.shortVideo },
+        { "entries", [&]
+          {
+              json arr = json::array();
+              for (size_t i = 0; i < p.entryUrls.size() && i < p.entryTitles.size(); ++i)
+                  arr.push_back ({ { "url", p.entryUrls[i] },
+                                   { "title", p.entryTitles[i] } });
+              return arr;
+          }() },
         { "results", [&]
           {
               json arr = json::array();

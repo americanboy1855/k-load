@@ -33,7 +33,7 @@ public:
 
     // Запуск с объединёнными stdout и stderr — ядро разбирает оба потока
     // как один (ошибки yt-dlp приходят в stderr).
-    bool start (const StrVec& args)
+    bool start (const StrVec& args, const Str& pathEnv = {})
     {
         if (args.empty()) return false;
 

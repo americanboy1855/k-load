@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cctype>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -589,6 +590,16 @@ StrVec Engine::baseArgs (const fs::path& dest, const Str& cookie) const
     return args;
 }
 
+// PATH для дочерних процессов: наши инструменты плюс домашние и
+// системные пути — yt-dlp находит deno/node для JS-челленджей YouTube.
+static Str childPath (const fs::path& tools)
+{
+    Str path = kd::pathStr (tools) + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+    if (const char* p = ::getenv ("PATH"))
+        path += Str (":") + p;
+    return path;
+}
+
 // Тихий запуск yt-dlp: весь stdout одним куском (для -J разбора).
 static bool captureOut (const StrVec& args, Str& out, int* code = nullptr)
 {
@@ -601,7 +612,7 @@ static bool captureOut (const StrVec& args, Str& out, int* code = nullptr)
     all.insert (all.end(), args.begin(), args.end());
 
     kd::ChildProcess proc;
-    if (! proc.start (all)) return false;
+    if (! proc.start (all, childPath (tools))) return false;
 
     char chunk[16384];
     std::ostringstream mb;
@@ -635,7 +646,7 @@ bool Engine::runYtDlp (const QueueItemPtr& item, const StrVec& args, int* exitCo
     current = std::make_unique<kd::ChildProcess>();
     errTail = {};
     buffer = {};
-    if (! current->start (all))
+    if (! current->start (all, childPath (tools)))
     {
         engineLog ("ошибка: процесс не запустился");
         current = nullptr;
@@ -645,13 +656,26 @@ bool Engine::runYtDlp (const QueueItemPtr& item, const StrVec& args, int* exitCo
 
     char chunk[8192];
     bool cancelled = false;
+    auto lastOutput = std::chrono::steady_clock::now();
     for (;;)
     {
         if (item->cancelled() || quit.load (std::memory_order_relaxed)) { cancelled = true; break; }
 
         const int n = current->read (chunk, (int) sizeof (chunk), 40);
+        // Сеть пропала, а процесс висит: 90 с без единого байта вывода —
+        // глушим и честно помечаем сетевой причиной (повтор после VPN).
+        const auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds> (now - lastOutput).count() > 90)
+        {
+            engineLog ("нет вывода 90 с — глушу зависший процесс");
+            errTail = "ERROR: network stalled - no output for 90 seconds";
+            current->kill();
+            cancelled = false;
+            break;
+        }
         if (n > 0)
         {
+            lastOutput = std::chrono::steady_clock::now();
             buffer += Str (chunk, (size_t) n);
             int nl;
             while ((nl = kd::indexOfChar (buffer, '\n')) >= 0)
@@ -740,8 +764,8 @@ void Engine::consume (const Str& line, const QueueItemPtr& item)
         item->progress = 0;
         item->state = QueueItem::State::working;
         item->stage = item->itemTotal > 1
-            ? "Загружаем " + std::to_string (item->itemIndex) + " из " + std::to_string (item->itemTotal)
-            : "Загружаем…";
+            ? "Качаем " + std::to_string (item->itemIndex) + " из " + std::to_string (item->itemTotal)
+            : "Качаем…";
         fireChanged();
     }
     else if (parts.size() >= 2 && parts[0] == "@F")
@@ -823,7 +847,7 @@ void Engine::startPlaylist (const QueueItemPtr& item)
             item->itemIndex = (int) i + 1;
             item->itemTotal = (int) urls.size();
             item->progress = (float) i / (float) urls.size();
-            setStage (item, "Загружаем " + std::to_string (i + 1)
+            setStage (item, "Качаем " + std::to_string (i + 1)
                           + " из " + std::to_string (urls.size()));
 
             StrVec args = baseArgs (item->dest, attempts[attempt]);
@@ -914,7 +938,8 @@ void Engine::startNative (const QueueItemPtr& item)
         {
             // Аудио: отдельная дорожка; если у записи её нет (например,
             // Pinterest) — звук извлекается из лучшего полного потока.
-            for (const auto& a : kd::splitWhitespace ("-f bestaudio/bv*+ba/b")) args.push_back (a);
+            // -x ОБЯЗАТЕЛЕН: без него файл остаётся исходным webm/m4a.
+            for (const auto& a : kd::splitWhitespace ("-f bestaudio/bv*+ba/b -x")) args.push_back (a);
             args.push_back ("--audio-format");
             args.push_back (audioFormatName (item->audioFormat));
             for (const auto& a : kd::splitWhitespace ("--audio-quality 0 --embed-metadata")) args.push_back (a);
@@ -1120,6 +1145,26 @@ void Engine::startNative (const QueueItemPtr& item)
                     return;
                 }
             }
+            // Аудио: «Готово» только когда файл физически существует и
+            // содержит звуковую дорожку (проверка длительности).
+            if (item->isAudio && ! item->files.empty())
+            {
+                bool audioOk = true;
+                for (const auto& f : item->files)
+                    if (probeFileDuration (fs::u8path (f)) <= 0.0)
+                    {
+                        audioOk = false;
+                        std::error_code ec;
+                        fs::remove (fs::u8path (f), ec);
+                    }
+                if (! audioOk)
+                {
+                    item->files.clear();
+                    finish (item, QueueItem::State::failed,
+                        "Аудио не удалось обработать — попробуйте ещё раз");
+                    return;
+                }
+            }
             const bool already = item->files.empty() && item->skipped > 0;
             Str stage = already ? Str ("Уже скачано") : Str ("Готово");
             if (item->files.size() > 1)
@@ -1220,6 +1265,8 @@ Str Engine::humanError (const Str& raw)
         return "Адрес не опознан — нужна ссылка на саму запись";
     if (kd::contains (low, "requested format is not available"))
         return "В этом качестве записи нет — выберите другое";
+    if (kd::contains (low, "network stalled"))
+        return "Сеть недоступна — включите VPN и попробуйте снова";
     if (kd::containsAny (low, { "failed to resolve", "connection refused",
                                 "connection reset", "timed out", "temporary failure",
                                 "network is unreachable", "ssl", "transport error" }))
@@ -1390,8 +1437,8 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
     item->progress = 0;
     // Одиночный трек качается без счётчиков: «Загружаем…», а не «1 из 1».
     setStage (item, item->itemTotal > 1
-        ? "Загружаем " + std::to_string (index + 1) + " из " + std::to_string (item->itemTotal)
-        : Str ("Загружаем…"));
+        ? "Качаем " + std::to_string (index + 1) + " из " + std::to_string (item->itemTotal)
+        : Str ("Качаем…"));
 
     // Общая часть: звук, теги, имя файла, хрон.
     auto makeArgs = [&]() -> StrVec
@@ -2277,6 +2324,23 @@ Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
                 for (const auto& e : *entries)
                     if (e.is_object())
                         p.duration += (int) jnum (e, "duration");
+            // Плоский список роликов: плейлист раскладывается интерфейсом
+            // на отдельные задачи с собственным статусом и повтором.
+            if (entries != data.end() && entries->is_array())
+                for (const auto& e : *entries)
+                {
+                    if (! e.is_object()) continue;
+                    auto u = jtext (e, "webpage_url");
+                    if (u.empty()) u = jtext (e, "url");
+                    if (u.empty())
+                    {
+                        const auto id = jtext (e, "id");
+                        if (! id.empty()) u = "https://www.youtube.com/watch?v=" + id;
+                    }
+                    if (u.empty()) continue;
+                    p.entryUrls.push_back (u);
+                    p.entryTitles.push_back (jtext (e, "title"));
+                }
         }
         else
         {

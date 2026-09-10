@@ -180,6 +180,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   bool get vpnVisible => booted && vpnState == 2;
   bool get cardVisible => phase == Phase.found;
   bool get resultsOpen => showResultList && searchResults.isNotEmpty;
+  /// Текстовый поиск закончился пусто/ошибкой — показываем панель с
+  /// причиной и ПОВТОРИТЬ (повторяет именно поиск).
+  bool get searchFailed =>
+      phase == Phase.idle &&
+      !resultsOpen &&
+      probe == null &&
+      rawText.isNotEmpty &&
+      resultError != null;
 
   /// Похож ли текст на ссылку (зеркало Detector::looksLikeLink).
   bool _looksLikeLink(String s) {
@@ -403,6 +411,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       batchProcessed = 0;
       batchDuration = 0;
       durationRetried = false;
+      resultError = null;
+      probe = null;
+      // Прямой ссылке — никогда не показывать окно текстовых результатов:
+      // старая выдача гасится вместе с началом нового разбора.
+      showResultList = false;
       // Текстовый запрос ищем с неопределённой шкалой: честное «ИЩЕМ...»
       // вместо процентов, которые добегают раньше выдачи.
       searchingNow = !_looksLikeLink(rawText);
@@ -414,6 +427,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         isBatch = false;
       }
     });
+    _probeWatchdog?.cancel();
     if (isBatch) {
       // пачка разбирается локально: короткая анимация и карточка
       _animateSeek(() {
@@ -422,7 +436,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       });
     } else {
       _animateSeek(null);
-      _armProbeWatchdog();
+      // Сторожевой таймер — только для разбора ССЫЛКИ: у текстового
+      // поиска свои честные состояния (ИЩЕМ... / ошибка поиска).
+      if (!searchingNow) _armProbeWatchdog();
       core?.probeAsync(rawText);
     }
   }
@@ -656,6 +672,20 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     core?.probeAsync(url);
   }
 
+  /// Повтор упавшей задачи: та же ссылка, режим и формат.
+  void _retryItem(KdItem it) {
+    final c = core;
+    if (c == null) return;
+    c.remove(it.id);
+    c.enqueueBatch([it.link],
+        audio: it.isAudio,
+        quality: it.maxHeight > 0 ? '${it.maxHeight}' : 'best',
+        audioFormat: it.audioFormat,
+        container: it.container);
+    setState(() => items = c.snapshot());
+    _scheduleDragZones();
+  }
+
   // ---- скачать ----
 
   String? get sectionsArg {
@@ -708,15 +738,42 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         if (busy.contains(link)) return;
         c.enqueuePhoto(link, imageFormat: imageFormat);
       } else if (playlist) {
-        final link = p.link;
-        if (busy.contains(link)) return;
-        c.enqueueBatch([link],
-            audio: audio,
-            wholePlaylist: 1,
-            playlistLimit: limit,
-            quality: quality,
-            container: videoContainer,
-            durationHint: p.duration);
+        // Плейлист раскладывается на ОТДЕЛЬНЫЕ задачи: у каждого ролика
+        // свой статус, прогресс и повтор; ошибка одного не валит остальные.
+        final entries = p.entries;
+        final title = p.title.isEmpty ? 'Плейлист' : p.title;
+        final folder = '$destFolder/${safeFileName(title)}';
+        if (entries.isNotEmpty) {
+          var i = 0;
+          var queued = 0;
+          for (final e in entries) {
+            i += 1;
+            if (limit > 0 && i > limit) break;
+            final url = (e['url'] ?? '') as String;
+            if (url.isEmpty || busy.contains(url)) continue;
+            final t = (e['title'] ?? '') as String;
+            c.enqueueBatch([url],
+                dest: folder,
+                audio: audio,
+                nameOverride: '${i.toString().padLeft(2, '0')} - $t',
+                quality: quality,
+                container: videoContainer,
+                audioFormat: audioFormat);
+            queued += 1;
+          }
+          if (queued == 0 && busy.isNotEmpty) return; // всё уже в очереди
+        } else {
+          // Разбор без списка роликов — прежний путь целиком.
+          final link = p.link;
+          if (busy.contains(link)) return;
+          c.enqueueBatch([link],
+              audio: audio,
+              wholePlaylist: 1,
+              playlistLimit: limit,
+              quality: quality,
+              container: videoContainer,
+              durationHint: p.duration);
+        }
       } else if (p.isSearch) {
         // найденный по названию трек: файл называется запросом
         final link = targetLink('');
@@ -959,6 +1016,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                 const SizedBox(height: 10),
                 _compactQueue(),
               ],
+            ] else if (searchFailed) ...[
+              const SizedBox(height: 14),
+              _searchErrorPanel(),
             ] else ...[
               if (cardVisible) ...[
                 const SizedBox(height: 18),
@@ -1199,6 +1259,46 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             const SizedBox(width: 8),
             if (dur > 0) Text(fmtDur(dur), style: T.mono(10, c: Pal.dim)),
           ]),
+        ),
+      ),
+    );
+  }
+
+  /// Ошибка текстового поиска: причина и повтор именно поиска.
+  Widget _searchErrorPanel() {
+    return GlitchIn(
+      key: const ValueKey('panel-search-error'),
+      child: GestureDetector(
+        onTap: () {},
+        child: Container(
+          decoration: const BoxDecoration(color: Color(0xF5070400)),
+          child: DashedBox(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min, children: [
+              Text('ПОИСК НЕ УДАЛСЯ', style: T.ps(11, c: Pal.soft)),
+              const SizedBox(height: 6),
+              Text(resultError ?? '',
+                  style: T.mono(11, c: Pal.dim)),
+              const SizedBox(height: 10),
+              GestureDetector(
+                onTap: _startSeek,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Pal.amberFaint),
+                      borderRadius:
+                          const BorderRadius.all(Radius.circular(2)),
+                    ),
+                    child: Text('ПОВТОРИТЬ', style: T.ps(8, c: Pal.amber)),
+                  ),
+                ),
+              ),
+            ]),
+          ),
         ),
       ),
     );
@@ -1641,6 +1741,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     ]);
   }
 
+  /// Имя папки/файла без символ_, на которых спотыкается файловая система.
+  String safeFileName(String s) {
+    final out = s.replaceAll(RegExp(r'[/\\:%"' + "'" + r'\n\r\t]'), ' ').trim();
+    return out.isEmpty ? 'Плейлист' : out.substring(0, out.length.clamp(0, 80));
+  }
+
   /// Аккуратный канонический вид ссылки: без схемы, www и tracking-хвоста.
   String _canonicalShort(String url) {
     var u = url.trim();
@@ -1979,12 +2085,21 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                 size: 13, color: hover ? Pal.soft : Pal.amber),
             onTap: () => _trashRow(it),
           ),
-        ] else if (failed)
+        ] else if (failed) ...[
+          // ПОВТОРИТЬ: та же ссылка, тот же режим и формат — при ошибке
+          // без переоткрытия ссылки.
+          _ActButton(
+            icon: (hover) => Icon(Icons.refresh,
+                size: 15, color: hover ? Pal.soft : Pal.amber),
+            onTap: () => _retryItem(it),
+          ),
+          const SizedBox(width: 6),
           _ActButton(
             icon: (hover) => TrashIcon(
                 size: 13, color: hover ? Pal.soft : Pal.amber),
             onTap: () => _trashRow(it),
           ),
+        ],
         ]),
       ),
     );

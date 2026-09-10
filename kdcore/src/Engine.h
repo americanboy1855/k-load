@@ -118,6 +118,9 @@ struct Probe
     bool drm = false;                      // запись защищена DRM — скачать нельзя
     bool shortVideo = false;               // TikTok/Instagram: один MP4/MP3 без списков качества
     std::vector<SearchResult> results;     // варианты текстового поиска (до 20)
+    /// Плоский список роликов плейлиста — для раскладки на отдельные задачи.
+    StrVec entryUrls;
+    StrVec entryTitles;
 };
 
 /// Один-единственный разбор ссылки: пока человек допечатывает, старые
