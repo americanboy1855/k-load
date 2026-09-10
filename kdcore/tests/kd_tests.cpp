@@ -46,7 +46,6 @@ static void testDetector()
     check (Detector::serviceFor ("https://www.pinterest.com/pin/1004795366878354024/") == S::pinterest, "pinterest pin");
     check (Detector::serviceFor ("https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC") == S::spotify, "spotify");
     check (Detector::serviceFor ("https://music.apple.com/ru/album/1440833098") == S::appleMusic, "apple music");
-    check (Detector::serviceFor ("music.yandex.ru/album/123/track/456") == S::yandexMusic, "yandex music");
     check (Detector::serviceFor ("https://soundcloud.com/forss/flickermood") == S::soundcloud, "soundcloud");
     check (Detector::serviceFor ("https://vk.com/audio1_-123_456") == S::vkMusic, "vk audio");
     check (Detector::serviceFor ("https://vkvideo.ru/video-123_456") == S::vk, "vk video");

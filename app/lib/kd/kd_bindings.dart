@@ -259,9 +259,8 @@ String serviceLabel(int code) {
     case 5: return 'ВКОНТАКТЕ';
     case 6: return 'SPOTIFY';
     case 7: return 'APPLE MUSIC';
-    case 8: return 'ЯНДЕКС МУЗЫКА';
-    case 9: return 'ВК МУЗЫКА';
-    case 10: return 'SOUNDCLOUD';
+    case 8: return 'ВК МУЗЫКА';
+    case 9: return 'SOUNDCLOUD';
     default: return 'САЙТ';
   }
 }

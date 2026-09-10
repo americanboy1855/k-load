@@ -38,7 +38,6 @@ ServiceInfo serviceOf(String link) {
   if (RegExp(r'vk\.com|vkvideo\.ru').hasMatch(l)) return const ServiceInfo('VK', 'ВКОНТАКТЕ');
   if (RegExp(r'open\.spotify\.com').hasMatch(l)) return const ServiceInfo('SP', 'SPOTIFY', music: true);
   if (RegExp(r'music\.apple\.com').hasMatch(l)) return const ServiceInfo('AM', 'APPLE MUSIC', music: true);
-  if (RegExp(r'music\.yandex\.ru').hasMatch(l)) return const ServiceInfo('YM', 'ЯНДЕКС МУЗЫКА', music: true);
   if (RegExp(r'soundcloud\.com').hasMatch(l)) return const ServiceInfo('SC', 'SOUNDCLOUD', music: true);
   return const ServiceInfo('WEB', 'САЙТ');
 }
@@ -67,57 +66,101 @@ String normTC(String v) {
 
 enum Phase { idle, seeking, found }
 
-/// Единая карта понятных сообщений: сырья ошибка ядра → заголовок для
-/// человека и действие-кнопка. Порядок проверок — от частного к общему.
+/// Единый каталог ошибок приложения. Код — имя группы, заголовок —
+/// короткий текст для строки и карточки, подсказка — что делать,
+/// действие — кнопка на карточке. Группы: сеть и VPN, доступ к
+/// источнику, формат и качество, файловая система, внутренние сбои.
+/// Распознаётся по сырому тексту стадии из ядра или ошибке разбора;
+/// порядок проверок — от частного к общему.
 class UserMessage {
-  const UserMessage(this.title, this.action);
-  final String title; // что показываем
-  final String action; // retry | openLink | close | selectVideo | selectMusic | changeChron | changeFormat
+  const UserMessage(this.code, this.title, this.hint, this.action);
+  final String code; // networkVpn | sourceGone | sourceDrm | unrecognized
+                     // | sourceAccess | chronRange | formatUnavailable
+                     // | audioMissing | filesystem | cancelled
+                     // | toolsMissing | prepareFailed | internal
+  final String title; // короткий заголовок капсом
+  final String hint;  // подсказка, что делать
+  final String action; // retry | openLink | close | selectVideo
+                       // | selectMusic | changeChron | changeFormat
 }
 
 UserMessage mapUserMessage(String raw) {
   final r = raw.toLowerCase();
   bool has(List<String> keys) => keys.any(r.contains);
+
+  // --- сеть и VPN ---
+  if (has([
+    'сеть', 'vpn', 'timed out', 'connection', 'stalled', 'unreachable',
+    'отказал', 'ssl', 'не робот', 'sign in to confirm', 'not a bot',
+  ])) {
+    return const UserMessage('networkVpn', 'НЕТ СЕТИ ИЛИ VPN',
+        'Проверьте интернет и включите VPN.', 'retry');
+  }
+
+  // --- доступ к источнику ---
+  if (has(['drm', 'защищён'])) {
+    return const UserMessage('sourceDrm', 'ЗАПИСЬ ЗАЩИЩЕНА DRM',
+        'Скачивание защищённых записей невозможно.', 'openLink');
+  }
+  if (has([
+    'удалена', 'скрыта', 'требует входа', 'запись закрыта', 'закрыта',
+    'открытые материалы', 'недоступна для', 'unavailable', '404',
+    'not found', 'video unavailable', 'не существует',
+    'нет доступных роликов', 'по ссылке ничего нет',
+  ])) {
+    return const UserMessage('sourceGone', 'КОНТЕНТ НЕДОСТУПЕН',
+        'Запись удалена или закрыта авторами.', 'openLink');
+  }
+  if (has(['не является ссылкой', 'адрес не опознан', 'не распознан',
+           'unsupported url', 'no suitable', 'not a valid url'])) {
+    return const UserMessage('unrecognized', 'ССЫЛКА НЕ РАСПОЗНАНА',
+        'Вставьте прямую ссылку на видео или трек.', 'retry');
+  }
+  if (has(['pinterest', 'не поддерживается', 'не поддерживает'])) {
+    return const UserMessage('sourceAccess', 'ИСТОЧНИК НЕ ПОДДЕРЖИВАЕТ ПОИСК',
+        'Вставьте прямую ссылку на запись.', 'openLink');
+  }
+
+  // --- формат, качество и диапазон ---
   if (has(['отрезок', 'диапазон'])) {
-    return const UserMessage('УКАЖИТЕ ДОСТУПНЫЙ ДИАПАЗОН ВРЕМЕНИ', 'changeChron');
+    return const UserMessage('chronRange', 'НЕВЕРНЫЙ ДИАПАЗОН',
+        'Проверьте поля ОТ и ДО.', 'changeChron');
   }
-  if (has(['thumbnail embedding', 'обработать', 'конверт'])) {
-    return const UserMessage('НЕ УДАЛОСЬ ПОДГОТОВИТЬ ФАЙЛ', 'retry');
+  if (has(['requested format', 'формате', 'формата нет', 'качестве нет'])) {
+    return const UserMessage('formatUnavailable', 'ФОРМАТ НЕДОСТУПЕН',
+        'Выберите другое качество или формат.', 'changeFormat');
   }
-  if (has(['requested format', 'формате', 'формат недоступен'])) {
-    return const UserMessage('ВЫБРАННЫЙ ФОРМАТ НЕДОСТУПЕН', 'changeFormat');
+
+  // --- аудио и видео ---
+  if (has(['аудио', 'фотограф', 'фото', 'нет видео'])) {
+    return const UserMessage('audioMissing', 'АУДИОДОРОЖКИ НЕТ',
+        'Попробуйте скачать видео или другую ссылку.', 'selectVideo');
   }
-  if (has(['аудио', 'фотография', 'фото'])) {
-    return const UserMessage('АУДИОДОРОЖКА НЕДОСТУПНА', 'selectVideo');
+
+  // --- файловая система ---
+  if (has(['нет места', 'диску', 'permission', 'отказано в доступе',
+           'read-only', 'права'])) {
+    return const UserMessage('filesystem', 'НЕ УДАЛОСЬ СОХРАНИТЬ ФАЙЛ',
+        'Освободите место или выберите другую папку.', 'retry');
   }
-  if (has(['яндекс'])) {
-    return const UserMessage('ЯНДЕКС МУЗЫКА НЕ ПОДДЕРЖИВАЕТСЯ', 'close');
-  }
-  if (has(['не поддерживается', 'pinterest закрыл'])) {
-    return const UserMessage('ЭТОТ ИСТОЧНИК НЕ ПОДДЕРЖИВАЕТСЯ', 'close');
-  }
-  if (has(['удалена', 'скрыта', 'требует входа', 'закрыта', 'открытые материалы',
-           'недоступна для', 'drm', 'видео unavailable', 'video unavailable',
-           'не существует'])) {
-    return const UserMessage('КОНТЕНТ НЕДОСТУПЕН ДЛЯ ЗАГРУЗКИ', 'openLink');
-  }
-  if (has(['не удалось получить данные', 'нет ядра'])) {
-    return const UserMessage('НЕ МОГУ ПОЛУЧИТЬ ДАННЫЕ', 'retry');
-  }
+
+  // --- внутренние сбои ---
   if (has(['отменено'])) {
-    return const UserMessage('ЗАГРУЗКА ОТМЕНЕНА', 'retry');
+    return const UserMessage('cancelled', 'ЗАГРУЗКА ОТМЕНЕНА',
+        'Можно повторить в любой момент.', 'retry');
   }
-  if (has(['распознан', 'адрес не опознан', 'не является ссылкой'])) {
-    return const UserMessage('НЕ УДАЛОСЬ РАСПОЗНАТЬ ССЫЛКУ', 'retry');
+  if (has(['загрузчик не найден', 'нет ядра', 'инструмент'])) {
+    return const UserMessage('toolsMissing', 'ИНСТРУМЕНТЫ НЕ НАЙДЕНЫ',
+        'Переустановите приложение.', 'close');
   }
-  if (has(['сеть', 'vpn', 'timed out', 'connection', 'stalled', 'unreachable',
-           'не робот', 'sign in', 'отказал', 'ssl', 'no video formats'])) {
-    return const UserMessage('НЕ МОГУ ПОДКЛЮЧИТЬСЯ — ПРОВЕРЬТЕ VPN', 'retry');
+  if (has(['обработать', 'конверт', 'thumbnail', 'обрезка', 'подготовить',
+           'обработку'])) {
+    return const UserMessage('prepareFailed', 'НЕ УДАЛОСЬ ПОДГОТОВИТЬ ФАЙЛ',
+        'Попробуйте ещё раз.', 'retry');
   }
-  if (has(['видео недоступно', 'нет видео', 'no video'])) {
-    return const UserMessage('ВИДЕО НЕДОСТУПНО', 'selectMusic');
-  }
-  return const UserMessage('НЕ МОГУ ПОЛУЧИТЬ ДАННЫЕ', 'retry');
+
+  return const UserMessage('internal', 'ЧТО-ТО ПОШЛО НЕ ТАК',
+      'Попробуйте ещё раз — обычно помогает.', 'retry');
 }
 
 class KLoadScreen extends StatefulWidget {
@@ -145,6 +188,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   int vpnState = 0; // 0 неизвестно, 1 вкл, 2 выкл
   bool vpnDismissed = false;
   int vpnEpoch = 0; // каждое новое «выключился» — новый glitch на плашке
+  // Поддерево плашки смонтировано с первого появления и гасится плавно
+  // (и по крестику, и при возврате VPN) — резкого исчезновения нет.
+  bool vpnPlateShown = false;
+
+  bool get vpnPlateVisible => vpnState == 2 && !vpnDismissed;
 
   // поиск
   final query = TextEditingController();
@@ -296,6 +344,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         items = c.snapshot();
         toolsFound = c.toolsStatus()['found'] == true;
         vpnState = c.vpnState();
+        if (vpnState == 2) vpnPlateShown = true;
         final dest = c.defaultDest();
         destFolder = (dest['folder'] ?? '') as String;
       });
@@ -326,6 +375,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       }
       setState(() {
         vpnState = e.on ? 1 : 2;
+        if (vpnState == 2) vpnPlateShown = true;
         if (e.on) vpnDismissed = false;
         // Новое появление плашки при каждом переходе вкл -> выкл.
         if (wasOff && !e.on) vpnEpoch += 1;
@@ -526,24 +576,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   }
 
   void _startSeek() {
-    var links = core?.splitLinks(query.text) ?? const [];
-    // Яндекс Музыка выведена из приложения: ссылки не разбираются и
-    // задач не создают.
-    final yandexLinks =
-        links.where((l) => serviceOf(l).id == 'YM').toList();
-    if (yandexLinks.isNotEmpty) {
-      links = links.where((l) => serviceOf(l).id != 'YM').toList();
-      _showToast('ЯНДЕКС МУЗЫКА НЕ ПОДДЕРЖИВАЕТСЯ');
-      if (links.isEmpty) {
-        setState(() {
-          phase = Phase.idle;
-          probe = null;
-          showResultList = false;
-          searchingNow = false;
-        });
-        return;
-      }
-    }
+    final links = core?.splitLinks(query.text) ?? const [];
     setState(() {
       seekPct = 0;
       phase = Phase.seeking;
@@ -1202,12 +1235,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                   builder: (context, _) => TrackingBar(progress: trackC.value)),
             // vpn: затемняем и слегка размываем только стекло телевизора;
             // бэнд и логотип остаются кликабельными и не затемняются.
-            if (booted && vpnState == 2) ...[
+            // Плашка VPN смонтирована с первого появления и гасится одной
+            // и той же анимацией 220 мс — и по крестику, и при возврате VPN.
+            if (booted && vpnPlateShown) ...[
               AnimatedOpacity(
-                opacity: vpnDismissed ? 0 : 1,
+                opacity: vpnPlateVisible ? 1 : 0,
                 duration: const Duration(milliseconds: 220),
                 child: IgnorePointer(
-                  ignoring: vpnDismissed,
+                  ignoring: !vpnPlateVisible,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: () => setState(() => vpnDismissed = true),
@@ -1219,7 +1254,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                 ),
               ),
               IgnorePointer(
-                ignoring: vpnDismissed,
+                ignoring: !vpnPlateVisible,
                 child: _vpnPlate(),
               ),
             ],
@@ -1567,10 +1602,15 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min, children: [
-              Text('ПОИСК НЕ УДАЛСЯ', style: T.ps(11, c: Pal.soft)),
-              const SizedBox(height: 6),
-              Text(resultError ?? '',
-                  style: T.mono(11, c: Pal.dim)),
+              Builder(builder: (context) {
+                final m = mapUserMessage(resultError ?? '');
+                return Column(crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text('ПОИСК НЕ УДАЛСЯ', style: T.ps(11, c: Pal.soft)),
+                  const SizedBox(height: 6),
+                  Text(m.hint, style: T.mono(11, c: Pal.dim)),
+                ]);
+              }),
               const SizedBox(height: 10),
               GestureDetector(
                 onTap: _startSeek,
@@ -1695,6 +1735,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         child: Column(children: [
           Text(msg.title, style: T.ps(11, c: Pal.soft), textAlign: TextAlign.center),
+          const SizedBox(height: 5),
+          Text(msg.hint,
+              style: T.mono(11, c: Pal.dim), textAlign: TextAlign.center),
           const SizedBox(height: 9),
           Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.center,
               children: [
@@ -2430,10 +2473,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       padding: const EdgeInsets.fromLTRB(13, 6, 13, 2),
       child: Row(children: [
         Text('ДИСПЕТЧЕР ЗАГРУЗОК', style: T.ps(9, c: Pal.soft, ls: .1)),
-        const Spacer(),
-        // Очистка: крупная кнопка без рамки — скобки в самой надписи,
-        // подсветка та же, что у «К РЕЗУЛЬТАТАМ».
-        if (!compact && items.isNotEmpty)
+        // Очистка стоит вплотную к заголовку, остальное место пустое.
+        if (!compact && items.isNotEmpty) ...[
+          const SizedBox(width: 10),
           _GhostButton(
             label: '[ОЧИСТИТЬ]',
             onTap: _clearQueueHistory,
@@ -2441,6 +2483,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             border: false,
           ),
+        ],
+        const Spacer(),
       ]),
     );
   }
@@ -2629,68 +2673,44 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     );
   }
 
-  // ---- уже скачано: аккуратное уведомление в стиле VPN-плашки ----
+  // ---- уже скачано: модальное окно по общему стандарту _KModal ----
+
+  bool _dupeClosing = false; // идёт плавное исчезновение окна
+
+  void _closeDupeNotice([VoidCallback? after]) {
+    if (_dupeClosing) return;
+    setState(() => _dupeClosing = true);
+    Future.delayed(const Duration(milliseconds: 240), () {
+      if (!mounted) return;
+      setState(() {
+        dupeNotice = null;
+        _dupeClosing = false;
+      });
+      if (after != null) after();
+    });
+  }
 
   void _forceDownloadDupe(KdItem it) {
-    setState(() {
-      dupeNotice = null;
-      forceDownload = true;
-    });
-    _download();
+    setState(() => forceDownload = true);
+    _closeDupeNotice(_download);
   }
 
   Widget _dupePlate(KdItem it) {
-    Widget action(String label, VoidCallback onTap, {bool bright = false}) {
-      return GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              border: Border.all(
-                  color: bright ? Pal.amber : Pal.amberFaint),
-              borderRadius: const BorderRadius.all(Radius.circular(2)),
-            ),
-            child: Text(label,
-                style: T.ps(8, c: bright ? Pal.amber : Pal.soft)),
-          ),
-        ),
-      );
-    }
-
-    return Center(
-      child: GestureDetector(
-        onTap: () {},
-        child: Container(
-          decoration: const BoxDecoration(color: Color(0xF00D0902)),
-          child: DashedBox(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              const Text('ЭТОТ ФАЙЛ УЖЕ СКАЧАН',
-                  style: TextStyle(
-                      fontFamily: 'Press Start 2P',
-                      fontSize: 10,
-                      color: Pal.soft)),
-              const SizedBox(height: 12),
-              Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.center, children: [
-                action('ОТКРЫТЬ В ПАПКЕ', () {
-                  final f = it.files.isNotEmpty ? it.files.first : null;
-                  _openPath(f != null ? File(f).parent.path : destFolder);
-                  setState(() => dupeNotice = null);
-                }),
-                const SizedBox(width: 8),
-                action('СКАЧАТЬ ЕЩЁ РАЗ', () => _forceDownloadDupe(it),
-                    bright: true),
-                const SizedBox(width: 8),
-                action('ОТМЕНА', () => setState(() => dupeNotice = null)),
-              ]),
-            ]),
-          ),
-        ),
-      ),
+    // Модальное окно по общему стандарту _KModal: затемнение и размытие
+    // фона, окно по центру, все кнопки равные.
+    return _KModal(
+      visible: !_dupeClosing,
+      title: 'ЭТОТ ФАЙЛ УЖЕ СКАЧАН',
+      onDismiss: () => _closeDupeNotice(),
+      actions: [
+        ('ОТКРЫТЬ В ПАПКЕ', () {
+          final f = it.files.isNotEmpty ? it.files.first : null;
+          _openPath(f != null ? File(f).parent.path : destFolder);
+          _closeDupeNotice();
+        }),
+        ('СКАЧАТЬ ЕЩЁ РАЗ', () => _forceDownloadDupe(it)),
+        ('ОТМЕНА', () => _closeDupeNotice()),
+      ],
     );
   }
 
@@ -2699,11 +2719,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   Widget _vpnPlate() {
     return Center(
       child: AnimatedScale(
-        scale: vpnDismissed ? .96 : 1,
+        scale: vpnPlateVisible ? 1 : .96,
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOutCubic,
         child: AnimatedOpacity(
-          opacity: vpnDismissed ? 0 : 1,
+          opacity: vpnPlateVisible ? 1 : 0,
           duration: const Duration(milliseconds: 220),
           child: GlitchIn(
             key: ValueKey('vpn-plate-$vpnEpoch'),
@@ -3156,6 +3176,147 @@ class _GoButtonState extends State<_GoButton> {
 
 
 
+// Единый стандарт модального окна приложения. Фон затемняется и
+// размывается ровно как у плашки VPN (тот же blur и уровень), окно —
+// по центру поверх затемнения, ничего под ним не просвечивает.
+// Появление и исчезновение плавные (затемнение уходит вместе с окном).
+// Закрытие: клик по затемнённому фону, клавиша Esc, кнопки действий.
+// Все кнопки окна — одного стиля, без «главной».
+class _KModal extends StatelessWidget {
+  const _KModal({
+    required this.visible,
+    required this.title,
+    required this.actions,
+    required this.onDismiss,
+  });
+
+  final bool visible; // false — окно плавно гаснет перед удалением
+  final String title;
+  final List<(String, VoidCallback)> actions;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: Stack(children: [
+        // Затемнение + размытие — тот же уровень, что у плашки VPN.
+        AnimatedOpacity(
+          opacity: visible ? 1 : 0,
+          duration: const Duration(milliseconds: 220),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onDismiss,
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 2.5, sigmaY: 2.5),
+              child: Container(color: const Color(0x94000000)),
+            ),
+          ),
+        ),
+        Center(
+          child: AnimatedOpacity(
+            opacity: visible ? 1 : 0,
+            duration: const Duration(milliseconds: 220),
+            child: TweenAnimationBuilder<double>(
+              // Появление: лёгкий подъём с масштабом, как у плашки VPN.
+              tween: Tween(begin: .94, end: 1),
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeOutCubic,
+              builder: (context, t, child) => Transform.translate(
+                offset: Offset(0, (1 - t) * 8),
+                child: Transform.scale(scale: t, child: child),
+              ),
+              child: Focus(
+                autofocus: true,
+                onKeyEvent: (node, event) {
+                  if (event is KeyDownEvent &&
+                      event.logicalKey == LogicalKeyboardKey.escape) {
+                    onDismiss();
+                    return KeyEventResult.handled;
+                  }
+                  return KeyEventResult.ignored;
+                },
+                child: GestureDetector(
+                  // Тап по самому окну его не закрывает.
+                  onTap: () {},
+                  child: Container(
+                    decoration:
+                        const BoxDecoration(color: Color(0xF00D0902)),
+                    child: DashedBox(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 13),
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        Text(title,
+                            style: const TextStyle(
+                                fontFamily: 'Press Start 2P',
+                                fontSize: 10,
+                                color: Pal.soft)),
+                        const SizedBox(height: 12),
+                        Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            alignment: WrapAlignment.center,
+                            children: [
+                              for (final (label, onTap) in actions)
+                                _ModalButton(label: label, onTap: onTap),
+                            ]),
+                      ]),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// Кнопка модального окна: единый стиль для всех — рамка, текст soft,
+// при наведении лёгкая заливка изнутри. Никакой оранжевой заливки
+// и выделения «главной» кнопки.
+class _ModalButton extends StatefulWidget {
+  const _ModalButton({required this.label, required this.onTap});
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  State<_ModalButton> createState() => _ModalButtonState();
+}
+
+class _ModalButtonState extends State<_ModalButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: widget.onTap,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(end: _hover ? 1.0 : 0.0),
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+          builder: (context, t, _) => Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              border: Border.all(
+                  color: Color.lerp(Pal.amberFaint, Pal.amber, t)!),
+              borderRadius: const BorderRadius.all(Radius.circular(2)),
+            ),
+            child: Text(widget.label,
+                style: T.ps(
+                    8, c: Color.lerp(Pal.soft, Pal.amber, t)!)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Появление панели с коротким glitch: мягкое проявление, сдвиг на пару
 /// пикселей и редкие горизонтальные помехи. Один раз на открытие.
 class GlitchIn extends StatefulWidget {
@@ -3361,22 +3522,13 @@ class _CoverImageState extends State<_CoverImage> {
   Future<void> _load() async {
     try {
       final data = await widget.file.readAsBytes();
-      // Пиксельный вид: декод в низкое разрешение — 56 px по короткой
-      // стороне; отрисовка вверх растягивает без сглаживания
-      // (FilterQuality.none) — крупные квадратные пиксели.
-      const shortSide = 56;
-      final probeCodec =
-          await ui.instantiateImageCodec(data, targetWidth: 24);
-      final probeFrame = await probeCodec.getNextFrame();
-      final aspect =
-          probeFrame.image.width / probeFrame.image.height;
-      probeFrame.image.dispose();
-      final ui.Codec codec = aspect >= 1
-          ? await ui.instantiateImageCodec(data, targetHeight: shortSide)
-          : await ui.instantiateImageCodec(data, targetWidth: shortSide);
+      // Исходное качество со сглаживанием; 512 px по ширине достаточно
+      // для карточки и не держит в памяти большие декоды.
+      final codec = await ui.instantiateImageCodec(data, targetWidth: 512);
       final frame = await codec.getNextFrame();
       final image = frame.image;
       Rect? crop;
+      final aspect = image.width / image.height;
       // 4:3 с полосами — сигнатура hqdefault у 16:9-роликов.
       if (aspect > 1.2 && aspect < 1.45) {
         final bytes =
@@ -3396,7 +3548,7 @@ class _CoverImageState extends State<_CoverImage> {
             return n > 0 ? sum / n : 255;
           }
 
-          final strip = (image.height * 0.10).round().clamp(1, 8);
+          final strip = (image.height * 0.10).round();
           final top = stripLum(0, strip);
           final bottom = stripLum(image.height - strip, image.height);
           final middle = stripLum(image.height ~/ 3, image.height * 2 ~/ 3);
@@ -3453,16 +3605,14 @@ class _CoverPainter extends CustomPainter {
         Rect.fromLTWH(
             0, 0, image.width.toDouble(), image.height.toDouble());
     // cover: масштаб по большей стороне, выравнивание по центру.
+    // Сглаживание по умолчанию — исходное качество без пикселизации.
     final scale = math.max(size.width / src.width, size.height / src.height);
     final dst = Rect.fromCenter(
       center: Offset(size.width / 2, size.height / 2),
       width: src.width * scale,
       height: src.height * scale,
     );
-    // Ближайший сосед: низкое разрешение растягивается крупными
-    // квадратными пикселями без сглаживания — пиксельная эстетика.
-    final paint = Paint()..filterQuality = FilterQuality.none;
-    canvas.drawImageRect(image, src, dst, paint);
+    canvas.drawImageRect(image, src, dst, Paint());
   }
 
   @override

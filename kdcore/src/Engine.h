@@ -267,7 +267,7 @@ private:
     void downloadTrack (const QueueItemPtr& item, int index,
                         Detector::Service searchSite,
                         const Str& artist, const Str& track,
-                        int expectedDuration = 0, bool strictMatch = false);
+                        int expectedDuration = 0);
     void startPhotoFallback (const QueueItemPtr& item);
     QueueItemPtr findItem (int id);
 
@@ -291,18 +291,12 @@ private:
                            int* durationSec = nullptr, Str* thumbnail = nullptr) const;
     StrVec resolveAppleMusic (const Str& link, Str& album,
                               int* durationSec = nullptr, Str* thumbnail = nullptr) const;
-    /// Яндекс Музыка по каноническому ID трека из ссылки: открытый API
-    /// отдаёт точное название, исполнителя и длительность.
-    StrVec resolveYandexMusic (const Str& link, Str& album,
-                               int* durationSec = nullptr, Str* thumbnail = nullptr) const;
-    StrVec resolveOpenGraph (const Str& link) const;
     bool downloadPinterestPhoto (const QueueItemPtr& item);
     Probe probePinterestPhoto (const Str& link) const;
     Probe probeSearch (const Str& query, const Str& site = {}) const;
     Probe searchAppleMusicList (const Str& query) const;
     Probe searchSpotifyList (const Str& query) const;
-    Probe searchYandexList (const Str& query) const; // (не вызывается: Яндекс выведен)
-    Probe searchYandexRemoved (const Str& query) const;
+    StrVec resolveOpenGraph (const Str& link) const;
 
     /// Сверка найденного на YouTube с тем, что записано в ссылке каталога:
     /// значимые токены названия, исполнитель (в названии или канале) и
@@ -310,7 +304,7 @@ private:
     static bool candidateMatches (const Str& foundTitle, int foundDur,
                                   const Str& foundUploader,
                                   const Str& artist, const Str& track,
-                                  int expectedDur, bool strict);
+                                  int expectedDur);
 
     /// Кэш разборов: тот же текст не разбирается дважды (5 минут).
     static std::map<Str, std::pair<Probe, long long>> probeCache;
@@ -320,7 +314,6 @@ private:
     static std::mutex thumbMutex;
     Probe searchAppleMusic (const Str& query) const;
     Probe searchSpotify (const Str& query) const;
-    Probe searchYandex (const Str& query) const;
     Probe searchPinterest (const Str& query) const;
     Probe probeDrm (const Str& link, Detector::Service service) const;
 

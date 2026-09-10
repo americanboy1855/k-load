@@ -325,7 +325,7 @@ void Engine::enqueueBatch (const StrVec& links, const Options& options)
             item->nameOverride = options.nameOverride;
             // ХРОН имеет смысл только для одиночного файла: у подборки
             // отрезок отрезал бы кусок каждой серии. У каталогов (Spotify,
-            // Apple, Яндекс) ссылка на трек может содержать /album/ — это
+            // Apple) ссылка на трек может содержать /album/ — это
             // не плейлист, отрезок действует как у всех.
             item->sections = item->wholePlaylist
                              && ! Detector::needsResolve (item->service)
@@ -1431,16 +1431,10 @@ Str Engine::humanError (const Str& raw)
     return clean.empty() ? Str ("Загрузка не удалась") : clean;
 }
 
-// MARK: - закрытые каталоги: Spotify, Apple, Яндекс, ВК
+// MARK: - закрытые каталоги: Spotify, Apple, ВК
 
 void Engine::startResolve (const QueueItemPtr& item)
 {
-    if (item->service == Detector::Service::yandexMusic)
-    {
-        finish (item, QueueItem::State::failed,
-            "ЯНДЕКС МУЗЫКА НЕ ПОДДЕРЖИВАЕТСЯ");
-        return;
-    }
     setStage (item, "Читаю каталог…");
 
     Str album;
@@ -1451,8 +1445,6 @@ void Engine::startResolve (const QueueItemPtr& item)
         tracks = resolveSpotify (item->link, album, &durSec, &thumb);
     else if (item->service == Detector::Service::appleMusic)
         tracks = resolveAppleMusic (item->link, album, &durSec, &thumb);
-    else if (item->service == Detector::Service::yandexMusic)
-        tracks = resolveYandexMusic (item->link, album, &durSec, &thumb);
     else
         tracks = resolveOpenGraph (item->link);
 
@@ -1475,10 +1467,6 @@ void Engine::startResolve (const QueueItemPtr& item)
         item->dest = folder;
     }
 
-    // Ссылки Яндекс Музыки сверяются с выдачей строго: похожий трек
-    // не скачивается никогда — только точное совпадение.
-    const bool strict = item->service == Detector::Service::yandexMusic;
-
     for (int i = 0; i < (int) tracks.size(); ++i)
     {
         if (item->cancelled() || quit.load (std::memory_order_relaxed)) break;
@@ -1492,7 +1480,7 @@ void Engine::startResolve (const QueueItemPtr& item)
         downloadTrack (item, i, Detector::Service::youtube,
                        sep > 0 ? query.substr (0, (size_t) sep) : Str(),
                        sep > 0 ? query.substr ((size_t) sep + 3) : query,
-                       expected, strict);
+                       expected);
     }
 
     if (item->cancelled())
@@ -1503,9 +1491,7 @@ void Engine::startResolve (const QueueItemPtr& item)
     if (item->files.empty())
     {
         finish (item, QueueItem::State::failed,
-            strict
-                ? Str ("Точное совпадение не найдено — похожий трек не скачивается. Проверьте ссылку или найдите трек вручную")
-                : Str ("Ничего не нашлось по названиям треков"));
+            "Ничего не нашлось по названиям треков");
         return;
     }
     item->progress = 1;
@@ -1589,7 +1575,7 @@ static std::vector<VerifyCandidate> ytSearchCandidatesFlat (const Str& query)
 void Engine::downloadTrack (const QueueItemPtr& item, const int index,
                             const Detector::Service searchSite,
                             const Str& artist, const Str& track,
-                            const int expectedDuration, const bool strictMatch)
+                            const int expectedDuration)
 {
     const auto query = artist.empty() ? track : artist + " - " + track;
     item->itemIndex = index + 1;
@@ -1650,7 +1636,7 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
         for (const auto& c : candidates)
         {
             if (candidateMatches (c.title, c.duration, c.uploader,
-                                  artist, track, expectedDuration, strictMatch))
+                                  artist, track, expectedDuration))
             {
                 verified.push_back (c.url);
                 if (verified.size() >= 3) break;
@@ -1672,9 +1658,8 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
         if (item->files.size() > before) return; // точный кандидат скачан
     }
 
-    // 2) Прежний путь: yt-dlp берёт первый из выдачи. Для ссылок Яндекс
-    //    Музыки похожий трек не качается — остаётся честная ошибка.
-    if (! strictMatch || verified.empty())
+    // 2) Прежний путь: yt-dlp берёт первый из выдачи.
+    if (verified.empty())
     {
         if (item->cancelled())
         {
@@ -1692,13 +1677,13 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
         if (! runYtDlp (item, args, rs)) return; // отменено
     }
 
-    if (item->files.size() == before && searchSite == Detector::Service::youtube
-        && ! strictMatch)
+    if (item->files.size() == before
+        && searchSite == Detector::Service::youtube)
     {
         // На YouTube не дался — пробуем SoundCloud: там находятся ремиксы
         // и малоизвестное.
         downloadTrack (item, index, Detector::Service::soundcloud, artist, track,
-                       expectedDuration, false);
+                       expectedDuration);
     }
 }
 
@@ -1841,7 +1826,7 @@ StrVec Engine::nameTokens (const Str& raw)
 bool Engine::candidateMatches (const Str& foundTitle, const int foundDur,
                                const Str& foundUploader,
                                const Str& artist, const Str& track,
-                               const int expectedDur, const bool strict)
+                               const int expectedDur)
 {
     const auto title = kd::lower (foundTitle);
     const auto trackToks = nameTokens (track);
@@ -1875,8 +1860,7 @@ bool Engine::candidateMatches (const Str& foundTitle, const int foundDur,
         durOk = foundDur > 0 && diff <= 8;
     }
 
-    return strict ? (titleOk && artistOk && durOk)
-                  : (titleOk && (artistOk || durOk));
+    return titleOk && (artistOk || durOk);
 }
 
 StrVec Engine::resolveSpotify (const Str& link, Str& album,
@@ -2031,82 +2015,9 @@ StrVec Engine::resolveAppleMusic (const Str& link, Str& album,
     return tracks;
 }
 
-// Канонический ID трека в ссылке Яндекс Музыки:
-// music.yandex.ru/album/<a>/track/<id> или music.yandex.ru/track/<id>.
-static Str yandexTrackId (const Str& link)
-{
-    const auto path = parseUrl (link).path;
-    const int marker = kd::indexOf (path, "/track/");
-    if (marker < 0) return {};
-    auto tail = path.substr ((size_t) marker + 7);
-    const int slash = kd::indexOfChar (tail, '/');
-    if (slash > 0) tail = tail.substr (0, (size_t) slash);
-    // Остаток — цифры; иначе это не ID трека.
-    if (tail.empty() || ! kd::containsOnly (tail, "0123456789")) return {};
-    return tail;
-}
-
-StrVec Engine::resolveYandexMusic (const Str& link, Str& album,
-                                   int* durationSec, Str* thumbnail) const
-{
-    // Точный путь: открытый API по каноническому ID трека из ссылки.
-    // Никакого поиска по названию — трек определяется своим ID.
-    const auto id = yandexTrackId (link);
-    if (! id.empty())
-    {
-        const auto body = fetch ("https://api.music.yandex.net/tracks/" + id);
-        const auto data = json::parse (body, nullptr, false);
-        const auto result = data.is_object() ? data.find ("result") : data.end();
-        if (result != data.end() && result->is_array() && ! result->empty()
-            && (*result)[0].is_object())
-        {
-            const auto t = (*result)[0];
-            const auto title = jtext (t, "title");
-            if (! title.empty())
-            {
-                StrVec artists;
-                const auto arr = t.find ("artists");
-                if (arr != t.end() && arr->is_array())
-                    for (const auto& a : *arr)
-                        if (a.is_object())
-                        {
-                            const auto n = jtext (a, "name");
-                            if (! n.empty()) artists.push_back (n);
-                        }
-                if (durationSec != nullptr)
-                    *durationSec = (int) (jnum (t, "durationMs") / 1000.0);
-                // Первый альбом трека: обложка и подпись.
-                Str firstAlbum, cover;
-                const auto albums = t.find ("albums");
-                if (albums != t.end() && albums->is_array() && ! albums->empty()
-                    && (*albums)[0].is_object())
-                {
-                    firstAlbum = jtext ((*albums)[0], "title");
-                    cover = jtext ((*albums)[0], "coverUri");
-                }
-                if (cover.empty()) cover = jtext (t, "ogImage");
-                if (thumbnail != nullptr && ! cover.empty())
-                    // «%%» в адресе — место для размера (например 400x400).
-                    *thumbnail = "https://"
-                        + kd::replaceAll (cover, "%%", "400x400");
-                // Альбом — только как подпись: папку для одиночного трека
-                // не создаём, у пачек имя альбома не используется.
-                if (album.empty()) album = firstAlbum;
-                return { artists.empty()
-                    ? title
-                    : kd::join (artists, ", ") + " - " + title };
-            }
-        }
-    }
-
-    // Ссылка без ID трека (или API недоступен) — то, что печатает сама
-    // страница для предпросмотра.
-    return resolveOpenGraph (link);
-}
-
 StrVec Engine::resolveOpenGraph (const Str& link) const
 {
-    // ВК Музыка и Яндекс наружу API не дают. Берём то, что страница сама
+    // ВК Музыка наружу API не даёт. Берём то, что страница сама
     // печатает для предпросмотра ссылки: og:title.
     const auto html = fetch (link);
     if (html.empty()) return {};
@@ -2117,7 +2028,7 @@ StrVec Engine::resolveOpenGraph (const Str& link) const
     title = kd::replaceAll (kd::replaceAll (kd::replaceAll (title, "&amp;", "&"), "&quot;", "\""), "&#x27;", "'");
 
     auto artist = between (html, "<meta property=\"og:description\" content=\"", "\"");
-    // Spotify: «Артист · Альбом · Song», Яндекс: «Артист • Трек • 2021».
+    // Spotify: «Артист · Альбом · Song».
     const int sepDot = kd::indexOf (artist, "\u00B7");
     const int sepBullet = kd::indexOf (artist, "\u2022");
     int sep = -1;
@@ -2339,18 +2250,6 @@ Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
         const auto link = text;
         const auto service = Detector::serviceFor (link);
 
-        // Закрытые каталоги: карточка из открытых данных страницы.
-        if (service == Detector::Service::yandexMusic)
-        {
-            // Яндекс Музыка выведена из приложения.
-            Probe p;
-            p.ok = false;
-            p.link = link;
-            p.service = service;
-            p.error = "ЯНДЕКС МУЗЫКА НЕ ПОДДЕРЖИВАЕТСЯ";
-            return p;
-        }
-
         if (Detector::needsResolve (service))
         {
             Probe p;
@@ -2365,8 +2264,6 @@ Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
                               ? resolveSpotify (link, album, &durSec, &thumb)
                         : service == Detector::Service::appleMusic
                               ? resolveAppleMusic (link, album, &durSec, &thumb)
-                        : service == Detector::Service::yandexMusic
-                              ? resolveYandexMusic (link, album, &durSec, &thumb)
                               : resolveOpenGraph (link);
             if (tracks.empty())
             {
@@ -2703,86 +2600,6 @@ Probe Engine::searchSpotifyList (const Str& query) const
     return p;
 }
 
-// Яндекс Музыка: страница выдачи содержит прямые ссылки
-// /album/<id>/track/<id>; по каноническому ID открытый API отдаёт точное
-// название, исполнителя и длительность — без этого строки «Трек из Яндекс
-// Музыки» пользователю ни о чём.
-Probe Engine::searchYandexList (const Str& query) const
-{
-    Probe p;
-    p.isSearch = true;
-    p.service = Detector::Service::yandexMusic;
-    p.link = query;
-
-    const auto html = fetch ("https://music.yandex.ru/search?text="
-                             + kd::urlEscape (query));
-    // Первые вхождения /album/<id>/track/<id> без повторов.
-    std::regex re ("/album/[0-9]+/track/[0-9]+");
-    auto begin = std::sregex_iterator (html.begin(), html.end(), re);
-    auto endIt = std::sregex_iterator();
-    StrVec paths;
-    Str seen;
-    for (auto it = begin; it != endIt && (int) paths.size() < 5; ++it)
-    {
-        const auto path = it->str();
-        if (seen.find (path) != Str::npos) continue;
-        if (! seen.empty()) seen += "|";
-        seen += path;
-        paths.push_back (path);
-    }
-    if (paths.empty())
-    {
-        p.ok = false;
-        p.error = "Яндекс Музыка недоступна из вашей сети — попробуйте другой источник";
-        return p;
-    }
-
-    for (const auto& path : paths)
-    {
-        SearchResult sr;
-        sr.url = "https://music.yandex.ru" + path;
-        // Канонические данные трека по ID из ссылки.
-        const auto id = kd::fromLast (path, "/track/");
-        const auto body = fetch ("https://api.music.yandex.net/tracks/" + id);
-        const auto data = json::parse (body, nullptr, false);
-        const auto result = data.is_object() ? data.find ("result") : data.end();
-        if (result != data.end() && result->is_array() && ! result->empty()
-            && (*result)[0].is_object())
-        {
-            const auto t = (*result)[0];
-            Str artist;
-            const auto arr = t.find ("artists");
-            if (arr != t.end() && arr->is_array() && ! arr->empty()
-                && (*arr)[0].is_object())
-                artist = jtext ((*arr)[0], "name");
-            sr.title = jtext (t, "title");
-            sr.uploader = artist;
-            sr.duration = (int) (jnum (t, "durationMs") / 1000.0);
-            sr.service = Detector::Service::yandexMusic;
-        }
-        if (sr.title.empty()) sr.title = "Трек из Яндекс Музыки";
-        p.results.push_back (sr);
-    }
-    p.ok = true;
-    p.resolved = p.results.front().url;
-    p.title = p.results.front().title;
-    p.duration = p.results.front().duration;
-    return p;
-}
-
-// Яндекс Музыка выведена из приложения: ни поиска, ни обработки ссылок.
-Probe Engine::searchYandexRemoved (const Str& query) const
-{
-    Probe p;
-    p.isSearch = true;
-    p.link = query;
-    p.ok = false;
-    p.error = "ЯНДЕКС МУЗЫКА НЕ ПОДДЕРЖИВАЕТСЯ";
-    return p;
-}
-
-// Pinterest: автоматический поиск сервис закрывает (403) — честно говорим
-// об этом; пины по ссылке качаются как раньше.
 Probe Engine::searchPinterest (const Str& query) const
 {
     Probe p;
@@ -3010,7 +2827,6 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
     {
         if (site == "apple")          p = searchAppleMusicList (query);
         else if (site == "spotify")   p = searchSpotifyList (query);
-        else if (site == "yandex")    p = searchYandexRemoved (query);
         else if (site == "pinterest") p = searchPinterest (query);
         else                          p.error = "Такой источник поиска не поддерживается";
         if (! p.ok && p.error.empty())

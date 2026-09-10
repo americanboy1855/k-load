@@ -219,7 +219,6 @@ Flutter 3.47.2, Xcode 26.6, CMake+Ninja; CocoaPods не нужен (flutter_svg 
   container -> --merge-output-format); формат фото jpg/png (конвертация
   штатным sips после скачивания); поиск по каталогам: Apple Music (офиц.
   iTunes Search API), Spotify (анонимный токен веб-плеера + api.spotify.com),
-  Яндекс Музыка (страница выдачи -> /album/x/track/y -> og:title),
   Pinterest (закрыл автопоиск 403 — честная ошибка). kd_http::fetch с
   заголовками (Bearer); kd::searchRegex.
 - Плейлисты: startPlaylist — плоский перебор (-J --flat-playlist) и качание
@@ -228,7 +227,7 @@ Flutter 3.47.2, Xcode 26.6, CMake+Ninja; CocoaPods не нужен (flutter_svg 
   (playlistLimit) обрезает список. Прежний путь с --yes-playlist падал целиком
   от одного недоступного ролика.
 - Проверено живьём: плейлист 200 видео -> лимит 5 -> 2 файла + 3 пропущено;
-  Apple (Forss - Flickermood, 210с), Яндекс (og:title), Spotify/Pinterest —
+  Apple (Forss - Flickermood, 210с), Spotify/Pinterest —
   честные ошибки при недоступности.
 
 ## Правки заказчика, раунд 8 (финал сессии)
@@ -264,7 +263,7 @@ Flutter 3.47.2, Xcode 26.6, CMake+Ninja; CocoaPods не нужен (flutter_svg 
 
 ## Правки заказчика, раунды 10–16 (10.09.2026) — кратко; детали в /tmp/HANDOFF-K-LOAD.md и git log
 
-- Раунды 10–15: превью из кэша ядра, панель результатов-агрегатор, Яндекс по
+- Раунды 10–15: превью из кэша ядра, панель результатов-агрегатор,
   ID (потом удалён), единые форматы IG/TikTok, плейлисты по-роликово и
   отдельными задачами, честные статусы/ошибки, дубликат-диалог, deno.
 - Раунд 16: очередь на ДВУХ воркерах + глобальная пауза. Wake — считающий

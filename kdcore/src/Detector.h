@@ -14,7 +14,7 @@ using namespace kd; // строковые хелперы ядра без пре�
 enum class Service
 {
     youtube, youtubeMusic, instagram, tiktok, pinterest, vk,
-    spotify, appleMusic, yandexMusic, vkMusic, soundcloud, unknown
+    spotify, appleMusic, vkMusic, soundcloud, unknown
 };
 
 enum class Route
@@ -42,8 +42,6 @@ inline Service serviceFor (Str raw)
         || contains (host, "pinterest."))                            return Service::pinterest;
     if (endsWith (host, "spotify.com") || endsWith (host, "spotify.link")) return Service::spotify;
     if (endsWith (host, "music.apple.com") || endsWith (host, "itunes.apple.com")) return Service::appleMusic;
-    if (endsWith (host, "music.yandex.ru") || endsWith (host, "music.yandex.com")
-        || endsWith (host, "music.yandex.by") || endsWith (host, "music.yandex.kz")) return Service::yandexMusic;
     if (endsWith (host, "soundcloud.com"))                           return Service::soundcloud;
     // ВК: музыка и видео на одном домене, разводим по адресу страницы.
     if (endsWith (host, "vk.com") || endsWith (host, "vkvideo.ru")
@@ -57,7 +55,7 @@ inline Service serviceFor (Str raw)
 inline bool needsResolve (Service s)
 {
     return s == Service::spotify || s == Service::appleMusic
-        || s == Service::yandexMusic || s == Service::vkMusic;
+        || s == Service::vkMusic;
 }
 
 // Сервисы, где без входа в аккаунт видны только открытые материалы.
@@ -81,7 +79,6 @@ inline Str title (Service s)
         case Service::vk:           return "ВКонтакте";
         case Service::spotify:      return "Spotify";
         case Service::appleMusic:   return "Apple Music";
-        case Service::yandexMusic:  return "Яндекс Музыка";
         case Service::vkMusic:      return "ВК Музыка";
         case Service::soundcloud:   return "SoundCloud";
         case Service::unknown:      return "Сайт";
