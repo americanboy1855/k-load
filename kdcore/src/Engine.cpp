@@ -397,11 +397,17 @@ void Engine::clearFinished()
 {
     {
         const std::lock_guard<std::mutex> sl (mutex);
+        // Очередь сначала реально отменяем: с флагом cancelled воркер её
+        // не возьмёт (лента подачи пропускает отменённое), — файлы не
+        // начнут качаться после очистки.
+        for (auto& i : items)
+            if (i->state == QueueItem::State::queued) i->setCancelled();
+        // Убираем всё, кроме текущей загрузки и приостановленного:
+        // завершённое, ошибки и отменённую очередь. Файлы на диске целы.
         items.erase (std::remove_if (items.begin(), items.end(),
             [] (const QueueItemPtr& i)
-            { return i->state != QueueItem::State::queued
-                  && i->state != QueueItem::State::working
-                  && i->state != QueueItem::State::paused; }), // приостановленное — живое
+            { return i->state != QueueItem::State::working
+                  && i->state != QueueItem::State::paused; }), // живое — остаётся
             items.end());
     }
     fireChanged();
@@ -885,7 +891,14 @@ void Engine::consume (const Str& line, const QueueItemPtr& item, Str& errTail)
     {
         item->itemIndex = kd::getInt (parts[1]);
         if (const int n = kd::getInt (parts[2]); n > 0) item->itemTotal = n;
-        if (item->itemTotal > 1) item->title = parts[3];
+        // Название показываем сразу, с первых метаданных источника, а не
+        // после скачивания: у плейлистовых роликов это готовое имя файла
+        // («01 - Название»), у одиночных — название источника с суффиксом
+        // ХРОНа. После файла (маркер @F) имя уточнится до фактического.
+        if (! item->nameOverride.empty())
+            item->title = item->nameOverride;
+        else if (item->title.empty())
+            item->title = parts[3] + chronSuffix (item->sections);
         item->progress = 0;
         item->state = QueueItem::State::working;
         item->stage = item->itemTotal > 1
@@ -897,9 +910,9 @@ void Engine::consume (const Str& line, const QueueItemPtr& item, Str& errTail)
     {
         item->files.push_back (parts[1]);
         item->progress = 1;
-        // Заголовок строки — имя файла, пока не пришло настоящее название.
-        if (item->title.empty())
-            item->title = kd::stem (fs::u8path (parts[1]));
+        // Финальное имя файла — истина: строка «в процессе» и после
+        // «Готово» совпадают.
+        item->title = kd::stem (fs::u8path (parts[1]));
     }
 }
 

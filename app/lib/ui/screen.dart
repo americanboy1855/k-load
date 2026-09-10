@@ -2431,14 +2431,15 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       child: Row(children: [
         Text('ДИСПЕТЧЕР ЗАГРУЗОК', style: T.ps(9, c: Pal.soft, ls: .1)),
         const Spacer(),
-        // Очистка: крупная кнопка с той же подсветкой, что у
-        // «К РЕЗУЛЬТАТАМ» (пунктирная рамка, заливка только внутри).
+        // Очистка: крупная кнопка без рамки — скобки в самой надписи,
+        // подсветка та же, что у «К РЕЗУЛЬТАТАМ».
         if (!compact && items.isNotEmpty)
           _GhostButton(
-            label: 'ОЧИСТИТЬ',
+            label: '[ОЧИСТИТЬ]',
             onTap: _clearQueueHistory,
             fontSize: 8,
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            border: false,
           ),
       ]),
     );
@@ -2722,14 +2723,16 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
               child: Container(
                 decoration: const BoxDecoration(color: Color(0xF00D0902)),
                 child: DashedBox(
+                  // Компактная плашка: отступы на треть меньше, кегль 7 —
+                  // длинный текст при 8 не влезал в ширину экрана.
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
                   child: Row(mainAxisSize: MainAxisSize.min, children: [
                     const VpnIcon(),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 8),
                     Text('VPN ОТКЛЮЧЁН — ЗАГРУЗКИ МОГУТ НЕ РАБОТАТЬ. ВКЛЮЧИТЕ VPN',
-                        style: T.ps(8, c: Pal.soft, ls: .02)),
-                    const SizedBox(width: 10),
+                        style: T.ps(7, c: Pal.soft, ls: .02)),
+                    const SizedBox(width: 8),
                     GestureDetector(
                       onTap: () => setState(() => vpnDismissed = true),
                       child: MouseRegion(
@@ -3014,10 +3017,10 @@ class _ModeChipState extends State<_ModeChip> {
   }
 }
 
-// Кнопка-«призрак» в пунктирной рамке: «К РЕЗУЛЬТАТАМ», «ОЧИСТИТЬ».
-// Подсветка — только внутренняя заливка внутри рамки, наружу не выходит.
-// Состояние hover живёт в самом виджете и сбрасывается по клику и по
-// уходу курсора — залипание исключено.
+// Кнопка-«призрак»: «К РЕЗУЛЬТАТАМ» (с пунктирной рамкой) и «[ОЧИСТИТЬ]»
+// (без рамки, скобки — часть надписи). Подсветка — только внутренняя
+// заливка, наружу не выходит. Состояние hover живёт в самом виджете и
+// сбрасывается по клику и по уходу курсора — залипание исключено.
 class _GhostButton extends StatefulWidget {
   const _GhostButton({
     super.key,
@@ -3025,11 +3028,13 @@ class _GhostButton extends StatefulWidget {
     required this.onTap,
     this.fontSize = 7,
     this.padding = const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    this.border = true,
   });
   final String label;
   final VoidCallback onTap;
   final double fontSize;
   final EdgeInsetsGeometry padding;
+  final bool border;
 
   @override
   State<_GhostButton> createState() => _GhostButtonState();
@@ -3061,21 +3066,25 @@ class _GhostButtonState extends State<_GhostButton> {
           tween: Tween(end: _hover ? 1.0 : 0.0),
           duration: const Duration(milliseconds: 220),
           curve: Curves.easeOut,
-          builder: (context, t, _) => Container(
-            // Внутренняя заливка — единственная подсветка, наружу не выходит.
-            color: Color.lerp(Colors.transparent,
-                Pal.amber.withValues(alpha: .08), t),
-            child: CustomPaint(
-              foregroundPainter: DashedBorderPainter(
-                  color: Color.lerp(Pal.amberFaint, Pal.amber, t)!),
-              child: Padding(
-                padding: widget.padding,
-                child: Text(widget.label,
-                    style: T.ps(widget.fontSize,
-                        c: Color.lerp(Pal.dim, Pal.amber, t)!, ls: .08)),
+          builder: (context, t, _) {
+            final fill = Color.lerp(
+                Colors.transparent, Pal.amber.withValues(alpha: .08), t);
+            final content = Padding(
+              padding: widget.padding,
+              child: Text(widget.label,
+                  style: T.ps(widget.fontSize,
+                      c: Color.lerp(Pal.dim, Pal.amber, t)!, ls: .08)),
+            );
+            if (!widget.border) return Container(color: fill, child: content);
+            return Container(
+              color: fill,
+              child: CustomPaint(
+                foregroundPainter: DashedBorderPainter(
+                    color: Color.lerp(Pal.amberFaint, Pal.amber, t)!),
+                child: content,
               ),
-            ),
-          ),
+            );
+          },
         ),
       ),
     );
@@ -3352,12 +3361,22 @@ class _CoverImageState extends State<_CoverImage> {
   Future<void> _load() async {
     try {
       final data = await widget.file.readAsBytes();
-      final codec =
-          await ui.instantiateImageCodec(data, targetWidth: 96);
+      // Пиксельный вид: декод в низкое разрешение — 56 px по короткой
+      // стороне; отрисовка вверх растягивает без сглаживания
+      // (FilterQuality.none) — крупные квадратные пиксели.
+      const shortSide = 56;
+      final probeCodec =
+          await ui.instantiateImageCodec(data, targetWidth: 24);
+      final probeFrame = await probeCodec.getNextFrame();
+      final aspect =
+          probeFrame.image.width / probeFrame.image.height;
+      probeFrame.image.dispose();
+      final ui.Codec codec = aspect >= 1
+          ? await ui.instantiateImageCodec(data, targetHeight: shortSide)
+          : await ui.instantiateImageCodec(data, targetWidth: shortSide);
       final frame = await codec.getNextFrame();
       final image = frame.image;
       Rect? crop;
-      final aspect = image.width / image.height;
       // 4:3 с полосами — сигнатура hqdefault у 16:9-роликов.
       if (aspect > 1.2 && aspect < 1.45) {
         final bytes =
@@ -3377,7 +3396,7 @@ class _CoverImageState extends State<_CoverImage> {
             return n > 0 ? sum / n : 255;
           }
 
-          final strip = (image.height * 0.10).round();
+          final strip = (image.height * 0.10).round().clamp(1, 8);
           final top = stripLum(0, strip);
           final bottom = stripLum(image.height - strip, image.height);
           final middle = stripLum(image.height ~/ 3, image.height * 2 ~/ 3);
@@ -3440,7 +3459,10 @@ class _CoverPainter extends CustomPainter {
       width: src.width * scale,
       height: src.height * scale,
     );
-    canvas.drawImageRect(image, src, dst, Paint());
+    // Ближайший сосед: низкое разрешение растягивается крупными
+    // квадратными пикселями без сглаживания — пиксельная эстетика.
+    final paint = Paint()..filterQuality = FilterQuality.none;
+    canvas.drawImageRect(image, src, dst, paint);
   }
 
   @override
