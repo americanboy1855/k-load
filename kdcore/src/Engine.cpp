@@ -13,6 +13,7 @@
 #include <ctime>
 #include <fstream>
 #include <mach-o/dyld.h>
+#include <sys/stat.h>
 #include <sstream>
 
 // Очередь заданий, запуск yt-dlp, построчный разбор вывода, открытые данные
@@ -453,16 +454,24 @@ std::vector<QueueItem> Engine::snapshot() const
     return out;
 }
 
+// Изменение задания под мьютексом: его одновременно читают snapshot
+// (интерфейс), другие воркеры и clearFinished (см. TSan-аудит).
 void Engine::finish (const QueueItemPtr& item, QueueItem::State state, const Str& stage)
 {
-    item->state = state;
-    if (! stage.empty()) item->stage = stage;
+    {
+        const std::lock_guard<std::mutex> sl (mutex);
+        item->state = state;
+        if (! stage.empty()) item->stage = stage;
+    }
     fireChanged();
 }
 
 void Engine::setStage (const QueueItemPtr& item, const Str& stage)
 {
-    item->stage = stage;
+    {
+        const std::lock_guard<std::mutex> sl (mutex);
+        item->stage = stage;
+    }
     fireChanged();
 }
 
@@ -513,9 +522,18 @@ void Engine::workerLoop()
 
 void Engine::pauseItem (const QueueItemPtr& item)
 {
-    item->state = QueueItem::State::paused;
-    item->stage = "ПРИОСТАНОВИЛ...";
+    {
+        const std::lock_guard<std::mutex> sl (mutex);
+        item->state = QueueItem::State::paused;
+        item->stage = "ПРИОСТАНОВИЛ...";
+    }
     fireChanged();
+}
+
+bool Engine::isPausedNow (const QueueItemPtr& item)
+{
+    const std::lock_guard<std::mutex> sl (mutex);
+    return item->state == QueueItem::State::paused;
 }
 
 void Engine::setPaused (bool p)
@@ -556,14 +574,22 @@ void Engine::processItem (const QueueItemPtr& item)
         return;
     }
 
-    item->state = QueueItem::State::working;
-    item->stage = "Готовлюсь…";
+    {
+        const std::lock_guard<std::mutex> sl (mutex);
+        item->state = QueueItem::State::working;
+        item->stage = "Готовлюсь…";
+        // Точка старта попытки: файлы, появившиеся раньше, чужие (см. @F).
+        item->startedWall = ::time (nullptr);
+    }
     fireChanged();
 
     // Автоматическая папка резолвится в момент старта: в приложении это
     // Загрузки; внутри всегда «K LOAD».
     if (item->dest.empty())
+    {
+        const std::lock_guard<std::mutex> sl (mutex);
         item->dest = DestResolver::defaultFolder();
+    }
     kd::ensureDir (item->dest);
 
     if (item->isPhoto) { startPhotoFallback (item); return; }
@@ -574,7 +600,12 @@ void Engine::processItem (const QueueItemPtr& item)
     // Pinterest часто оказывается фотографией, которую yt-dlp не видит.
     // Запрошено аудио — фолбэк на фотографию не имеет смысла: человек
     // не должен видеть «не удалось забрать фотографию» вместо звука.
-    if (item->state == QueueItem::State::failed
+    bool failedNow = false;
+    {
+        const std::lock_guard<std::mutex> sl (mutex);
+        failedNow = item->state == QueueItem::State::failed;
+    }
+    if (failedNow
         && item->service == Detector::Service::pinterest
         && ! item->isAudio
         && item->files.empty()
@@ -849,6 +880,7 @@ void Engine::consume (const Str& line, const QueueItemPtr& item, Str& errTail)
     }
     if (kd::contains (raw, "has already been downloaded"))
     {
+        const std::lock_guard<std::mutex> sl (mutex);
         item->skipped++;
         return;
     }
@@ -857,7 +889,8 @@ void Engine::consume (const Str& line, const QueueItemPtr& item, Str& errTail)
 
     // Ход загрузки — обычные строки «[download]  12.3% of 9.78MiB at …».
     // Свой --progress-template вместе с --concurrent-fragments yt-dlp не
-    // печатает, поэтому читаем обычные.
+    // печатает, поэтому читаем обычные. Проценты в статус не пишем —
+    // доля показывается только шкалой.
     if (kd::startsWith (raw, "[download]"))
     {
         const int pct = kd::indexOfChar (raw, '%');
@@ -870,15 +903,11 @@ void Engine::consume (const Str& line, const QueueItemPtr& item, Str& errTail)
             const auto value = kd::getDouble (head.substr (start));
             if (value > 0.0)
             {
-                item->state = QueueItem::State::working;
-                item->progress = (float) (value < 0.0 ? 0.0 : value > 100.0 ? 100.0 : value) / 100.0f;
-                // Не топтать «Качаю 2 из 14»: процент прицепляем отдельным хвостом.
-                const Str midDot = "\u00B7";
-                if (kd::contains (item->stage, midDot))
-                    item->stage = kd::trim (kd::upToFirst (item->stage, midDot));
-                char pctText[32];
-                std::snprintf (pctText, sizeof (pctText), "%.1f", value);
-                item->stage = kd::trimEnd (item->stage) + Str (" \u00B7 ") + pctText + "%";
+                {
+                    const std::lock_guard<std::mutex> sl (mutex);
+                    item->state = QueueItem::State::working;
+                    item->progress = (float) (value < 0.0 ? 0.0 : value > 100.0 ? 100.0 : value) / 100.0f;
+                }
                 fireChanged();
             }
         }
@@ -887,33 +916,86 @@ void Engine::consume (const Str& line, const QueueItemPtr& item, Str& errTail)
     if (! kd::startsWith (raw, "@")) return;
 
     // Наши маркеры: @T|индекс|всего|название и @F|путь файла.
-    const auto parts = kd::splitTokens (raw, "|");
-    if (parts.size() >= 4 && parts[0] == "@T")
+    // Название и путь могут содержать «|» — служебных полей ровно три,
+    // дальше берём хвост целиком (аудит: заголовок резался, путь портился).
+    if (kd::startsWith (raw, "@T"))
     {
-        item->itemIndex = kd::getInt (parts[1]);
-        if (const int n = kd::getInt (parts[2]); n > 0) item->itemTotal = n;
-        // Название показываем сразу, с первых метаданных источника, а не
-        // после скачивания: у плейлистовых роликов это готовое имя файла
-        // («01 - Название»), у одиночных — название источника с суффиксом
-        // ХРОНа. После файла (маркер @F) имя уточнится до фактического.
-        if (! item->nameOverride.empty())
-            item->title = item->nameOverride;
-        else if (item->title.empty())
-            item->title = parts[3] + chronSuffix (item->sections);
-        item->progress = 0;
-        item->state = QueueItem::State::working;
-        item->stage = item->itemTotal > 1
-            ? "Качаю " + std::to_string (item->itemIndex) + " из " + std::to_string (item->itemTotal)
-            : "Качаю…";
+        const auto body = kd::fromFirst (raw, "@T|");
+        const int p1 = kd::indexOf (body, "|");
+        if (p1 < 0) return;
+        const auto tail1 = body.substr ((size_t) p1 + 1);
+        const int p2 = kd::indexOf (tail1, "|");
+        if (p2 < 0) return;
+        const auto tail2 = tail1.substr ((size_t) p2 + 1);
+        const int p3 = kd::indexOf (tail2, "|");
+        if (p3 < 0) return;
+        const auto index = kd::getInt (tail1.substr (0, (size_t) p1));
+        const auto total = kd::getInt (tail2.substr (0, (size_t) p2));
+        const auto title = tail2.substr ((size_t) p3 + 1);
+        {
+            const std::lock_guard<std::mutex> sl (mutex);
+            item->itemIndex = index;
+            if (total > 0) item->itemTotal = total;
+            // Название показываем сразу, с первых метаданных источника, а не
+            // после скачивания. После файла (маркер @F) имя уточнится до
+            // фактического.
+            if (! item->nameOverride.empty())
+                item->title = item->nameOverride;
+            else if (item->title.empty())
+                item->title = title + chronSuffix (item->sections);
+            item->progress = 0;
+            item->state = QueueItem::State::working;
+            item->stage = item->itemTotal > 1
+                ? "Качаю " + std::to_string (item->itemIndex) + " из " + std::to_string (item->itemTotal)
+                : "Качаю…";
+        }
         fireChanged();
     }
-    else if (parts.size() >= 2 && parts[0] == "@F")
+    else if (kd::startsWith (raw, "@F"))
     {
-        item->files.push_back (parts[1]);
-        item->progress = 1;
-        // Финальное имя файла — истина: строка «в процессе» и после
-        // «Готово» совпадают.
-        item->title = kd::stem (fs::u8path (parts[1]));
+        // Путь — весь хвост после «@F|» (может содержать «|»).
+        const auto path = kd::trim (kd::fromFirst (raw, "@F|"));
+        Str accepted;
+        if (! path.empty())
+        {
+            const auto target = fs::u8path (path);
+            // Аудит: в files[] не должно попадать чужое. Принимаем только
+            // абсолютный путь внутри папки назначения, записанный не раньше
+            // старта этой попытки (перевод строки в названии источника
+            // мог подставить в маркер любой путь).
+            if (target.is_absolute())
+            {
+                std::error_code ec;
+                const auto base = fs::weakly_canonical (item->dest, ec);
+                const auto full = fs::weakly_canonical (target, ec).u8string();
+                const auto bs = base.u8string();
+                const bool inside = ! ec && ! bs.empty()
+                    && full.size() > bs.size()
+                    && full.compare (0, bs.size(), bs) == 0
+                    && (bs == "/" || full[bs.size()] == '/');
+                struct stat st {};
+                const bool fresh = ! ec
+                    && ::stat (kd::pathStr (target).c_str(), &st) == 0
+                    && st.st_mtime >= item->startedWall - 2;
+                if (inside && fresh)
+                    accepted = full;
+                else
+                    engineLog ("маркер @F отклонён (чужой или старый путь): " + path);
+            }
+            else
+            {
+                engineLog ("маркер @F отклонён (путь не абсолютный): " + path);
+            }
+        }
+        if (! accepted.empty())
+        {
+            const std::lock_guard<std::mutex> sl (mutex);
+            item->files.push_back (accepted);
+            item->progress = 1;
+            // Финальное имя файла — истина: строка «в процессе» и после
+            // «Готово» совпадают.
+            item->title = kd::stem (fs::u8path (accepted));
+        }
     }
 }
 
@@ -963,7 +1045,10 @@ void Engine::startPlaylist (const QueueItemPtr& item)
         return;
     }
 
-    item->itemTotal = (int) urls.size();
+    {
+        const std::lock_guard<std::mutex> sl (mutex);
+        item->itemTotal = (int) urls.size();
+    }
     const auto subdir = safeName (listTitle);
 
     // Только анонимные попытки: автоматические cookie браузера вызывают
@@ -983,9 +1068,12 @@ void Engine::startPlaylist (const QueueItemPtr& item)
                 finish (item, QueueItem::State::failed, "Отменено");
                 return;
             }
-            item->itemIndex = (int) i + 1;
-            item->itemTotal = (int) urls.size();
-            item->progress = (float) i / (float) urls.size();
+            {
+                const std::lock_guard<std::mutex> sl (mutex);
+                item->itemIndex = (int) i + 1;
+                item->itemTotal = (int) urls.size();
+                item->progress = (float) i / (float) urls.size();
+            }
             setStage (item, "Качаю " + std::to_string (i + 1)
                           + " из " + std::to_string (urls.size()));
 
@@ -1026,7 +1114,7 @@ void Engine::startPlaylist (const QueueItemPtr& item)
             const int before = (int) item->files.size();
             RunState rs;
             runYtDlp (item, args, rs);
-            if (item->state == QueueItem::State::paused) return; // пауза — остальные ждут
+            if (isPausedNow (item)) return; // пауза — остальные ждут
             if (item->cancelled())
             {
                 finish (item, QueueItem::State::failed, "Отменено");
@@ -1219,7 +1307,7 @@ void Engine::startNative (const QueueItemPtr& item)
         RunState rs;
         const bool ran = runYtDlp (item, args, rs, &code);
         lastErr = rs.errTail;
-        if (item->state == QueueItem::State::paused) return; // пауза
+        if (isPausedNow (item)) return; // пауза
         if (item->cancelled())
         {
             finish (item, QueueItem::State::failed, "Отменено");
@@ -1264,6 +1352,7 @@ void Engine::startNative (const QueueItemPtr& item)
                         if (ec) fs::copy_file (cut, src,
                             fs::copy_options::overwrite_existing, ec);
                         fs::remove (cut, ec);
+                        const std::lock_guard<std::mutex> sl (mutex);
                         item->files.clear();
                         item->files.push_back (kd::pathStr (src));
                     }
@@ -1271,6 +1360,7 @@ void Engine::startNative (const QueueItemPtr& item)
                     {
                         fs::remove (cut, ec);
                         fs::remove (src, ec);
+                        const std::lock_guard<std::mutex> sl (mutex);
                         item->files.clear();
                         finish (item, QueueItem::State::failed,
                             "Обрезка не удалась: источник отдал короткий поток. "
@@ -1289,22 +1379,28 @@ void Engine::startNative (const QueueItemPtr& item)
                 const auto parts = kd::splitTokens (item->sections, "-");
                 const int fromSec = parts.size() > 0 ? parseTimecode (parts[0]) : -1;
                 const int toSec = parts.size() > 1 ? parseTimecode (parts[1]) : -1;
-                const double want = fromSec >= 0 && toSec > fromSec
-                    ? (double) (toSec - fromSec) : 0.0;
-                const double got = probeFileDuration (fs::u8path (item->files.front()));
-                if (want > 0 && got > 0 && got < want * 0.6)
+            const double want = fromSec >= 0 && toSec > fromSec
+                ? (double) (toSec - fromSec) : 0.0;
+            const double got = probeFileDuration (fs::u8path (item->files.front()));
+            // Отрезок обязан быть отрезком: источник, отдавший запись
+            // целиком (или огрызок), не засчитывается (аудит KL-006).
+            const double slack = want * 0.1 + 3.0;
+            if (want > 0 && got > 0 && (got < want - slack || got > want + slack))
+            {
+                std::error_code ec;
+                fs::remove (fs::u8path (item->files.front()), ec);
                 {
-                    std::error_code ec;
-                    fs::remove (fs::u8path (item->files.front()), ec);
+                    const std::lock_guard<std::mutex> sl (mutex);
                     item->files.clear();
-                    finish (item, QueueItem::State::failed,
-                        "Обрезка не удалась: получился отрезок "
-                        + fmtSeconds ((int) (got + 0.5)) + " вместо "
-                        + fmtSeconds ((int) (want + 0.5))
-                        + " — источник отдаёт короткий поток, попробуйте без ХРОНа");
-                    return;
                 }
+                finish (item, QueueItem::State::failed,
+                    "ХРОН не получился: источник отдал запись длиной "
+                    + fmtSeconds ((int) (got + 0.5)) + " вместо "
+                    + fmtSeconds ((int) (want + 0.5))
+                    + ". В этом качестве нет точной резки — выберите другое качество или скачайте без ХРОНа");
+                return;
             }
+        }
             // Аудио: «Готово» только когда файл физически существует и
             // содержит звуковую дорожку (проверка длительности).
             if (item->isAudio && ! item->files.empty())
@@ -1320,6 +1416,7 @@ void Engine::startNative (const QueueItemPtr& item)
                     }
                 if (! audioOk)
                 {
+                    const std::lock_guard<std::mutex> sl (mutex);
                     item->files.clear();
                     finish (item, QueueItem::State::failed,
                         "Аудио не удалось обработать — попробуйте ещё раз");
@@ -1332,7 +1429,10 @@ void Engine::startNative (const QueueItemPtr& item)
                 stage += " · файлов: " + std::to_string (item->files.size());
             if (item->skipped > 0)
                 stage += " · уже было: " + std::to_string (item->skipped);
-            item->progress = 1;
+            {
+                const std::lock_guard<std::mutex> sl (mutex);
+                item->progress = 1;
+            }
             // Pinterest+МУЗЫКА: у HLS-потока звука дорожка не помечена —
             // извлекаем её из скачанного видео сами.
             if (item->isAudio && item->service == Detector::Service::pinterest
@@ -1354,6 +1454,7 @@ void Engine::startNative (const QueueItemPtr& item)
                 if (ran && ffCode == 0 && kd::isFile (out))
                 {
                     fs::remove (src, ec);
+                    const std::lock_guard<std::mutex> sl (mutex);
                     item->files.clear();
                     item->files.push_back (kd::pathStr (out));
                     stage = "Готово";
@@ -1365,7 +1466,10 @@ void Engine::startNative (const QueueItemPtr& item)
             }
             // В диспетчере фрагмент подписан именем файла с диапазоном.
             if (! item->sections.empty() && item->files.size() == 1)
+            {
+                const std::lock_guard<std::mutex> sl (mutex);
                 item->title = kd::stem (fs::u8path (item->files.front()));
+            }
             finish (item, QueueItem::State::done, stage);
             return;
         }
@@ -1464,13 +1568,17 @@ void Engine::startResolve (const QueueItemPtr& item)
         return;
     }
 
-    item->itemTotal = (int) tracks.size();
+    {
+        const std::lock_guard<std::mutex> sl (mutex);
+        item->itemTotal = (int) tracks.size();
+    }
 
     // Альбом складываем в отдельную папку.
     if (tracks.size() > 1 && ! album.empty())
     {
         const auto folder = item->dest / fs::u8path (safeName (album));
         kd::ensureDir (folder);
+        const std::lock_guard<std::mutex> sl (mutex);
         item->dest = folder;
     }
 
@@ -1585,9 +1693,12 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
                             const int expectedDuration)
 {
     const auto query = artist.empty() ? track : artist + " - " + track;
-    item->itemIndex = index + 1;
-    item->title = query;
-    item->progress = 0;
+    {
+        const std::lock_guard<std::mutex> sl (mutex);
+        item->itemIndex = index + 1;
+        item->title = query;
+        item->progress = 0;
+    }
     // Одиночный трек качается без счётчиков: «Качаю…», а не «1 из 1».
     setStage (item, item->itemTotal > 1
         ? "Качаю " + std::to_string (index + 1) + " из " + std::to_string (item->itemTotal)
@@ -2061,7 +2172,10 @@ void Engine::startPhotoFallback (const QueueItemPtr& item)
             finish (item, QueueItem::State::failed, "Отменено");
         return;
     }
-    item->progress = 1;
+    {
+        const std::lock_guard<std::mutex> sl (mutex);
+        item->progress = 1;
+    }
     finish (item, QueueItem::State::done, "Готово · фотография");
 }
 
@@ -2144,6 +2258,7 @@ bool Engine::downloadPinterestPhoto (const QueueItemPtr& item)
             if (code == 0 && fs::exists (converted))
             {
                 fs::remove (finalPath, ec);
+                const std::lock_guard<std::mutex> sl (mutex);
                 item->files.push_back (kd::pathStr (converted));
                 if (! title.empty()) item->title = title;
                 return true;
@@ -2151,8 +2266,11 @@ bool Engine::downloadPinterestPhoto (const QueueItemPtr& item)
         }
     }
 
-    item->files.push_back (kd::pathStr (finalPath));
-    if (! title.empty()) item->title = title;
+    {
+        const std::lock_guard<std::mutex> sl (mutex);
+        item->files.push_back (kd::pathStr (finalPath));
+        if (! title.empty()) item->title = title;
+    }
     return true;
 }
 

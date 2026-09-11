@@ -84,6 +84,8 @@ struct QueueItem
     bool forceOverwrite = false;
     /// Сколько раз задание уже автоматически повторялось после сети.
     int autoRetries = 0;
+    /// Момент старта текущей попытки (для отсечения чужих файлов в @F).
+    std::time_t startedWall = 0;
 
     std::shared_ptr<Flags> flags = std::make_shared<Flags>();
 
@@ -294,6 +296,8 @@ private:
     /// процесс не поднялся (тогда состояние уже выставлено).
     bool runYtDlp (const QueueItemPtr& item, const StrVec& args,
                    RunState& rs, int* exitCodeOut = nullptr);
+    /// Чтение state под мьютексом: состояние пишет и воркер, и cancel.
+    bool isPausedNow (const QueueItemPtr& item);
     void consume (const Str& line, const QueueItemPtr& item, Str& errTail);
     void finish (const QueueItemPtr& item, QueueItem::State state,
                  const Str& stage = {});

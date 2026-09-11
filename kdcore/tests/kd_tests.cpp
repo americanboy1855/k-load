@@ -443,6 +443,59 @@ static void testLiveDownload (kd_engine* e)
         std::to_string (cutSize) + " < " + std::to_string (fullSize));
 }
 
+// Инъекции в маркерах @T/@F (аудит KL-002/005/007): чужие и старые пути
+// не попадают в files[], «|» в названии и пути не рвут данные.
+static void testConsumeMarkers()
+{
+    const auto tools = fs::temp_directory_path() / "kd-consume-tools";
+    const auto dest = fs::temp_directory_path() / "kd-consume-out";
+    const auto outside = fs::temp_directory_path() / "kd-consume-outside";
+    std::error_code ec;
+    fs::remove_all (tools, ec); fs::remove_all (dest, ec); fs::remove_all (outside, ec);
+    fs::create_directories (tools / "ytdlp");
+    fs::create_directories (outside);
+    { std::ofstream f (tools / "ffmpeg"); f << "# приманка\n"; }
+
+    const auto stub = tools / "ytdlp" / "yt-dlp_macos";
+    {
+        std::ofstream f (stub);
+        f << "#!/bin/sh\n"
+          << "prev=\"\"\n"
+          << "for a in \"$@\"; do if [ \"$prev\" = \"-P\" ]; then d=\"$a\"; fi; prev=\"$a\"; done\n"
+          << "mkdir -p \"$d\"\n"
+          << "printf x > \"" << outside.u8string() << "/evil.mp4\"\n"
+          << "printf x > \"$d/Old.mp4\"\n"
+          << "touch -t 202001010000 \"$d/Old.mp4\"\n"
+          << "printf x > \"$d/a|b Fresh.mp4\"\n"
+          << "echo \"@T|1|1|Название с | пайпом\"\n"
+          << "echo \"@F|" << outside.u8string() << "/evil.mp4\"\n"
+          << "echo \"@F|$d/Old.mp4\"\n"
+          << "echo \"@F|$d/a|b Fresh.mp4\"\n"
+          << "echo \"[download] 50.0% of 1.00MiB\"\n"
+          << "exit 0\n";
+    }
+    fs::permissions (stub, fs::perms::owner_exec, fs::perm_options::add);
+
+    const std::string opts = "{\"dest\":\"" + dest.u8string() + "\",\"mode\":\"video\"}";
+    kd_engine* e = kd_engine_create (kd::pathStr (tools).c_str());
+    check (kd_enqueue_batch (e, "[\"https://example.com/inject\"]", opts.c_str()) == 1,
+        "consume: задание поставлено");
+
+    const auto snap = waitForState (e, 1, "done", "failed", 30);
+    check (snap.find ("\"state\":\"done\"") != std::string::npos,
+        "consume: задание завершилось", snap.substr (0, 200));
+    check (snap.find ("evil.mp4") == std::string::npos,
+        "consume: путь вне папки назначения отклонён", snap.substr (0, 400));
+    check (snap.find ("Old.mp4") == std::string::npos,
+        "consume: файл со старым временем отклонён", snap.substr (0, 400));
+    check (snap.find ("a|b Fresh.mp4") != std::string::npos,
+        "consume: «|» в названии и пути не рвут данные", snap.substr (0, 400));
+    check (snap.find ("Название с ") == std::string::npos,
+        "consume: заголовок с «|» не обрезал данные до первой черты", snap.substr (0, 400));
+    kd_engine_destroy (e);
+    fs::remove_all (tools, ec); fs::remove_all (dest, ec); fs::remove_all (outside, ec);
+}
+
 int main (int argc, char** argv)
 {
     const bool live = argc > 1 && std::string (argv[1]) == "--live";
@@ -452,6 +505,7 @@ int main (int argc, char** argv)
     testNames();
     testYtFileName();
     testPredictFiles();
+    testConsumeMarkers();
     testCAPIPure();
     testPauseResume();
 

@@ -2435,13 +2435,17 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         : playlist
             ? (playlistLimit > 0 ? playlistLimit : (p?.count ?? 1))
             : 1;
-    final goLabel = 'СКАЧАТЬ · $goCount';
     // Пачка: кнопка мертва, пока разборы не собраны — проверка «уже
     // скачано» обязана пройти по всем ссылкам до запуска загрузки.
     final batchReady = !isBatch ||
         (!batchProbing && batchProcessed >= batchLinks.length);
     final canDownload = batchReady &&
         (isBatch || (p != null && p.ok && !p.drm));
+    // Пока пачка разбирается, кнопка честно показывает подготовку вместо
+    // молча неработающего СКАЧАТЬ.
+    final goLabel = isBatch && !batchReady
+        ? 'ПОДГОТОВКА…'
+        : 'СКАЧАТЬ · $goCount';
     final videoLabel = mediaMode ? 'МЕДИА' : 'ВИДЕО';
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
