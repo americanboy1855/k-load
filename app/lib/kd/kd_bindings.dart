@@ -135,20 +135,18 @@ class KdBindings {
 
   static KdBindings? _instance;
 
-  /// Открывает libkdcore: сначала явный путь из K_LOAD_DYLIB, затем рядом
-  /// с бандлом, затем сборка ядра в дереве проекта (разработка).
+  /// Открывает libkdcore: сначала явный путь из K_LOAD_DYLIB (тесты),
+  /// затем рядом с бинарем приложения — dev-сборка кладёт dylib именно
+  /// туда. Относительные пути от текущей папки убраны (аудит KL-018):
+  /// они зависели от того, откуда запущено, и могли подцепить чужую
+  /// библиотеку.
   static KdBindings open() {
     if (_instance != null) return _instance!;
-    // Проект может лежать на iCloud-синхронизируемом рабочем столе, поэтому
-    // пути считаем от бинаря приложения, а не от текущей директории.
     final exeDir = File(Platform.resolvedExecutable).parent.path;
-    final root9 = List.filled(9, '..').join('/');
     final candidates = <String>[
       if (Platform.environment['K_LOAD_DYLIB'] != null)
         Platform.environment['K_LOAD_DYLIB']!,
       '$exeDir/libkdcore.dylib',
-      '$exeDir/$root9/kdcore/build/libkdcore.dylib',
-      'kdcore/build/libkdcore.dylib',
     ];
     Object? lastError;
     for (final path in candidates) {
@@ -162,7 +160,7 @@ class KdBindings {
     }
     throw StateError(
         'libkdcore.dylib не найдена (пути: $candidates): $lastError\n'
-        'Собери ядро: cd kdcore && cmake -B build && cmake --build build');
+        'Собери ядро и запусти через scripts/dev-build.sh');
   }
 
   final DynamicLibrary lib;

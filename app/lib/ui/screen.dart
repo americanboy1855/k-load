@@ -903,6 +903,15 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   // ---- скачать ----
 
+  /// Эффективный лимит плейлиста: пустое поле — весь плейлист, введённый
+  /// «0» — ошибка ввода: качаем один ролик (аудит: «0» означал «весь»).
+  int get playlistLimitEffective {
+    if (playlistLimit > 0) return playlistLimit;
+    if (countCtrl.text == '0') return 1;
+    return 0;
+  }
+
+
   String? get sectionsArg {
     if (!chronOn || chronLocked) return null;
     final from = normTC(chronFrom.text), to = normTC(chronTo.text);
@@ -1006,7 +1015,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
     final p = probe;
     final playlist = !isBatch && (p?.isPlaylist ?? false);
-    final limit = playlist && playlistLimit > 0 ? playlistLimit : 0;
+    final limit = playlist && playlistLimitEffective > 0
+        ? playlistLimitEffective
+        : 0;
 
     // Такой же вариант уже качается или ждёт в очереди — второй раз не
     // ставим: два воркера на один .part не запускаем. «Уже скачано» —
@@ -2433,7 +2444,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     final goCount = isBatch
         ? batchCount
         : playlist
-            ? (playlistLimit > 0 ? playlistLimit : (p?.count ?? 1))
+            ? (playlistLimitEffective > 0 ? playlistLimitEffective : (p?.count ?? 1))
             : 1;
     // Пачка: кнопка мертва, пока разборы не собраны — проверка «уже
     // скачано» обязана пройти по всем ссылкам до запуска загрузки.

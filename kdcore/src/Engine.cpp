@@ -39,7 +39,13 @@ void Engine::engineLog (const Str& line)
     const auto dir = appDataRoot() / "K LOAD";
     std::error_code ec;
     fs::create_directories (dir, ec);
-    std::ofstream out (dir / "engine.log", std::ios::app);
+    // Ротация: журнал свыше 1 МБ уезжает в .1 (прошлый затирается) —
+    // без этого он растёт бесконечно (аудит KL-008).
+    const auto log = dir / "engine.log";
+    if (fs::exists (log, ec)
+        && fs::file_size (log, ec) > 1024 * 1024)
+        fs::rename (log, dir / "engine.log.1", ec);
+    std::ofstream out (log, std::ios::app);
     if (! out.good()) return;
 
     char stamp[32] = {};
@@ -277,7 +283,8 @@ StrVec Engine::splitLinks (const Str& text)
         // Кавычки вокруг ссылки снимаем: копипаст из мессенджеров.
         while (! t.empty() && (t.front() == '"' || t.front() == '\'')) t.erase (t.begin());
         while (! t.empty() && (t.back() == '"' || t.back() == '\'')) t.pop_back();
-        if (t.empty() || ! Detector::looksLikeLink (t)) continue;
+        // Ссылка с ведущим дефисом стала бы опцией загрузчика (аудит KL-004).
+        if (t.empty() || t.front() == '-' || ! Detector::looksLikeLink (t)) continue;
         // Повторы одной вставки в пачку не дублируются.
         if (kd::contains (seen, "\n" + t + "\n")) continue;
         seen += t + "\n";
@@ -296,10 +303,12 @@ void Engine::enqueueBatch (const StrVec& links, const Options& options)
         for (const auto& link : links)
         {
             // Страховка от мусора: задание — ссылка (или поисковый запрос
-            // движка ytsearch/scsearch). Голый текст в очередь не попадает.
-            if (! Detector::looksLikeLink (link)
-                && ! kd::startsWith (link, "ytsearch")
-                && ! kd::startsWith (link, "scsearch"))
+            // движка ytsearch/scsearch). Голый текст в очередь не попадает,
+            // как и «ссылка» с ведущим дефисом (аудит KL-004).
+            if (kd::startsWith (link, "-")
+                || (! Detector::looksLikeLink (link)
+                    && ! kd::startsWith (link, "ytsearch")
+                    && ! kd::startsWith (link, "scsearch")))
                 continue;
             auto item = std::make_shared<QueueItem>();
             item->id = nextId++;
@@ -375,6 +384,7 @@ void Engine::cancel (int id)
 {
     if (auto item = findItem (id))
     {
+        const std::lock_guard<std::mutex> sl (mutex);
         const bool wasPaused = item->state == QueueItem::State::paused;
         item->setCancelled();
         // Приостановленное никто не качает: воркер спит до снятия паузы,
@@ -456,8 +466,31 @@ std::vector<QueueItem> Engine::snapshot() const
 
 // Изменение задания под мьютексом: его одновременно читают snapshot
 // (интерфейс), другие воркеры и clearFinished (см. TSan-аудит).
+// Аудит KL-011: недокачанный «хвост» после повтора с --no-part остаётся
+// с финальным именем и позже считается скачанным. Убираем свежие файлы
+// задания, чей stem совпадает с ожидаемым названием, если файлов нет.
+static void cleanupFreshPartial (const QueueItemPtr& item)
+{
+    if (item->dest.empty() || item->title.empty()) return;
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator (item->dest, ec))
+    {
+        if (! entry.is_regular_file (ec)) continue;
+        if (kd::stem (entry.path()) != item->title) continue;
+        struct stat st {};
+        if (::stat (entry.path().string().c_str(), &st) != 0) continue;
+        if (st.st_mtime >= item->startedWall - 2)
+            fs::remove (entry.path(), ec);
+    }
+}
+
 void Engine::finish (const QueueItemPtr& item, QueueItem::State state, const Str& stage)
 {
+    // Недокачанный «хвост» (--no-part после сбоя сети) не должен считаться
+    // скачанным: пока файлов у задания нет — убираем свежие под его именем.
+    if (state == QueueItem::State::failed
+        && item->files.empty() && item->stallRetried)
+        cleanupFreshPartial (item);
     {
         const std::lock_guard<std::mutex> sl (mutex);
         item->state = state;
@@ -715,7 +748,11 @@ static Str childPath (const fs::path& tools)
 }
 
 // Тихий запуск yt-dlp: весь stdout одним куском (для -J разбора).
-static bool captureOut (const StrVec& args, Str& out, int* code = nullptr)
+// Тихий запуск yt-dlp: весь stdout одним куском (для -J разбора).
+// maxSeconds — жёсткий потолок: зависший процесс глохнет, разбор возвращает
+// неудачу (аудит KL-010: зависший -J блокировал все разборы навсегда).
+static bool captureOut (const StrVec& args, Str& out, int* code = nullptr,
+                        int maxSeconds = 120)
 {
     const auto tools = Engine::findToolsDir();
     if (tools.empty()) return false;
@@ -730,11 +767,23 @@ static bool captureOut (const StrVec& args, Str& out, int* code = nullptr)
 
     char chunk[16384];
     std::ostringstream mb;
+    const auto started = std::chrono::steady_clock::now();
     for (;;)
     {
         const int n = proc.read (chunk, sizeof (chunk), 30);
         if (n > 0) mb.write (chunk, n);
         else if (n == 0) break; // поток закрыт — процесс закончил вывод
+        if (std::chrono::duration_cast<std::chrono::seconds> (
+                std::chrono::steady_clock::now() - started).count() > maxSeconds)
+        {
+            proc.kill();
+            proc.waitExitCode();
+            Engine::engineLog ("разбор не уложился в " + std::to_string (maxSeconds)
+                               + " с — процесс остановлен");
+            out = mb.str();
+            if (code != nullptr) *code = -1;
+            return true;
+        }
     }
     out = mb.str();
     if (code != nullptr) *code = proc.waitExitCode();
@@ -861,6 +910,12 @@ bool Engine::runYtDlp (const QueueItemPtr& item, const StrVec& args,
                         fs::remove (entry.path(), ec);
                 }
                 launchArgs.push_back ("--no-part");
+                // Флаг для уборки: недокачанный файл с финальным именем
+                // не должен считаться скачанным (см. finish).
+                {
+                    const std::lock_guard<std::mutex> sl (mutex);
+                    item->stallRetried = true;
+                }
             }
             continue;
         }
@@ -1003,12 +1058,14 @@ void Engine::consume (const Str& line, const QueueItemPtr& item, Str& errTail)
 
 void Engine::startPlaylist (const QueueItemPtr& item)
 {
-    // Плоский список роликов: быстро, без скачивания.
-    StrVec args { "--ignore-config", "--no-warnings", "--flat-playlist", "-J" };
+    // Плоский список роликов: быстро, без скачивания. Большому плейлисту
+    // даём больше времени, но не бесконечность.
+    StrVec args { "--ignore-config", "--no-warnings", "--socket-timeout", "20",
+                  "--retries", "1", "--flat-playlist", "-J" };
     args.push_back (item->link);
     Str out;
     int code = -1;
-    if (! captureOut (args, out, &code) || code != 0 || out.empty())
+    if (! captureOut (args, out, &code, 300) || code != 0 || out.empty())
     {
         finish (item, QueueItem::State::failed,
             "Не удалось прочитать плейлист — проверьте ссылку и сеть");
@@ -1109,6 +1166,7 @@ void Engine::startPlaylist (const QueueItemPtr& item)
             std::snprintf (index, sizeof (index), "%02d", (int) i + 1);
             args.push_back ("-o");
             args.push_back (subdir + "/" + index + " - %(title).100B.%(ext)s");
+            if (i == 0) args.push_back ("--"); // ссылки — только позиционные
             args.push_back (urls[i]);
 
             const int before = (int) item->files.size();
@@ -1132,6 +1190,7 @@ void Engine::startPlaylist (const QueueItemPtr& item)
 
     if (done > 0)
     {
+        const std::lock_guard<std::mutex> sl (mutex);
         item->progress = 1;
         Str stage = "Готово · файлов: " + std::to_string (done);
         if (failed > 0) stage += " · пропущено: " + std::to_string (failed);
@@ -1301,6 +1360,9 @@ void Engine::startNative (const QueueItemPtr& item)
             }
         }
 
+        // «--» отделяет ссылки от опций: URL из чужого плейлиста, начинающийся
+        // с дефиса, не должен стать опцией загрузчика (аудит KL-004).
+        args.push_back ("--");
         args.push_back (item->link);
 
         int code = -1;
@@ -1609,11 +1671,17 @@ void Engine::startResolve (const QueueItemPtr& item)
             "Ничего не нашлось по названиям треков");
         return;
     }
-    item->progress = 1;
+    {
+        const std::lock_guard<std::mutex> sl (mutex);
+        item->progress = 1;
+    }
     // Одиночный трек — просто «Готово», без счётчиков. Фрагмент подписан
     // именем файла с диапазоном.
     if (! item->sections.empty() && item->files.size() == 1)
+    {
+        const std::lock_guard<std::mutex> sl (mutex);
         item->title = kd::stem (fs::u8path (item->files.front()));
+    }
     finish (item, QueueItem::State::done,
             tracks.size() > 1
                 ? "Готово · треков: " + std::to_string (item->files.size())
@@ -1771,6 +1839,7 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
             return;
         }
         StrVec args = makeArgs();
+        args.push_back ("--");
         args.push_back (url);
         RunState rs;
         if (! runYtDlp (item, args, rs)) return; // отменено/пауза — состояние выставлено
@@ -1789,6 +1858,7 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
         for (const auto& a : kd::splitWhitespace ("--ignore-errors --max-downloads 1"))
             args.push_back (a);
         // Пять кандидатов: первый результат бывает защищённым или недоступным.
+        args.push_back ("--");
         args.push_back (searchSite == Detector::Service::soundcloud
                       ? "scsearch5:" + query
                       : "ytsearch5:" + query);
@@ -2554,8 +2624,10 @@ Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
             if (! vid.empty())
                 prefetchThumbnail ("https://i.ytimg.com/vi/" + vid + "/hqdefault.jpg");
         }
-        StrVec args { "--ignore-config", "--no-warnings", "-J" };
+        StrVec args { "--ignore-config", "--no-warnings", "--socket-timeout", "20",
+                      "--retries", "1", "-J" };
         args.push_back (flat ? "--flat-playlist" : "--no-playlist");
+        args.push_back ("--");
         args.push_back (link);
         int code = -1;
         Str out;

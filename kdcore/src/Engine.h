@@ -86,6 +86,8 @@ struct QueueItem
     int autoRetries = 0;
     /// Момент старта текущей попытки (для отсечения чужих файлов в @F).
     std::time_t startedWall = 0;
+    /// Был повтор после «застоя» с --no-part — за ним убирают хвосты.
+    bool stallRetried = false;
 
     std::shared_ptr<Flags> flags = std::make_shared<Flags>();
 

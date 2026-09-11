@@ -5,10 +5,13 @@
 #include "VpnMonitor.h"
 
 #include <nlohmann/json.hpp>
-#include <cstring>
+#include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <vector>
 
 #include "third_party/dart/dart_api_dl.h"
 
@@ -24,6 +27,20 @@ struct kd_engine
     std::unique_ptr<VpnMonitor> vpn;
     std::atomic<int64_t> port { 0 };
 };
+
+// Живые движки: на выходе из процесса каждый корректно останавливается
+// (аудит KL-009 — раньше kd_engine_destroy никто не звал).
+static std::mutex& enginesMutex()
+{
+    static std::mutex m;
+    return m;
+}
+static std::vector<kd_engine*>& liveEngines()
+{
+    static std::vector<kd_engine*> v;
+    return v;
+}
+static bool atexitRegistered = false;
 
 static const char* KD_VERSION = "1.0.0";
 
@@ -127,12 +144,29 @@ kd_engine* kd_engine_create (const char* tools_dir)
                   { "state", state == VpnMonitor::State::on ? "on" : "off" } };
         postToPort (e, ev.dump());
     });
+
+    // Аудит KL-009: движок должен корректно останавливаться при выходе из
+    // приложения — активный yt-dlp получает SIGTERM, сирот не остаётся.
+    {
+        const std::lock_guard<std::mutex> g (enginesMutex());
+        if (! atexitRegistered)
+        {
+            std::atexit ([]{ for (auto* e : liveEngines()) kd_engine_destroy (e); });
+            atexitRegistered = true;
+        }
+        liveEngines().push_back (e);
+    }
     return e;
 }
 
 void kd_engine_destroy (kd_engine* e)
 {
     if (e == nullptr) return;
+    {
+        const std::lock_guard<std::mutex> g (enginesMutex());
+        auto& live = liveEngines();
+        live.erase (std::remove (live.begin(), live.end(), e), live.end());
+    }
     e->vpn.reset();
     e->engine.reset();
     delete e;

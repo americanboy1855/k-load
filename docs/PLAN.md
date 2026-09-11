@@ -5,7 +5,7 @@
 Полный контекст: `docs/HANDOFF-K-LOAD.md` (дубликат /tmp/HANDOFF-K-LOAD.md).
 
 ## Зафиксировано
-- Имя: **K LOAD**. Папка загрузок: **K DWNLD** внутри выбранной пользователем папки.
+- Имя: **K LOAD**. Папка загрузок: **K LOAD** внутри выбранной пользователем папки.
 - macOS первым; Windows позже. Единое C++ ядро без JUCE (`libkdcore` + C-API):
   Flutter через FFI, будущий VST — напрямую.
 - Логотип kvartal (`~/.zcode/skills/webcore/assets/brand/kvartal-logo.svg`)
