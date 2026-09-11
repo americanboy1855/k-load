@@ -197,6 +197,8 @@ static Engine::Options parseOptions (const char* options_json)
         o.playlistLimit = data["playlistLimit"].get<int>();
     if (data.contains ("durationHint") && data["durationHint"].is_number_integer())
         o.durationHint = data["durationHint"].get<int>();
+    if (data.contains ("forceOverwrite") && data["forceOverwrite"].is_boolean())
+        o.forceOverwrite = data["forceOverwrite"].get<bool>();
     return o;
 }
 
@@ -304,6 +306,16 @@ void kd_probe_async_source (kd_engine* e, const char* text, const char* source)
     const Str src (source == nullptr ? "" : source);
     e->engine->probeAsync (t, [e, t] (const Probe& p)
         { postToPort (e, probeToJson (p, t).dump()); }, src);
+}
+
+// Предсказание итоговых файлов по папке назначения — для окна «этот файл
+// уже скачан». request_json: {"files":[...]} с заявками (см. kd_capi.h);
+// ответ: {"results":[{"i":0,"dir":…,"name":…,"path":…,"exists":true|false}]}.
+char* kd_predict_files (kd_engine* e, const char* request_json)
+{
+    (void) e; // имена и папка не зависят от состояния движка
+    if (request_json == nullptr) return dupString ("{\"results\":[]}");
+    return dupString (Engine::predictFiles (request_json));
 }
 
 char* kd_thumb_path (kd_engine* e, const char* url)

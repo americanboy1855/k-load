@@ -53,6 +53,9 @@ typedef _ProbeSourceDart = void Function(Pointer<Void>, Pointer<Utf8>, Pointer<U
 typedef _ThumbPathNative = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
 typedef _ThumbPathDart = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
 
+typedef _PredictNative = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
+typedef _PredictDart = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
+
 class KdBindings {
   KdBindings._(this.lib) {
     _attach = lib
@@ -108,6 +111,9 @@ class KdBindings {
         .asFunction();
     _thumbPath = lib
         .lookup<NativeFunction<_ThumbPathNative>>('kd_thumb_path')
+        .asFunction();
+    _predictFiles = lib
+        .lookup<NativeFunction<_PredictNative>>('kd_predict_files')
         .asFunction();
     _vpnState = lib
         .lookup<NativeFunction<_IntEngineNative>>('kd_vpn_state')
@@ -179,6 +185,7 @@ class KdBindings {
   late final _VoidEngineStringDart _probeAsync;
   late final _ProbeSourceDart _probeAsyncSource;
   late final _ThumbPathDart _thumbPath;
+  late final _PredictDart _predictFiles;
   late final _IntEngine _vpnState;
   late final _StringEngine _defaultDest;
   late final _StringEngine _toolsStatus;
@@ -350,7 +357,8 @@ class KdCore {
       {String? dest, bool audio = false, String quality = 'best',
        String audioFormat = 'mp3', int wholePlaylist = -1, String? nameOverride,
        String? sections, int playlistLimit = 0, String container = 'mp4',
-       String imageFormat = 'jpg', int durationHint = 0}) {
+       String imageFormat = 'jpg', int durationHint = 0,
+       bool forceOverwrite = false}) {
     final linksJson = jsonEncode(links).toNativeUtf8();
     final opts = jsonEncode({
       if (dest != null) 'dest': dest,
@@ -364,6 +372,7 @@ class KdCore {
       'container': container,
       'imageFormat': imageFormat,
       if (durationHint > 0) 'durationHint': durationHint,
+      if (forceOverwrite) 'forceOverwrite': true,
     }).toNativeUtf8();
     final n = _b._enqueueBatch(_engine, linksJson, opts);
     calloc
@@ -426,6 +435,19 @@ class KdCore {
         as Map<String, dynamic>;
     calloc.free(t);
     return r;
+  }
+
+  /// Предсказание итоговых файлов по папке назначения: заявки описываются
+  /// теми же значениями, что уйдут в очередь (см. kd_capi.h). Отвечает
+  /// списком {"i":…,"path":…,"name":…,"exists":…} — источник правды для
+  /// окна «этот файл уже скачан». Без сети: заголовки уже у карточки.
+  List<Map<String, dynamic>> predictFiles(List<Map<String, dynamic>> files) {
+    final req = jsonEncode({'files': files}).toNativeUtf8();
+    final raw = _b._take(_b._predictFiles(_engine, req));
+    calloc.free(req);
+    final out = jsonDecode(raw) as Map<String, dynamic>;
+    return [for (final r in (out['results'] ?? []) as List)
+      Map<String, dynamic>.from(r as Map)];
   }
 
   void cancel(int id) => _b._cancel(_engine, id);

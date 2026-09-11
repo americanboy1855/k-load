@@ -334,6 +334,7 @@ void Engine::enqueueBatch (const StrVec& links, const Options& options)
             item->container = options.container;
             item->imageFormat = options.imageFormat;
             item->durationHint = options.durationHint;
+            item->forceOverwrite = options.forceOverwrite;
             item->dest = options.dest;
             item->batchIndex = total > 1 ? ++index : 0;
             item->batchTotal = total;
@@ -989,6 +990,9 @@ void Engine::startPlaylist (const QueueItemPtr& item)
                           + " из " + std::to_string (urls.size()));
 
             StrVec args = baseArgs (item->dest, attempts[attempt]);
+            // «Скачать ещё раз»: после baseArgs — значит, старше --no-overwrites
+            // не остаётся; существующий файл заменяется по завершении загрузки.
+            if (item->forceOverwrite) args.push_back ("--force-overwrites");
             if (item->isAudio)
             {
                 for (const auto& a : kd::splitWhitespace ("-f bestaudio/best -x"))
@@ -1074,6 +1078,9 @@ void Engine::startNative (const QueueItemPtr& item)
             setStage (item, "Пробую ещё раз…");
 
         StrVec args = baseArgs (item->dest, attempts[attempt]);
+        // «Скачать ещё раз»: перекачка с заменой (--no-overwrites из baseArgs
+        // перебивается поздним флагом).
+        if (item->forceOverwrite) args.push_back ("--force-overwrites");
 
         if (item->isAudio && item->service != Detector::Service::pinterest)
         {
@@ -1590,6 +1597,7 @@ void Engine::downloadTrack (const QueueItemPtr& item, const int index,
     auto makeArgs = [&]() -> StrVec
     {
         StrVec args = baseArgs (item->dest, {});
+        if (item->forceOverwrite) args.push_back ("--force-overwrites");
         for (const auto& a : kd::splitWhitespace ("-f bestaudio/best -x")) args.push_back (a);
         args.push_back ("--audio-format");
         args.push_back (audioFormatName (item->audioFormat));
@@ -2195,6 +2203,109 @@ Str Engine::safeName (const Str& s)
         out = kd::replaceChar (out, bad, ' ');
     out = kd::trim (out);
     return out.empty() ? Str ("track") : out.substr (0, 110);
+}
+
+// MARK: - предсказание имён файлов («этот файл уже скачан»)
+
+Str Engine::ytFileName (const Str& title, int maxBytes)
+{
+    // Зеркало sanitize_filename yt-dlp в обычном (не restricted) режиме:
+    // запрещённые символы не выбрасываются, а заменяются полноширинными
+    // двойниками. Проверено офлайн-печатью имени по info-json бинаром
+    // 2026.08.19: «a/b» → «a⧸b», перевод строки — в пробел, таб и прочие
+    // управляющие — вон; точки и пробелы по краям сохраняются.
+    Str s = title;
+    if (maxBytes > 0 && (int) s.size() > maxBytes)
+    {
+        // %(title).NB режет сырые байты ДО санитизации; хвост разбитой
+        // UTF-8 буквы не оставляем.
+        int cut = maxBytes;
+        while (cut > 0 && ((unsigned char) s[(size_t) cut] & 0xC0) == 0x80)
+            --cut;
+        s = s.substr (0, (size_t) cut);
+    }
+    Str out;
+    out.reserve (s.size());
+    for (const char ch : s)
+    {
+        const auto c = (unsigned char) ch;
+        if (c == '\n') { out.push_back (' '); continue; }
+        if (c < 32 || c == 127) continue;
+        out.push_back (ch);
+    }
+    static const std::pair<const char*, const char*> bad[] = {
+        { "/", "⧸" }, { "\\", "⧹" }, { ":", "：" }, { "*", "＊" },
+        { "?", "？" }, { "\"", "＂" }, { "<", "＜" }, { ">", "＞" },
+        { "|", "｜" },
+    };
+    for (const auto& b : bad)
+        out = kd::replaceAll (out, b.first, b.second);
+    return out;
+}
+
+Str Engine::predictFiles (const Str& requestJson)
+{
+    // Заявки приносит интерфейс — из тех же данных, что уйдут в очередь
+    // (заголовок разбора, формат, ХРОН), поэтому имена совпадают байт в
+    // байт с тем, что потом назовёт yt-dlp. Сеть и разбор не нужны.
+    const auto data = json::parse (requestJson, nullptr, false);
+    json results = json::array();
+    if (data.is_discarded() || ! data.is_object()
+        || ! data.contains ("files") || ! data["files"].is_array())
+        return json { { "results", results } }.dump();
+
+    int i = -1;
+    for (const auto& r : data["files"])
+    {
+        ++i;
+        const auto dir = jtext (r, "dir");
+        const auto ext = jtext (r, "ext");
+        const auto sections = jtext (r, "sections");
+        const auto suffix = jtext (r, "suffix");
+        const auto kind = jtext (r, "kind");
+
+        Str name;
+        if (kind == "literal")
+        {
+            // Имя задаёт приложение (поиск по названию, ролики плейлиста,
+            // фотография): safeName + суффикс формата + диапазон ХРОНа.
+            name = safeName (jtext (r, "name")) + suffix + chronSuffix (sections);
+        }
+        else if (kind == "flat")
+        {
+            // Плейлист внутри пачки: папка по названию подборки, файлы
+            // «01 - Название» — шаблон startPlaylist.
+            char index[8];
+            std::snprintf (index, sizeof (index), "%02d", (int) jnum (r, "index"));
+            name = safeName (jtext (r, "playlistTitle")) + "/" + index
+                 + " - " + ytFileName (jtext (r, "title"), 100);
+        }
+        else
+        {
+            // Одиночная запись: имя даёт заголовок источника. У каталогов
+            // (Spotify, Apple, ВК Музыка) файл называется «Артист - Трек»
+            // из разбора — как в downloadTrack.
+            const auto title = jtext (r, "title");
+            const auto service = (Detector::Service) (int) jnum (r, "service");
+            name = (Detector::needsResolve (service)
+                        ? safeName (title)
+                        : ytFileName (title, 120))
+                 + suffix + chronSuffix (sections);
+        }
+        if (! ext.empty()) name += "." + ext;
+
+        const auto target = dir.empty() ? fs::u8path (name)
+                                        : fs::u8path (dir) / fs::u8path (name);
+        std::error_code ec;
+        const bool exists = ! dir.empty() && ! name.empty()
+                            && fs::exists (target, ec);
+        results.push_back ({ { "i", i },
+                             { "dir", dir },
+                             { "name", name },
+                             { "path", kd::pathStr (target) },
+                             { "exists", exists } });
+    }
+    return json { { "results", results } }.dump();
 }
 
 // MARK: - разбор ссылки для карточки

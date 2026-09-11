@@ -98,7 +98,7 @@ UserMessage mapUserMessage(String raw) {
   }
 
   // --- доступ к источнику ---
-  if (has(['drm', 'защищён'])) {
+  if (has(['drm', 'защищ'])) {
     return const UserMessage('sourceDrm', 'ЗАПИСЬ ЗАЩИЩЕНА DRM',
         'Скачивание защищённых записей невозможно.', 'openLink');
   }
@@ -160,8 +160,32 @@ UserMessage mapUserMessage(String raw) {
   }
 
   return const UserMessage('internal', 'ЧТО-ТО ПОШЛО НЕ ТАК',
-      'Попробуйте ещё раз — обычно помогает.', 'retry');
+      'Попробуйте ещё раз, обычно помогает.', 'retry');
 }
+
+/// Единый вид ошибки на экране: ЗАГОЛОВОК, длинное тире, подсказка
+/// в квадратных скобках. Никаких «+» и кавычек.
+String userMessageText(UserMessage m) => '${m.title} — [${m.hint}]';
+
+/// Что нашлось в папке назначения перед запуском загрузки. Одиночная
+/// запись — окно с «открыть в папке»; пачка ссылок или плейлист — одно
+/// общее окно «УЖЕ СКАЧАНО: N ИЗ M» на всю пачку.
+class _DupeNotice {
+  const _DupeNotice({
+    required this.batch,
+    required this.existing,
+    required this.total,
+    this.openFolder,
+  });
+  final bool batch; // true — общее окно пачки/плейлиста
+  final int existing; // сколько файлов уже лежит в папке
+  final int total; // сколько файлов уйдёт в загрузку
+  final String? openFolder; // что открыть кнопкой «ОТКРЫТЬ В ПАПКЕ»
+}
+
+/// Чем запускать загрузку: обычный запуск, замена уже скачанных файлов
+/// («скачать ещё раз») или только новые («пропустить скачанные»).
+enum _GoAction { go, overwrite, skipExisting }
 
 class KLoadScreen extends StatefulWidget {
   const KLoadScreen({super.key});
@@ -232,9 +256,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   bool clearHover = false;
   // диспетчер показан в пустом состоянии после [ОЧИСТИТЬ]
   bool queueShown = false;
-  // уже скачанный эквивалент: показываем аккуратное уведомление
-  KdItem? dupeNotice;
-  bool forceDownload = false;
+  // уже скачанное — окно поверх экрана: одиночное («ЭТОТ ФАЙЛ УЖЕ СКАЧАН»)
+  // или пачка («УЖЕ СКАЧАНО: N ИЗ M»)
+  _DupeNotice? dupeNotice;
   // качество видео: реальные высоты (дефолт 1080P); МАКСИМУМ убран
   String quality = '1080';
   bool qualityOpen = false;
@@ -268,6 +292,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   int batchIdx = 0;
   int batchProcessed = 0;
   int batchDuration = 0;
+  // разборы ссылок пачки — источник заголовков для проверки «уже скачано»
+  List<KdProbeEvent?> batchProbes = const [];
 
   // очередь
   List<KdItem> items = [];
@@ -386,10 +412,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       if (e.on && wasOff && booted) _recoverAfterVpn();
     } else if (e is KdProbeEvent) {
       if (batchProbing) {
-        // Пачка: копим хронометраж и переходим к следующей ссылке.
+        // Пачка: копим хронометраж, запоминаем разбор (заголовки нужны
+        // проверке «уже скачано») и переходим к следующей ссылке.
         var dur = 0;
         if (e.ok && !e.isPlaylist) dur = e.duration;
         setState(() {
+          if (batchIdx >= 0 && batchIdx < batchProbes.length) {
+            batchProbes[batchIdx] = e;
+          }
           batchProcessed += 1;
           batchDuration += dur;
           batchIdx += 1;
@@ -562,6 +592,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       playlistLimit = 0;
       countCtrl.clear();
       batchProbing = false;
+      batchProbes = const [];
       showResultList = false;
       selectedResultUrl = null;
       searchResults = const [];
@@ -603,8 +634,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         isBatch = true;
         batchCount = links.length;
         batchLinks = links;
+        batchProbes = List<KdProbeEvent?>.filled(links.length, null);
       } else {
         isBatch = false;
+        batchProbes = const [];
       }
     });
     _probeWatchdog?.cancel();
@@ -922,23 +955,19 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     return _variantSig(it.link, it.isAudio, fmt, it.sections, quality);
   }
 
-  /// Такой же вариант уже скачан или прямо сейчас качается/ждёт в очереди?
-  /// Полный ≠ фрагмент, видео ≠ музыка, разные форматы и диапазоны —
-  /// разные варианты, их проверка не задевает.
-  KdItem? _findDupe(String link, bool audio, String fmt, String chron, String quality) {
-    final sig = _variantSig(link, audio, fmt, chron, quality);
-    for (final it in items) {
-      if (it.isPhoto) continue;
-      final finished = it.state == 'done' && it.files.isNotEmpty;
-      final pending =
-          it.state == 'queued' || it.state == 'working' || it.state == 'paused';
-      if (!finished && !pending) continue;
-      if (_itemSig(it) == sig) return it;
-    }
-    return null;
-  }
+  /// Сервисы, где очередь всегда качает звук, даже если на карточке выбрано
+  /// видео (зеркало правила enqueueBatch в ядре): YT Music, Spotify,
+  /// Apple Music, ВК Музыка, SoundCloud.
+  bool _forcedAudio(int service) =>
+      service == 1 || service == 6 || service == 7 || service == 8 ||
+      service == 9;
 
-  void _download() {
+  /// « [m4a]» — ядро помечает не-mp3 аудио в имени файла, чтобы варианты
+  /// одного контента не затирали друг друга.
+  String _audioSuffix(bool audio, String fmt) =>
+      audio && fmt != 'mp3' ? ' [$fmt]' : '';
+
+  void _download({_GoAction action = _GoAction.go}) {
     final c = core;
     if (c == null) return;
     final secs = sectionsArg;
@@ -979,107 +1008,286 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     final playlist = !isBatch && (p?.isPlaylist ?? false);
     final limit = playlist && playlistLimit > 0 ? playlistLimit : 0;
 
-    // Такой же вариант уже скачан или стоит в очереди? Полный файл,
-    // видео- и аудио-варианты, другие форматы и диапазоны — не совпадают.
-    // Готовый — плашка с действиями; качающийся/ждущий — тост: второй
-    // воркер на тот же .part не запускаем.
-    if (!forceDownload && !isBatch && p != null && p.ok && !p.isPlaylist) {
+    // Такой же вариант уже качается или ждёт в очереди — второй раз не
+    // ставим: два воркера на один .part не запускаем. «Уже скачано» —
+    // отдельная проверка по ПАПКЕ назначения: она работает и после
+    // очистки списка, и после перезапуска приложения; диспетчер для неё
+    // не источник правды.
+    if (!isBatch && p != null && p.ok && !p.isPlaylist && !p.isPhoto) {
       final link = targetLink(rawText);
-      if (link.isNotEmpty) {
-        final dupe = _findDupe(link, audio, fmt, secs ?? '', qualitySig);
-        if (dupe != null) {
-          if (dupe.state == 'done') {
-            setState(() { dupeNotice = dupe; });
-          } else {
-            _showToast('ТАКОЙ ФАЙЛ УЖЕ СТОИТ В ОЧЕРЕДИ');
-          }
-          return;
-        }
+      if (link.isNotEmpty &&
+          busy.contains(_variantSig(link, audio, fmt, secs ?? '', qualitySig))) {
+        _showToast('ТАКОЙ ФАЙЛ УЖЕ СТОИТ В ОЧЕРЕДИ');
+        return;
       }
     }
-    forceDownload = false;
 
     if (isBatch) {
-      final fresh =
-          batchLinks.where((l) => !busyVariant(l)).toList();
+      // Пачка: по каждой ссылке предсказываем итоговые файлы (разборы
+      // пачки уже собраны в batchProbes) и сверяем с папкой назначения.
+      final candidates = <String>[]; // ссылки, которые уйдут в очередь
+      final reqs = <Map<String, dynamic>>[];
+      final reqLink = <String>[];
+      for (var i = 0; i < batchLinks.length; i++) {
+        final l = batchLinks[i];
+        if (busyVariant(l)) continue;
+        candidates.add(l);
+        final bp = i < batchProbes.length ? batchProbes[i] : null;
+        if (bp == null || !bp.ok) continue; // имя неизвестно — качаем как новое
+        if (bp.isPlaylist) {
+          // Плейлист внутри пачки ляжет в свою папку с нумерацией —
+          // проверяем каждый ролик по шаблону ядра.
+          final isAud = audio || _forcedAudio(bp.service);
+          final ext = isAud ? audioFormat : videoContainer;
+          var n = 0;
+          for (final e in bp.entries) {
+            n += 1;
+            reqs.add({
+              'kind': 'flat',
+              'dir': destFolder,
+              'playlistTitle': bp.title.isEmpty ? 'Плейлист' : bp.title,
+              'index': n,
+              'title': (e['title'] ?? '') as String,
+              'ext': ext,
+            });
+            reqLink.add(l);
+          }
+        } else {
+          final isAud = audio || _forcedAudio(bp.service);
+          final ext = isAud ? audioFormat : videoContainer;
+          reqs.add({
+            'kind': 'template',
+            'dir': destFolder,
+            'title': bp.title,
+            'service': bp.service,
+            'ext': ext,
+            'suffix': _audioSuffix(isAud, ext),
+          });
+          reqLink.add(l);
+        }
+      }
+      final found =
+          reqs.isEmpty ? const <Map<String, dynamic>>[] : c.predictFiles(reqs);
+      var existing = 0;
+      final byLink = <String, List<bool>>{};
+      for (var k = 0; k < found.length; k++) {
+        final ok = found[k]['exists'] == true;
+        if (ok) existing += 1;
+        byLink.putIfAbsent(reqLink[k], () => []).add(ok);
+      }
+      if (action == _GoAction.go && existing > 0) {
+        // Одно общее окно на всю пачку, а не окно на каждый файл.
+        setState(() => dupeNotice = _DupeNotice(
+            batch: true,
+            existing: existing,
+            total: found.length,
+            openFolder: destFolder));
+        return;
+      }
+      // «Пропустить скачанные»: ссылка уходит в очередь, только если у неё
+      // есть хоть один новый файл. Частично скачанный плейлист ядро
+      // докачает само, не трогая готовые ролики (--no-overwrites).
+      final fresh = action == _GoAction.skipExisting
+          ? candidates
+              .where((l) => !(byLink[l]?.every((e) => e) ?? false))
+              .toList()
+          : candidates;
       if (fresh.isEmpty) return;
       c.enqueueBatch(fresh,
           audio: audio,
           quality: quality,
           container: videoContainer,
-          durationHint: 0);
-    } else {
-      if (p == null || !p.ok) return;
-      // Pinterest-фотография звука не содержит: предупреждаем до запуска,
-      // а не ошибкой в диспетчере после.
-      if (audio && p.isPhoto) {
-        _showToast('ПО ССЫЛКЕ ФОТОГРАФИЯ — АУДИО НЕДОСТУПНО');
+          durationHint: 0,
+          forceOverwrite: action == _GoAction.overwrite);
+      _refreshItems(c);
+      return;
+    }
+
+    if (p == null || !p.ok) return;
+    // Pinterest-фотография звука не содержит: предупреждаем до запуска,
+    // а не ошибкой в диспетчере после.
+    if (audio && p.isPhoto) {
+      _showToast('ПО ССЫЛКЕ ФОТОГРАФИЯ — АУДИО НЕДОСТУПНО');
+      return;
+    }
+
+    if (p.isPhoto) {
+      final link = targetLink(rawText);
+      if (photoBusy.contains(_contentKey(link))) return;
+      // Фотография называется названием пина (safeName в ядре) + формат.
+      final found = c.predictFiles([
+        {
+          'kind': 'literal',
+          'dir': destFolder,
+          'name': p.title.isEmpty ? 'Фотография Pinterest' : p.title,
+          'ext': imageFormat == 'png' ? 'png' : 'jpg',
+        }
+      ]);
+      if (action == _GoAction.go &&
+          found.isNotEmpty &&
+          found.first['exists'] == true) {
+        setState(() => dupeNotice = _DupeNotice(
+            batch: false,
+            existing: 1,
+            total: 1,
+            openFolder: destFolder));
         return;
       }
-      if (p.isPhoto) {
-        final link = targetLink(rawText);
-        if (photoBusy.contains(_contentKey(link))) return;
-        c.enqueuePhoto(link, imageFormat: imageFormat);
-      } else if (playlist) {
-        // Плейлист раскладывается на ОТДЕЛЬНЫЕ задачи: у каждого ролика
-        // свой статус, прогресс и повтор; ошибка одного не валит остальные.
-        final entries = p.entries;
-        final title = p.title.isEmpty ? 'Плейлист' : p.title;
-        final folder = '$destFolder/${safeFileName(title)}';
-        if (entries.isNotEmpty) {
-          var i = 0;
-          var queued = 0;
-          for (final e in entries) {
-            i += 1;
-            if (limit > 0 && i > limit) break;
-            final url = (e['url'] ?? '') as String;
-            if (url.isEmpty || busyVariant(url)) continue;
-            final t = (e['title'] ?? '') as String;
-            c.enqueueBatch([url],
-                dest: folder,
-                audio: audio,
-                nameOverride: '${i.toString().padLeft(2, '0')} - $t',
-                quality: quality,
-                container: videoContainer,
-                audioFormat: audioFormat);
-            queued += 1;
+      c.enqueuePhoto(link, imageFormat: imageFormat);
+      _refreshItems(c);
+      return;
+    }
+
+    if (playlist) {
+      // Плейлист раскладывается на ОТДЕЛЬНЫЕ задачи: у каждого ролика
+      // свой статус, прогресс и повтор; ошибка одного не валит остальные.
+      final entries = p.entries;
+      final title = p.title.isEmpty ? 'Плейлист' : p.title;
+      final folder = '$destFolder/${safeFileName(title)}';
+      final isAudEntries = audio || _forcedAudio(p.service);
+      final entryExt = isAudEntries ? audioFormat : videoContainer;
+      if (entries.isNotEmpty) {
+        // Та же нумерация и та же папка, что уйдут в очередь, — иначе
+        // сверка с папкой промахнётся мимо реальных имён файлов.
+        final idxs = <int>[];
+        final reqs = <Map<String, dynamic>>[];
+        var i = 0;
+        for (final e in entries) {
+          i += 1;
+          if (limit > 0 && i > limit) break;
+          final url = (e['url'] ?? '') as String;
+          if (url.isEmpty || busyVariant(url)) continue;
+          final t = (e['title'] ?? '') as String;
+          idxs.add(i);
+          reqs.add({
+            'kind': 'literal',
+            'dir': folder,
+            'name': '${i.toString().padLeft(2, '0')} - $t',
+            'ext': entryExt,
+          });
+        }
+        final found = reqs.isEmpty
+            ? const <Map<String, dynamic>>[]
+            : c.predictFiles(reqs);
+        var existing = 0;
+        for (final f in found) {
+          if (f['exists'] == true) existing += 1;
+        }
+        if (action == _GoAction.go && existing > 0) {
+          setState(() => dupeNotice = _DupeNotice(
+              batch: true,
+              existing: existing,
+              total: found.length,
+              openFolder: folder));
+          return;
+        }
+        var queued = 0;
+        for (var k = 0; k < idxs.length; k++) {
+          if (action == _GoAction.skipExisting &&
+              found[k]['exists'] == true) {
+            continue; // скачанные ролики не трогаем
           }
-          if (queued == 0 && busy.isNotEmpty) return; // всё уже в очереди
-        } else {
-          // Разбор без списка роликов — прежний путь целиком.
-          final link = p.link;
-          if (busyVariant(link)) return;
-          c.enqueueBatch([link],
+          final i2 = idxs[k];
+          final e = entries[i2 - 1];
+          final url = (e['url'] ?? '') as String;
+          final t = (e['title'] ?? '') as String;
+          c.enqueueBatch([url],
+              dest: folder,
               audio: audio,
-              wholePlaylist: 1,
-              playlistLimit: limit,
+              nameOverride: '${i2.toString().padLeft(2, '0')} - $t',
               quality: quality,
               container: videoContainer,
-              durationHint: p.duration);
+              audioFormat: audioFormat,
+              forceOverwrite: action == _GoAction.overwrite);
+          queued += 1;
         }
-      } else if (p.isSearch) {
-        // найденный по названию трек: файл называется запросом
-        final link = targetLink('');
-        if (link.isEmpty || busyVariant(link)) return;
-        c.enqueueBatch([link],
-            audio: audio,
-            sections: secs,
-            nameOverride: rawText,
-            quality: quality,
-            container: videoContainer,
-            audioFormat: audioFormat,
-            durationHint: p.duration);
+        if (queued == 0 && busy.isNotEmpty) return; // всё уже в очереди
       } else {
-        final link = targetLink(rawText);
+        // Разбор без списка роликов — прежний путь целиком; имена файлов
+        // даст сам плейлист при скачивании, сверить заранее нельзя.
+        final link = p.link;
         if (busyVariant(link)) return;
         c.enqueueBatch([link],
             audio: audio,
-            sections: secs,
+            wholePlaylist: 1,
+            playlistLimit: limit,
             quality: quality,
             container: videoContainer,
-            audioFormat: audioFormat,
-            durationHint: p.duration);
+            durationHint: p.duration,
+            forceOverwrite: action == _GoAction.overwrite);
       }
+      _refreshItems(c);
+      return;
+    }
+
+    if (p.isSearch) {
+      // Найденный по названию трек: файл называется запросом (nameOverride
+      // в ядре — суффикса формата в имени нет).
+      final link = targetLink('');
+      if (link.isEmpty || busyVariant(link)) return;
+      final found = c.predictFiles([
+        {
+          'kind': 'literal',
+          'dir': destFolder,
+          'name': rawText,
+          'ext': fmt,
+          'sections': ?secs,
+        }
+      ]);
+      if (action == _GoAction.go &&
+          found.isNotEmpty &&
+          found.first['exists'] == true) {
+        setState(() => dupeNotice = _DupeNotice(
+            batch: false,
+            existing: 1,
+            total: 1,
+            openFolder: destFolder));
+        return;
+      }
+      c.enqueueBatch([link],
+          audio: audio,
+          sections: secs,
+          nameOverride: rawText,
+          quality: quality,
+          container: videoContainer,
+          audioFormat: audioFormat,
+          durationHint: p.duration,
+          forceOverwrite: action == _GoAction.overwrite);
+    } else {
+      // Одиночная запись: имя файла даёт заголовок источника.
+      final link = targetLink(rawText);
+      if (busyVariant(link)) return;
+      final isAud = audio || _forcedAudio(p.service);
+      final ext = isAud ? audioFormat : videoContainer;
+      final found = c.predictFiles([
+        {
+          'kind': 'template',
+          'dir': destFolder,
+          'title': p.title,
+          'service': p.service,
+          'ext': ext,
+          'suffix': _audioSuffix(isAud, ext),
+          'sections': ?secs,
+        }
+      ]);
+      if (action == _GoAction.go &&
+          found.isNotEmpty &&
+          found.first['exists'] == true) {
+        setState(() => dupeNotice = _DupeNotice(
+            batch: false,
+            existing: 1,
+            total: 1,
+            openFolder: destFolder));
+        return;
+      }
+      c.enqueueBatch([link],
+          audio: audio,
+          sections: secs,
+          quality: quality,
+          container: videoContainer,
+          audioFormat: audioFormat,
+          durationHint: p.duration,
+          forceOverwrite: action == _GoAction.overwrite);
     }
     _refreshItems(c);
   }
@@ -1496,6 +1704,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       resultError = null;
       durationRetried = false;
       searchingNow = false;
+      batchProbes = const [];
       openPanel = '';
       chronOn = false;
       chronOpen = false;
@@ -1578,7 +1787,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
                       maxLines: 1, overflow: TextOverflow.ellipsis),
                 ]),
                 if (err != null)
-                  Text(err.toUpperCase(),
+                  Text(userMessageText(mapUserMessage(err)),
                       style: T.ps(7, c: Pal.error, ls: .02)),
               ]),
             ),
@@ -1590,7 +1799,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     );
   }
 
-  /// Ошибка текстового поиска: причина и повтор именно поиска.
+  /// Ошибка текстового поиска: единый формат (заголовок — [подсказка])
+  /// и повтор именно поиска.
   Widget _searchErrorPanel() {
     return GlitchIn(
       key: const ValueKey('panel-search-error'),
@@ -1602,15 +1812,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min, children: [
-              Builder(builder: (context) {
-                final m = mapUserMessage(resultError ?? '');
-                return Column(crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                  Text('ПОИСК НЕ УДАЛСЯ', style: T.ps(11, c: Pal.soft)),
-                  const SizedBox(height: 6),
-                  Text(m.hint, style: T.mono(11, c: Pal.dim)),
-                ]);
-              }),
+              Text(userMessageText(mapUserMessage(resultError ?? '')),
+                  style: T.mono(11, c: Pal.soft)),
               const SizedBox(height: 10),
               GestureDetector(
                 onTap: _startSeek,
@@ -1727,17 +1930,15 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     }
     if (p == null) return const SizedBox.shrink();
     if (!p.ok && !p.drm) {
-      // Разбор не удался: единая карта сообщений — понятный заголовок и
-      // действие. Состояние экрана не сбрасывается.
+      // Разбор не удался: единый формат ошибки — заголовок, тире,
+      // подсказка в квадратных скобках. Состояние экрана не сбрасывается.
       final msg = mapUserMessage(p.error);
       return DashedBox(
         color: Pal.amber.withValues(alpha: .35),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         child: Column(children: [
-          Text(msg.title, style: T.ps(11, c: Pal.soft), textAlign: TextAlign.center),
-          const SizedBox(height: 5),
-          Text(msg.hint,
-              style: T.mono(11, c: Pal.dim), textAlign: TextAlign.center),
+          Text(userMessageText(msg),
+              style: T.mono(11, c: Pal.soft), textAlign: TextAlign.center),
           const SizedBox(height: 9),
           Wrap(spacing: 8, runSpacing: 8, alignment: WrapAlignment.center,
               children: [
@@ -1759,8 +1960,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             const SizedBox(height: 8),
             Text(_drmTitle(p), style: T.mono(15), maxLines: 2, overflow: TextOverflow.ellipsis),
             const SizedBox(height: 4),
-            Text(p.error.toUpperCase(),
-                style: T.ps(9, c: Pal.error, ls: .04)),
+            // Единый формат ошибки: заголовок — [подсказка].
+            Text(userMessageText(const UserMessage('sourceDrm',
+                    'ЗАПИСЬ ЗАЩИЩЕНА DRM', 'Скачивание защищённых записей невозможно.', 'openLink')),
+                style: T.mono(11, c: Pal.error, ls: .02)),
           ]),
         ),
       ]);
@@ -1781,7 +1984,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             if (_showBackToResults) ...[
               const Spacer(),
               _GhostButton(
-                  label: 'К РЕЗУЛЬТАТАМ',
+                  label: 'ВЕРНУТЬСЯ К РЕЗУЛЬТАТАМ',
                   onTap: () => setState(() => showResultList = true)),
             ],
           ]),
@@ -2081,14 +2284,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       badge,
       if (src != null && src.startsWith('http')) ...[
         const SizedBox(width: 9),
-        GestureDetector(
-          // Открываем исходную каноническую ссылку выбранного контента.
+        // Ссылка-текст: подсвечивается только сама надпись в скобках.
+        _TextLink(
+          label: '[ССЫЛКА]',
           onTap: () => _openPath(src),
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: Text('[ССЫЛКА]',
-                style: T.mono(10, c: Pal.dim, ls: .04)),
-          ),
+          style: T.mono(10, c: Pal.dim, ls: .04),
         ),
       ],
     ]);
@@ -2471,21 +2671,23 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   Widget _queueHeader({bool compact = false}) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(13, 6, 13, 2),
-      child: Row(children: [
-        Text('ДИСПЕТЧЕР ЗАГРУЗОК', style: T.ps(9, c: Pal.soft, ls: .1)),
-        // Очистка стоит вплотную к заголовку, остальное место пустое.
-        if (!compact && items.isNotEmpty) ...[
-          const SizedBox(width: 10),
-          _GhostButton(
-            label: '[ОЧИСТИТЬ]',
-            onTap: _clearQueueHistory,
-            fontSize: 8,
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            border: false,
-          ),
+      child: Row(
+        // Кнопка по базовой линии надписи; правый край — по правому краю
+        // кнопок в строках списка (те же 13px от границы блока).
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          Text('ДИСПЕТЧЕР ЗАГРУЗОК', style: T.ps(9, c: Pal.soft, ls: .1)),
+          const Spacer(),
+          if (!compact && items.isNotEmpty)
+            _TextLink(
+              label: '[ОЧИСТИТЬ]',
+              onTap: _clearQueueHistory,
+              // Кегль — тот же, что у надписи «ДИСПЕТЧЕР ЗАГРУЗОК».
+              style: T.ps(9, c: Pal.dim, ls: .1),
+            ),
         ],
-        const Spacer(),
-      ]),
+      ),
     );
   }
 
@@ -2573,10 +2775,13 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   }
 
   /// Очистка истории: убирает записи диспетчера. Файлы на диске не
-  /// удаляются и в корзину не перемещаются.
+  /// удаляются и в корзину не перемещаются. Пауза при этом сбрасывается:
+  /// следующее «СКАЧАТЬ» запускает загрузку сразу, без отдельного ▶.
   void _clearQueueHistory() {
+    core?.setPaused(false);
     core?.clearFinished();
     setState(() {
+      queuePaused = false;
       items = core?.snapshot() ?? items;
       queueShown = true; // пустое состояние остаётся аккуратно видимым
     });
@@ -2610,10 +2815,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             Text(title,
                 style: T.mono(13, c: Pal.soft), maxLines: 1, overflow: TextOverflow.ellipsis),
             const SizedBox(height: 3),
+            // Статус или ошибка в едином формате: заголовок — [подсказка].
             Text(failed
-                ? mapUserMessage(it.stage).title
+                ? userMessageText(mapUserMessage(it.stage))
                 : it.stage.toUpperCase(),
-                style: T.ps(8, c: stageColor, ls: .04), maxLines: 2,
+                style: failed
+                    ? T.mono(11, c: stageColor, ls: .02)
+                    : T.ps(8, c: stageColor, ls: .04),
+                maxLines: 3,
                 overflow: TextOverflow.ellipsis),
           ]),
         ),
@@ -2690,27 +2899,36 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     });
   }
 
-  void _forceDownloadDupe(KdItem it) {
-    setState(() => forceDownload = true);
-    _closeDupeNotice(_download);
+  void _forceDownloadDupe() {
+    _closeDupeNotice(() => _download(action: _GoAction.overwrite));
   }
 
-  Widget _dupePlate(KdItem it) {
+  Widget _dupePlate(_DupeNotice n) {
     // Модальное окно по общему стандарту _KModal: затемнение и размытие
-    // фона, окно по центру, все кнопки равные.
+    // фона, окно по центру, все кнопки равные. Пачке — одно окно на всех
+    // с числом уже скачанных; одиночке — свой заголовок и «открыть папку».
     return _KModal(
       visible: !_dupeClosing,
-      title: 'ЭТОТ ФАЙЛ УЖЕ СКАЧАН',
+      title: n.batch
+          ? 'УЖЕ СКАЧАНО: ${n.existing} ИЗ ${n.total}'
+          : 'ЭТОТ ФАЙЛ УЖЕ СКАЧАН',
       onDismiss: () => _closeDupeNotice(),
-      actions: [
-        ('ОТКРЫТЬ В ПАПКЕ', () {
-          final f = it.files.isNotEmpty ? it.files.first : null;
-          _openPath(f != null ? File(f).parent.path : destFolder);
-          _closeDupeNotice();
-        }),
-        ('СКАЧАТЬ ЕЩЁ РАЗ', () => _forceDownloadDupe(it)),
-        ('ОТМЕНА', () => _closeDupeNotice()),
-      ],
+      actions: n.batch
+          ? [
+              ('ПРОПУСТИТЬ СКАЧАННЫЕ',
+                  () => _closeDupeNotice(() => _download(
+                      action: _GoAction.skipExisting))),
+              ('СКАЧАТЬ ВСЁ ЕЩЁ РАЗ', _forceDownloadDupe),
+              ('ОТМЕНА', () => _closeDupeNotice()),
+            ]
+          : [
+              ('ОТКРЫТЬ В ПАПКЕ', () {
+                _openPath(n.openFolder ?? destFolder);
+                _closeDupeNotice();
+              }),
+              ('СКАЧАТЬ ЕЩЁ РАЗ', _forceDownloadDupe),
+              ('ОТМЕНА', () => _closeDupeNotice()),
+            ],
     );
   }
 
@@ -3037,24 +3255,14 @@ class _ModeChipState extends State<_ModeChip> {
   }
 }
 
-// Кнопка-«призрак»: «К РЕЗУЛЬТАТАМ» (с пунктирной рамкой) и «[ОЧИСТИТЬ]»
-// (без рамки, скобки — часть надписи). Подсветка — только внутренняя
+// Кнопка-«призрак» с пунктирной рамкой: «ВЕРНУТЬСЯ К РЕЗУЛЬТАТАМ».
+// Текст всегда одной строкой — без переноса. Подсветка — только внутренняя
 // заливка, наружу не выходит. Состояние hover живёт в самом виджете и
 // сбрасывается по клику и по уходу курсора — залипание исключено.
 class _GhostButton extends StatefulWidget {
-  const _GhostButton({
-    super.key,
-    required this.label,
-    required this.onTap,
-    this.fontSize = 7,
-    this.padding = const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-    this.border = true,
-  });
+  const _GhostButton({super.key, required this.label, required this.onTap});
   final String label;
   final VoidCallback onTap;
-  final double fontSize;
-  final EdgeInsetsGeometry padding;
-  final bool border;
 
   @override
   State<_GhostButton> createState() => _GhostButtonState();
@@ -3090,12 +3298,13 @@ class _GhostButtonState extends State<_GhostButton> {
             final fill = Color.lerp(
                 Colors.transparent, Pal.amber.withValues(alpha: .08), t);
             final content = Padding(
-              padding: widget.padding,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               child: Text(widget.label,
-                  style: T.ps(widget.fontSize,
+                  maxLines: 1,
+                  softWrap: false,
+                  style: T.ps(7,
                       c: Color.lerp(Pal.dim, Pal.amber, t)!, ls: .08)),
             );
-            if (!widget.border) return Container(color: fill, child: content);
             return Container(
               color: fill,
               child: CustomPaint(
@@ -3105,6 +3314,65 @@ class _GhostButtonState extends State<_GhostButton> {
               ),
             );
           },
+        ),
+      ),
+    );
+  }
+}
+
+/// Скобочная текстовая кнопка («[ОЧИСТИТЬ]», «[ССЫЛКА]»): ни рамки, ни
+/// фона, ни свечения вокруг — при наведении подсвечивается ТОЛЬКО текст:
+/// цвет становится ярче плюс лёгкое свечение букв, живущее в естественных
+/// границах надписи (тень повторяет форму литер и не выходит за скобки).
+class _TextLink extends StatefulWidget {
+  const _TextLink({
+    required this.label,
+    required this.onTap,
+    required this.style,
+  });
+  final String label;
+  final VoidCallback onTap;
+  final TextStyle style; // базовый стиль; подсветка меняет только цвет
+
+  @override
+  State<_TextLink> createState() => _TextLinkState();
+}
+
+class _TextLinkState extends State<_TextLink> {
+  bool _hover = false;
+
+  void _setHover(bool v) {
+    if (_hover != v) setState(() => _hover = v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        _setHover(false);
+        widget.onTap();
+      },
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => _setHover(true),
+        onExit: (_) => _setHover(false),
+        onHover: (_) => _setHover(true),
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(end: _hover ? 1.0 : 0.0),
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+          builder: (context, t, _) => Text(
+            widget.label,
+            style: widget.style.copyWith(
+              color: Color.lerp(widget.style.color ?? Pal.dim, Pal.amber, t),
+              shadows: t > 0.01
+                  ? [Shadow(
+                      color: Pal.amber.withValues(alpha: .55 * t),
+                      blurRadius: 6 * t)]
+                  : null,
+            ),
+          ),
         ),
       ),
     );

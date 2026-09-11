@@ -84,6 +84,80 @@ static void testNames()
     check (Engine::cleanTrackName ("Song (feat. Someone)") == "Song (feat. Someone)", "cleanTrackName бережёт фита");
 }
 
+static void testYtFileName()
+{
+    std::cout << "ytFileName — зеркало sanitize_filename yt-dlp\n";
+    // Запрещённые символы становятся полноширинными двойниками (проверено
+    // офлайн-печатью имени бинаром 2026.08.19), кавычки-ёлочки живы.
+    check (Engine::ytFileName ("a/b:c?d\"e<f>f|g*h") == "a⧸b：c？d＂e＜f＞f｜g＊h",
+           "запрещённые символы → полноширинные");
+    check (Engine::ytFileName ("«Цитата» — трек") == "«Цитата» — трек", "ёлочки и тире не тронуты");
+    check (Engine::ytFileName ("back\\slash") == "back⧹slash", "обратный слэш → ⧹");
+    check (Engine::ytFileName ("a\tb") == "ab", "таб удалён");
+    check (Engine::ytFileName ("Многострочный\nзаголовок") == "Многострочный заголовок", "\\n → пробел");
+    // %(title).NB: сырые байты режутся до санитизации, граница UTF-8 целая.
+    std::string y60, y59;
+    for (int i = 0; i < 60; ++i) y60 += "\xD0\xAF";
+    for (int i = 0; i < 59; ++i) y59 += "\xD0\xAF";
+    check (Engine::ytFileName (y60 + "/", 120) == y60, "слэш за 120 байтами отрезан");
+    check (Engine::ytFileName (y59 + "/", 120) == y59 + "⧸", "слэш в лимите — санитизируется");
+}
+
+static void testPredictFiles()
+{
+    std::cout << "predictFiles — имена и проверка папки\n";
+    std::error_code ec;
+    const auto tmp = fs::temp_directory_path() / "kd_predict_test";
+    fs::create_directories (tmp, ec);
+    const auto dirJson = tmp.u8string();
+
+    // Одиночный ролик: шаблон %(title).120B + расширение контейнера + ХРОН.
+    char* out = kd_predict_files (nullptr, ("{\"files\":["
+        "{\"kind\":\"template\",\"dir\":\"" + dirJson + "\","
+        "\"title\":\"Clip: Первый?\",\"service\":0,\"ext\":\"mp4\",\"sections\":\"0:00-0:10\"}]}").c_str());
+    std::string res = out ? out : "";
+    kd_string_free (out);
+    check (res.find ("Clip： Первый？ [00:00–00:10].mp4") != std::string::npos,
+           "template: полноширинные + суффикс ХРОНа", res);
+    check (res.find ("\"exists\":false") != std::string::npos, "template: файла нет", res);
+
+    // Такой же файл, созданный на диске, — exists = true: проверка по папке,
+    // а не по диспетчеру (работает после очистки и перезапуска).
+    std::ofstream (tmp / "Clip： Первый？ [00:00–00:10].mp4") << "x";
+    out = kd_predict_files (nullptr, ("{\"files\":["
+        "{\"kind\":\"template\",\"dir\":\"" + dirJson + "\","
+        "\"title\":\"Clip: Первый?\",\"service\":0,\"ext\":\"mp4\",\"sections\":\"0:00-0:10\"}]}").c_str());
+    res = out ? out : "";
+    kd_string_free (out);
+    check (res.find ("\"exists\":true") != std::string::npos, "template: файл в папке найден", res);
+
+    // Ролик плейлиста: имя задаёт приложение, расширение — формат аудио.
+    out = kd_predict_files (nullptr, ("{\"files\":["
+        "{\"kind\":\"literal\",\"dir\":\"" + dirJson + "/Плейлист\","
+        "\"name\":\"01 - Песня\",\"ext\":\"mp3\"}]}").c_str());
+    res = out ? out : "";
+    kd_string_free (out);
+    check (res.find ("01 - Песня.mp3") != std::string::npos, "literal: имя плейлистного ролика", res);
+
+    // Плейлист внутри пачки: папка подборки + нумерация, титул до 100 байт.
+    out = kd_predict_files (nullptr, ("{\"files\":["
+        "{\"kind\":\"flat\",\"dir\":\"" + dirJson + "\","
+        "\"playlistTitle\":\"Мой: микс\",\"index\":2,\"title\":\"Трек?\",\"ext\":\"mp4\"}]}").c_str());
+    res = out ? out : "";
+    kd_string_free (out);
+    check (res.find ("Мой  микс/02 - Трек？.mp4") != std::string::npos,
+           "flat: папка (safeName) + номер + санитизация титула", res);
+
+    // Каталог (Spotify): файл называется «Артист - Трек» из разбора.
+    out = kd_predict_files (nullptr, "{\"files\":["
+        "{\"kind\":\"template\",\"dir\":\"\",\"title\":\"Forss - Flickermood\",\"service\":6,\"ext\":\"mp3\"}]}");
+    res = out ? out : "";
+    kd_string_free (out);
+    check (res.find ("Forss - Flickermood.mp3") != std::string::npos, "каталог: safeName от разбора", res);
+
+    fs::remove_all (tmp, ec);
+}
+
 static void testCAPIPure()
 {
     std::cout << "C-API: базовое\n";
@@ -376,6 +450,8 @@ int main (int argc, char** argv)
     testDetector();
     testLinkLogic();
     testNames();
+    testYtFileName();
+    testPredictFiles();
     testCAPIPure();
     testPauseResume();
 
