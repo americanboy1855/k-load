@@ -663,16 +663,24 @@ fs::path Engine::findToolsDir()
     if (const char* env = ::getenv ("K_DOWNLOADER_TOOLS")) // прежнее имя переменной
         if (kd::isDir (fs::u8path (env))) return fs::u8path (env);
 
-    const auto hasFfmpeg = [] (const fs::path& dir)
+    // Инструменты лежат либо в самой папке, либо в подпапке tools/
+    // (раскладка бандла: Contents/Resources/tools).
+    const auto hasTools = [] (const fs::path& dir)
     {
-        return kd::isFile (dir / "ffmpeg") || kd::isFile (dir / "ffmpeg.exe");
+        return kd::isFile (dir / "ffmpeg") || kd::isFile (dir / "ffmpeg.exe")
+            || kd::isFile (dir / "tools" / "ffmpeg")
+            || kd::isFile (dir / "tools" / "ffmpeg.exe");
+    };
+    const auto toolsRoot = [] (const fs::path& dir)
+    {
+        return kd::isFile (dir / "ffmpeg") ? dir : dir / "tools";
     };
 
     // 2. Установленные инструменты (fetch-tools, .pkg).
     const auto appSupport = appDataRoot() / "K LOAD" / "tools";
-    if (hasFfmpeg (appSupport)) return appSupport;
+    if (hasTools (appSupport)) return toolsRoot (appSupport);
     const auto systemTools = fs::path ("/Library/Application Support/K LOAD/tools");
-    if (hasFfmpeg (systemTools)) return systemTools;
+    if (hasTools (systemTools)) return toolsRoot (systemTools);
 
     // 3. Ресурсы собственного бандла — у приложения инструменты лежат здесь.
     char exePath [4096] = {};
@@ -683,11 +691,11 @@ fs::path Engine::findToolsDir()
     if (! exe.empty())
     {
         const auto resources = exe.parent_path().parent_path() / "Resources";
-        if (hasFfmpeg (resources)) return resources;
+        if (hasTools (resources)) return toolsRoot (resources);
 
         // 4. Рядом с приложением.
         const auto besideApp = exe.parent_path() / "tools";
-        if (hasFfmpeg (besideApp)) return besideApp;
+        if (hasTools (besideApp)) return besideApp;
     }
 
     // 5. Установленное приложение K LOAD: инструменты одни на машину,
@@ -698,7 +706,7 @@ fs::path Engine::findToolsDir()
         if (kd::startsWith (p.string(), "~"))
             p = DestResolver::homeDir() / p.string().substr (1);
         const auto res = p / "Contents" / "Resources";
-        if (hasFfmpeg (res)) return res;
+        if (hasTools (res)) return toolsRoot (res);
     }
 
     // 6. Дерево репозитория — разработка без установки (core/tools).
@@ -706,8 +714,8 @@ fs::path Engine::findToolsDir()
     for (int i = 0; i < 8; ++i)
     {
         const auto tools = dir / "core" / "tools";
-        if (hasFfmpeg (tools)) return tools;
-        if (hasFfmpeg (dir / "vendor")) return dir / "vendor";
+        if (hasTools (tools)) return tools;
+        if (hasTools (dir / "vendor")) return dir / "vendor";
         if (! dir.has_parent_path() || dir.parent_path() == dir) break;
         dir = dir.parent_path();
     }
