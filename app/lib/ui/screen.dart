@@ -94,13 +94,13 @@ UserMessage mapUserMessage(String raw) {
     'отказал', 'ssl', 'не робот', 'sign in to confirm', 'not a bot',
   ])) {
     return const UserMessage('networkVpn', 'НЕТ СЕТИ ИЛИ VPN',
-        'Проверьте интернет и включите VPN.', 'retry');
+        'Проверьте интернет и включите VPN', 'retry');
   }
 
   // --- доступ к источнику ---
   if (has(['drm', 'защищ'])) {
     return const UserMessage('sourceDrm', 'ЗАПИСЬ ЗАЩИЩЕНА DRM',
-        'Скачивание защищённых записей невозможно.', 'openLink');
+        'Скачивание защищённых записей невозможно', 'openLink');
   }
   if (has([
     'удалена', 'скрыта', 'требует входа', 'запись закрыта', 'закрыта',
@@ -109,58 +109,58 @@ UserMessage mapUserMessage(String raw) {
     'нет доступных роликов', 'по ссылке ничего нет',
   ])) {
     return const UserMessage('sourceGone', 'КОНТЕНТ НЕДОСТУПЕН',
-        'Запись удалена или закрыта авторами.', 'openLink');
+        'Запись удалена или закрыта авторами', 'openLink');
   }
   if (has(['не является ссылкой', 'адрес не опознан', 'не распознан',
            'unsupported url', 'no suitable', 'not a valid url'])) {
     return const UserMessage('unrecognized', 'ССЫЛКА НЕ РАСПОЗНАНА',
-        'Вставьте прямую ссылку на видео или трек.', 'retry');
+        'Вставьте прямую ссылку на видео или трек', 'retry');
   }
   if (has(['pinterest', 'не поддерживается', 'не поддерживает'])) {
     return const UserMessage('sourceAccess', 'ИСТОЧНИК НЕ ПОДДЕРЖИВАЕТ ПОИСК',
-        'Вставьте прямую ссылку на запись.', 'openLink');
+        'Вставьте прямую ссылку на запись', 'openLink');
   }
 
   // --- формат, качество и диапазон ---
   if (has(['отрезок', 'диапазон'])) {
     return const UserMessage('chronRange', 'НЕВЕРНЫЙ ДИАПАЗОН',
-        'Проверьте поля ОТ и ДО.', 'changeChron');
+        'Проверьте поля ОТ и ДО', 'changeChron');
   }
   if (has(['requested format', 'формате', 'формата нет', 'качестве нет'])) {
     return const UserMessage('formatUnavailable', 'ФОРМАТ НЕДОСТУПЕН',
-        'Выберите другое качество или формат.', 'changeFormat');
+        'Выберите другое качество или формат', 'changeFormat');
   }
 
   // --- аудио и видео ---
   if (has(['аудио', 'фотограф', 'фото', 'нет видео'])) {
     return const UserMessage('audioMissing', 'АУДИОДОРОЖКИ НЕТ',
-        'Попробуйте скачать видео или другую ссылку.', 'selectVideo');
+        'Попробуйте скачать видео или другую ссылку', 'selectVideo');
   }
 
   // --- файловая система ---
   if (has(['нет места', 'диску', 'permission', 'отказано в доступе',
            'read-only', 'права'])) {
     return const UserMessage('filesystem', 'НЕ УДАЛОСЬ СОХРАНИТЬ ФАЙЛ',
-        'Освободите место или выберите другую папку.', 'retry');
+        'Освободите место или выберите другую папку', 'retry');
   }
 
   // --- внутренние сбои ---
   if (has(['отменено'])) {
     return const UserMessage('cancelled', 'ЗАГРУЗКА ОТМЕНЕНА',
-        'Можно повторить в любой момент.', 'retry');
+        'Можно повторить в любой момент', 'retry');
   }
   if (has(['загрузчик не найден', 'нет ядра', 'инструмент'])) {
     return const UserMessage('toolsMissing', 'ИНСТРУМЕНТЫ НЕ НАЙДЕНЫ',
-        'Переустановите приложение.', 'close');
+        'Переустановите приложение', 'close');
   }
   if (has(['обработать', 'конверт', 'thumbnail', 'обрезка', 'подготовить',
            'обработку'])) {
     return const UserMessage('prepareFailed', 'НЕ УДАЛОСЬ ПОДГОТОВИТЬ ФАЙЛ',
-        'Попробуйте ещё раз.', 'retry');
+        'Попробуйте ещё раз', 'retry');
   }
 
   return const UserMessage('internal', 'ЧТО-ТО ПОШЛО НЕ ТАК',
-      'Попробуйте ещё раз, обычно помогает.', 'retry');
+      'Попробуйте ещё раз, обычно помогает', 'retry');
 }
 
 /// Единый вид ошибки на экране: ЗАГОЛОВОК, длинное тире, подсказка
@@ -1023,6 +1023,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     }
 
     if (isBatch) {
+      // Загрузка не начинается, пока разборы пачки не завершились: иначе
+      // проверка «уже скачано» пройдёт по неполным данным. Кнопка на это
+      // время неактивна (см. canDownload в _modesRow).
+      if (batchProbing || batchProcessed < batchLinks.length) return;
       // Пачка: по каждой ссылке предсказываем итоговые файлы (разборы
       // пачки уже собраны в batchProbes) и сверяем с папкой назначения.
       final candidates = <String>[]; // ссылки, которые уйдут в очередь
@@ -1068,19 +1072,27 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       }
       final found =
           reqs.isEmpty ? const <Map<String, dynamic>>[] : c.predictFiles(reqs);
-      var existing = 0;
+      // N и M считаются ПО ССЫЛКАМ пачки: M — все ссылки, включая те,
+      // чьи имена предсказать не удалось (упавший разбор); N — ссылки,
+      // у которых найден хотя бы один существующий файл.
       final byLink = <String, List<bool>>{};
       for (var k = 0; k < found.length; k++) {
-        final ok = found[k]['exists'] == true;
-        if (ok) existing += 1;
-        byLink.putIfAbsent(reqLink[k], () => []).add(ok);
+        byLink
+            .putIfAbsent(reqLink[k], () => [])
+            .add(found[k]['exists'] == true);
       }
+      bool linkDone(String l) {
+        final files = byLink[l];
+        return files != null && files.contains(true);
+      }
+
+      final existing = candidates.where(linkDone).length;
       if (action == _GoAction.go && existing > 0) {
         // Одно общее окно на всю пачку, а не окно на каждый файл.
         setState(() => dupeNotice = _DupeNotice(
             batch: true,
             existing: existing,
-            total: found.length,
+            total: batchLinks.length,
             openFolder: destFolder));
         return;
       }
@@ -1962,7 +1974,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             const SizedBox(height: 4),
             // Единый формат ошибки: заголовок — [подсказка].
             Text(userMessageText(const UserMessage('sourceDrm',
-                    'ЗАПИСЬ ЗАЩИЩЕНА DRM', 'Скачивание защищённых записей невозможно.', 'openLink')),
+                    'ЗАПИСЬ ЗАЩИЩЕНА DRM', 'Скачивание защищённых записей невозможно', 'openLink')),
                 style: T.mono(11, c: Pal.error, ls: .02)),
           ]),
         ),
@@ -2424,7 +2436,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             ? (playlistLimit > 0 ? playlistLimit : (p?.count ?? 1))
             : 1;
     final goLabel = 'СКАЧАТЬ · $goCount';
-    final canDownload = isBatch || (p != null && p.ok && !p.drm);
+    // Пачка: кнопка мертва, пока разборы не собраны — проверка «уже
+    // скачано» обязана пройти по всем ссылкам до запуска загрузки.
+    final batchReady = !isBatch ||
+        (!batchProbing && batchProcessed >= batchLinks.length);
+    final canDownload = batchReady &&
+        (isBatch || (p != null && p.ok && !p.drm));
     final videoLabel = mediaMode ? 'МЕДИА' : 'ВИДЕО';
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -2674,11 +2691,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     // загрузке — в том числе под открытой выдачей (compact).
     final hasItems = items.isNotEmpty;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(13, 6, 4, 2),
+      padding: const EdgeInsets.fromLTRB(13, 6, 13, 2),
       child: Row(
-        // Кнопка по базовой линии надписи; правый край — почти вплотную
-        // к правой пунктирной рамке блока (отступ 4 — чтобы свечение
-        // текста при наведении не касалось рамки).
+        // Правый паддинг — те же 13px, что у кнопок в строках: блок
+        // выравнивается по корзине, а хвостовой межбуквенный интервал
+        // последней «]» компенсируется сдвигом (см. ниже) — чернильный
+        // край «]» встаёт ровно на правый край корзины.
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
         children: [
@@ -2689,11 +2707,17 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             duration: const Duration(milliseconds: 220),
             child: IgnorePointer(
               ignoring: !hasItems,
-              child: _TextLink(
-                label: '[ОЧИСТИТЬ]',
-                onTap: _clearQueueHistory,
-                // Кегль — тот же, что у надписи «ДИСПЕТЧЕР ЗАГРУЗОК».
-                style: T.ps(9, c: Pal.dim, ls: .1),
+              // Advance «]» в PS2P 9px = 9 + 0.1 letter-spacing, чернила
+              // кончаются на 6.0 — хвост 3.1px. Сдвиг возвращает видимый
+              // край скобки на линию корзины.
+              child: Transform.translate(
+                offset: const Offset(3.1, 0),
+                child: _TextLink(
+                  label: '[ОЧИСТИТЬ]',
+                  onTap: _clearQueueHistory,
+                  // Кегль — тот же, что у надписи «ДИСПЕТЧЕР ЗАГРУЗОК».
+                  style: T.ps(9, c: Pal.dim, ls: .1),
+                ),
               ),
             ),
           ),
