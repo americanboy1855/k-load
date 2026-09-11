@@ -436,7 +436,7 @@ static void testLiveDownload (kd_engine* e)
         if (entry.is_regular_file() && entry.path().extension().string() == ".mp4")
         {
             const auto size = entry.file_size();
-            if (size > fullSize) { cutSize = fullSize == 0 ? cutSize : size; fullSize = size; }
+            if (size > fullSize) { cutSize = fullSize; fullSize = size; }
             else cutSize = std::max (cutSize, size);
         }
     check (cutSize > 0 && cutSize < fullSize, "отрезок меньше целого ролика",
