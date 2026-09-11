@@ -384,11 +384,16 @@ void Engine::cancel (int id)
 {
     if (auto item = findItem (id))
     {
-        const std::lock_guard<std::mutex> sl (mutex);
-        const bool wasPaused = item->state == QueueItem::State::paused;
-        item->setCancelled();
+        bool wasPaused = false;
+        {
+            const std::lock_guard<std::mutex> sl (mutex);
+            wasPaused = item->state == QueueItem::State::paused;
+            item->setCancelled();
+        }
         // Приостановленное никто не качает: воркер спит до снятия паузы,
         // отмечаем отработанным сразу, а не после возобновления.
+        // finish() сам берёт мьютекс — нельзя держать его здесь
+        // (std::mutex несъёмный, иначе дедлок, см. аудит).
         if (wasPaused) finish (item, QueueItem::State::failed, "Отменено");
         wake.signal(); // поднять спящий поток
         fireChanged();
