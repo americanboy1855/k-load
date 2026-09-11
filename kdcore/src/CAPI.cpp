@@ -195,6 +195,10 @@ static Engine::Options parseOptions (const char* options_json)
         o.sections = data["sections"].get<std::string>();
     if (data.contains ("playlistLimit") && data["playlistLimit"].is_number_integer())
         o.playlistLimit = data["playlistLimit"].get<int>();
+    if (data.contains ("container") && data["container"].is_string())
+        o.container = data["container"].get<std::string>();
+    if (data.contains ("imageFormat") && data["imageFormat"].is_string())
+        o.imageFormat = data["imageFormat"].get<std::string>();
     if (data.contains ("durationHint") && data["durationHint"].is_number_integer())
         o.durationHint = data["durationHint"].get<int>();
     if (data.contains ("forceOverwrite") && data["forceOverwrite"].is_boolean())
