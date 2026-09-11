@@ -2646,7 +2646,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           foregroundPainter:
               const DashedBorderPainter(color: Color(0x80FFB000)),
           child: Column(children: [
-            _queueHeader(compact: true),
+            _queueHeader(),
             Expanded(
               child: Builder(builder: (context) {
                 final sorted = _sortedItems();
@@ -2668,24 +2668,35 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     );
   }
 
-  Widget _queueHeader({bool compact = false}) {
+  Widget _queueHeader() {
+    // Кнопка живёт в дереве всегда и плавно проявляется/гаснет: место под
+    // неё зарезервировано, заголовок не сдвигается. Видна при любой
+    // загрузке — в том числе под открытой выдачей (compact).
+    final hasItems = items.isNotEmpty;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(13, 6, 13, 2),
+      padding: const EdgeInsets.fromLTRB(13, 6, 4, 2),
       child: Row(
-        // Кнопка по базовой линии надписи; правый край — по правому краю
-        // кнопок в строках списка (те же 13px от границы блока).
+        // Кнопка по базовой линии надписи; правый край — почти вплотную
+        // к правой пунктирной рамке блока (отступ 4 — чтобы свечение
+        // текста при наведении не касалось рамки).
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
         children: [
           Text('ДИСПЕТЧЕР ЗАГРУЗОК', style: T.ps(9, c: Pal.soft, ls: .1)),
           const Spacer(),
-          if (!compact && items.isNotEmpty)
-            _TextLink(
-              label: '[ОЧИСТИТЬ]',
-              onTap: _clearQueueHistory,
-              // Кегль — тот же, что у надписи «ДИСПЕТЧЕР ЗАГРУЗОК».
-              style: T.ps(9, c: Pal.dim, ls: .1),
+          AnimatedOpacity(
+            opacity: hasItems ? 1 : 0,
+            duration: const Duration(milliseconds: 220),
+            child: IgnorePointer(
+              ignoring: !hasItems,
+              child: _TextLink(
+                label: '[ОЧИСТИТЬ]',
+                onTap: _clearQueueHistory,
+                // Кегль — тот же, что у надписи «ДИСПЕТЧЕР ЗАГРУЗОК».
+                style: T.ps(9, c: Pal.dim, ls: .1),
+              ),
             ),
+          ),
         ],
       ),
     );
