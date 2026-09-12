@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>K LOAD V1.0 by kvartal</title>
+    <options customize="never" require-scripts="false" rootVolumeOnly="false"/>
+    <domains enable_localSystem="true" enable_currentUserHome="false" enable_anywhere="true"/>
+    <background file="background.png" mime-type="image/png"
+        alignment="center" scaling="proportional"/>
+    <background-dark file="background.png" mime-type="image/png"
+        alignment="center" scaling="proportional"/>
+    <welcome file="welcome-ru.txt" mime-type="text/plain" localization="ru"/>
+    <welcome file="welcome-en.txt" mime-type="text/plain" localization="en"/>
+    <readme file="readme-ru.txt" mime-type="text/plain" localization="ru"/>
+    <readme file="readme-en.txt" mime-type="text/plain" localization="en"/>
+    <choices-outline>
+        <line choice="kload"/>
+    </choices-outline>
+    <choice id="kload" title="K LOAD" description="K LOAD V1.0 — ru.kvartal.kload">
+        <pkg-ref id="ru.kvartal.kload"/>
+    </choice>
+    <pkg-ref id="ru.kvartal.kload" version="1.0.0" onConclusion="none">kload-component.pkg</pkg-ref>
+</installer-gui-script>
