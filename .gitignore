@@ -21,3 +21,9 @@ out/
 SLIMZ YT DOWNLOADER macOS Universal.dmg
 kdcore/build-release/
 app/scripts/pkg/*.pkg
+
+# Релиз v1.0: сборочные артефакты и локальные отчёты
+app/*.pkg
+release-v1.0/
+docs/AUDIT-REPORT-GLM.md
+Снимок экрана*.png
