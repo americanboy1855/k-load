@@ -24,7 +24,11 @@ void main() {
   testWidgets('boot: ядро поднялось, инструменты найдены',
       (tester) async {
     app.main();
-    await tester.pumpAndSettle(const Duration(seconds: 8));
+    // В интерфейсе живут бесконечные анимации (LED, плазма, вуаль) —
+    // pumpAndSettle не оседает, качаем фиксированно.
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(seconds: 1));
+    }
 
     // Диспетчер (низ экрана) и поле ввода — признак живого экрана.
     expect(find.textContaining('K LOAD'), findsWidgets);
@@ -37,7 +41,9 @@ void main() {
     }
 
     app.main();
-    await tester.pumpAndSettle(const Duration(seconds: 8));
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(seconds: 1));
+    }
 
     // Вставка ссылки (знаменитый «Me at the zoo», 19 секунд, ~2 МБ).
     await tester.enterText(
@@ -45,11 +51,17 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
 
     // Debounce 600 мс + разбор ссылки → карточка с кнопкой СКАЧАТЬ.
-    await tester.pumpAndSettle(const Duration(seconds: 25));
-
-    final go = find.textContaining('СКАЧАТЬ');
-    expect(go, findsWidgets, reason: 'карточка разбора не появилась');
-    await tester.tap(go.last);
+    final goDeadline = DateTime.now().add(const Duration(seconds: 30));
+    var appeared = false;
+    while (DateTime.now().isBefore(goDeadline)) {
+      await tester.pump(const Duration(seconds: 1));
+      if (find.textContaining('СКАЧАТЬ').evaluate().isNotEmpty) {
+        appeared = true;
+        break;
+      }
+    }
+    expect(appeared, true, reason: 'карточка разбора не появилась за 30 секунд');
+    await tester.tap(find.textContaining('СКАЧАТЬ').last);
 
     // Скачивание короткого ролика: до 90 секунд.
     final deadline = DateTime.now().add(const Duration(seconds: 90));

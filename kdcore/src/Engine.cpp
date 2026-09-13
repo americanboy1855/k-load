@@ -2527,6 +2527,20 @@ Str Engine::predictFiles (const Str& requestJson)
 
 Str Engine::predictFilesImpl (const Str& requestJson)
 {
+    Str stage = "parse";
+    try
+    {
+        return predictFilesStage (requestJson, stage);
+    }
+    catch (const std::exception& e)
+    {
+        return json { { "results", json::array() },
+                      { "error", stage + ": " + e.what() } }.dump();
+    }
+}
+
+Str Engine::predictFilesStage (const Str& requestJson, Str& stage)
+{
     const auto data = json::parse (requestJson, nullptr, false);
     json results = json::array();
     if (data.is_discarded() || ! data.is_object()
@@ -2537,6 +2551,7 @@ Str Engine::predictFilesImpl (const Str& requestJson)
     for (const auto& r : data["files"])
     {
         ++i;
+        stage = "fields";
         const auto dir = jtext (r, "dir");
         const auto ext = jtext (r, "ext");
         const auto sections = jtext (r, "sections");
@@ -2544,6 +2559,7 @@ Str Engine::predictFilesImpl (const Str& requestJson)
         const auto kind = jtext (r, "kind");
 
         Str name;
+        stage = "name-" + kind;
         if (kind == "literal")
         {
             // Имя задаёт приложение (поиск по названию, ролики плейлиста,
@@ -2573,11 +2589,14 @@ Str Engine::predictFilesImpl (const Str& requestJson)
         }
         if (! ext.empty()) name += "." + ext;
 
+        stage = "path";
         const auto target = dir.empty() ? fs::u8path (name)
                                         : fs::u8path (dir) / fs::u8path (name);
         std::error_code ec;
+        stage = "exists";
         const bool exists = ! dir.empty() && ! name.empty()
                             && fs::exists (target, ec);
+        stage = "pathStr";
         results.push_back ({ { "i", i },
                              { "dir", dir },
                              { "name", name },

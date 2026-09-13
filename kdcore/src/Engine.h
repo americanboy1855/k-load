@@ -272,6 +272,7 @@ public:
     /// и сетевой не требует: заголовки приносит карточка/пачка.
     static Str predictFiles (const Str& requestJson);
     static Str predictFilesImpl (const Str& requestJson);
+    static Str predictFilesStage (const Str& requestJson, Str& stage);
 
 public:
     /// «0:00», «1:07», «90» -> секунды; не время — -1 (нужно и для имён
