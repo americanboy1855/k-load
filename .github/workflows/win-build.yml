@@ -15,15 +15,17 @@ jobs:
       - name: Установка curl (vcpkg; TLS = Schannel по умолчанию)
         run: vcpkg install "curl:x64-windows-static-md"
 
+      - uses: ilammy/msvc-dev-cmd@v1
+
       - name: Конфигурация CMake
         run: >
-          cmake -S kdcore -B kdcore/build-win
-          -G "Visual Studio 17 2022" -A x64
+          cmake -S kdcore -B kdcore/build-win -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake
           -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
 
       - name: Сборка kdcore.dll и kd_tests
-        run: cmake --build kdcore/build-win --config Release
+        run: cmake --build kdcore/build-win
 
       - name: Контрактные тесты ядра
         run: ./kdcore/build-win/Release/kd_tests.exe
@@ -41,17 +43,14 @@ jobs:
       - name: Установка curl (vcpkg)
         run: vcpkg install "curl:x64-windows-static-md"
 
+      - uses: ilammy/msvc-dev-cmd@v1
+
       - name: Сборка ядра kdcore.dll
-        run: >
-          cmake -S kdcore -B kdcore/build-win
-          -G "Visual Studio 17 2022" -A x64
-          -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake
-          -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
-
-        shell: pwsh
-
-      - name: Копирование ядра
-        run: cmake --build kdcore/build-win --config Release
+        run: |
+          cmake -S kdcore -B kdcore/build-win -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+          cmake --build kdcore/build-win
 
       - name: Юнит-тесты Flutter
         run: flutter test
