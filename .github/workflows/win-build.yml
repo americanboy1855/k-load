@@ -8,14 +8,12 @@ on:
 jobs:
   kernel:
     # Этап 1: ядро kdcore.dll + контрактные тесты на Windows.
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
       - name: Установка curl (vcpkg; TLS = Schannel по умолчанию)
         run: vcpkg install "curl:x64-windows-static-md"
-
-      - uses: ilammy/msvc-dev-cmd@v1
 
       - name: Конфигурация CMake
         run: >
@@ -33,7 +31,7 @@ jobs:
 
   app:
     # Сборка приложения: ядро + Flutter + портативная папка.
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
@@ -43,8 +41,6 @@ jobs:
 
       - name: Установка curl (vcpkg)
         run: vcpkg install "curl:x64-windows-static-md"
-
-      - uses: ilammy/msvc-dev-cmd@v1
 
       - name: Сборка ядра kdcore.dll
         run: |
