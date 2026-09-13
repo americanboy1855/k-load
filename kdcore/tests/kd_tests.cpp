@@ -528,23 +528,38 @@ static void testConsumeMarkers()
 
 int main (int argc, char** argv)
 {
+    // Небуферизованный вывод: при крэше видно, на каком тесте.
+    setvbuf (stdout, nullptr, _IONBF, 0);
     const bool live = argc > 1 && std::string (argv[1]) == "--live";
 
-    testDetector();
-    testLinkLogic();
-    testNames();
-    testYtFileName();
-    testPredictFiles();
-    testConsumeMarkers();
-    testCAPIPure();
-    testPauseResume();
-
-    if (live)
+    try
     {
-        kd_engine* e = kd_engine_create (nullptr);
-        testLiveProbes (e);
-        testLiveDownload (e);
-        kd_engine_destroy (e);
+        testDetector();
+        testLinkLogic();
+        testNames();
+        testYtFileName();
+        testPredictFiles();
+        testConsumeMarkers();
+        testCAPIPure();
+        testPauseResume();
+
+        if (live)
+        {
+            kd_engine* e = kd_engine_create (nullptr);
+            testLiveProbes (e);
+            testLiveDownload (e);
+            kd_engine_destroy (e);
+        }
+    }
+    catch (const std::exception& e)
+    {
+        std::cout << "EXCEPTION: " << e.what() << "\n";
+        return 2;
+    }
+    catch (...)
+    {
+        std::cout << "EXCEPTION: неизвестная\n";
+        return 2;
     }
 
     std::cout << "\nитого: " << passed << " ok, " << failed << " fail\n";
