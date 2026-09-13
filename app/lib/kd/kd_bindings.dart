@@ -160,7 +160,7 @@ class KdBindings {
     }
     throw StateError(
         'libkdcore.dylib не найдена (пути: $candidates): $lastError\n'
-        'Собери ядро и запусти через scripts/dev-build.sh');
+        'Собери ядро и запусти через mac/dev-build.sh');
   }
 
   final DynamicLibrary lib;

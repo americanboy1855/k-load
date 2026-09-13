@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Дев-сборка K LOAD.
+# Дев-сборка K LOAD (macOS).
 #
 # Проект лежит на iCloud-синхронизируемом рабочем столе: провайдер мгновенно
 # вешает на свежие файлы com.apple.fileprovider/FinderInfo, и codesign
@@ -7,10 +7,11 @@
 # копируется в несинхронизируемую папку (~/Library/Application Support/
 # K LOAD dev), там чистится, подписывается ад-хоком и запускается.
 #
-# Запуск: ./scripts/dev-build.sh
+# Запуск: mac/dev-build.sh   (из любого места; скрипт сам встаёт в корень репо)
 set -e
 cd "$(dirname "$0")/.."
 
+cd app
 flutter build macos --debug || true
 
 SRC="build/macos/Build/Products/Debug/K LOAD.app"

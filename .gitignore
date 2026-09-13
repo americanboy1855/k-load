@@ -23,7 +23,10 @@ kdcore/build-release/
 app/scripts/pkg/*.pkg
 
 # Релиз v1.0: сборочные артефакты и локальные отчёты
-app/*.pkg
+mac/dist/
 release-v1.0/
 docs/AUDIT-REPORT-GLM.md
 Снимок экрана*.png
+
+# сборочные pkg у app (историческая страховка)
+app/*.pkg
