@@ -14,6 +14,7 @@
 #include <windows.h>
 
 #include <cstring>
+#include <cwchar>
 
 namespace kd
 {
@@ -51,8 +52,8 @@ public:
 
         const auto cmd = buildCommandLine (args);
         std::wstring mutableCmd = cmd;
-        const auto envBlock = pathEnv.empty() ? std::wstring()
-                                              : buildEnvBlock (toWide (pathEnv));
+        std::wstring envBlock = pathEnv.empty()
+            ? std::wstring() : buildEnvBlock (toWide (pathEnv));
 
         STARTUPINFOW si {};
         si.cb = sizeof (si);
@@ -64,7 +65,9 @@ public:
         DWORD flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
         const BOOL ok = ::CreateProcessW (toWide (args[0]).c_str(), mutableCmd.data(),
                                           nullptr, nullptr, TRUE, flags,
-                                          envBlock.empty() ? nullptr : envBlock.data(),
+                                          envBlock.empty()
+                                              ? nullptr
+                                              : reinterpret_cast<LPVOID> (envBlock.data()),
                                           nullptr, &si, &pi);
         ::CloseHandle (outWrite);
         outWrite = nullptr;

@@ -15,6 +15,8 @@ if(APPLE)
 endif()
 
 find_package(CURL REQUIRED)
+message(STATUS "CURL_INCLUDE_DIRS: ${CURL_INCLUDE_DIRS}")
+message(STATUS "CURL_LIBRARIES: ${CURL_LIBRARIES}")
 
 add_library(kdcore SHARED
     src/Engine.cpp
@@ -48,9 +50,15 @@ if(APPLE)
         MACOSX_RPATH ON)
 else()
     # iphlpapi — GetBestRoute/GetAdaptersAddresses для VpnMonitor.
-    target_link_libraries(kdcore PRIVATE
-        ${CURL_LIBRARIES}
-        iphlpapi)
+    # Статический curl (vcpkg x64-windows-static-md) требует CURL_STATIC.
+    target_compile_definitions(kdcore PRIVATE CURL_STATIC)
+    if(TARGET CURL::libcurl)
+        target_link_libraries(kdcore PRIVATE CURL::libcurl)
+    else()
+        target_include_directories(kdcore PRIVATE ${CURL_INCLUDE_DIRS})
+        target_link_libraries(kdcore PRIVATE ${CURL_LIBRARIES})
+    endif()
+    target_link_libraries(kdcore PRIVATE iphlpapi)
     set_target_properties(kdcore PROPERTIES
         OUTPUT_NAME "kdcore"
         PREFIX "")
