@@ -65,7 +65,9 @@ else()
     target_link_libraries(kdcore PRIVATE iphlpapi)
     set_target_properties(kdcore PROPERTIES
         OUTPUT_NAME "kdcore"
-        PREFIX "")
+        PREFIX ""
+        # Экспорт всех символов: kd_* нужны Dart-FFI, Engine::* — тестам.
+        WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
 add_executable(kd_tests tests/kd_tests.cpp)
