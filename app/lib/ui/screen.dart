@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart' show kPrimaryButton;
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
@@ -311,6 +312,13 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   final _canvasKey = GlobalKey();      // канвас 560×670 — начало координат зон
   String _lastZonesKey = '';           // подпись последних отосланных зон
 
+  // Windows: кнопки окна рисуем сами (безрамочник). Их канва-прямоугольники
+  // уходят в раннер, чтобы невидимый титул не съедал клики.
+  final _winMinKey = GlobalKey();
+  final _winCloseKey = GlobalKey();
+  Offset? _winDragSource;              // точка нажатия на готовой строке
+  bool _winDragBusy = false;           // DoDragDrop уже крутит свой цикл
+
   // позиция чипа, под которым раскрыта панель
   final _uiColumnKey = GlobalKey();
   double _chronX = 0;
@@ -503,6 +511,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   void _scheduleDragZones() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      // Windows: нативные зоны не нужны (drag стартует из жеста строки),
+      // зато раннеру нужны прямоугольники кнопок окна.
+      if (Platform.isWindows) {
+        _sendChromeRects();
+        return;
+      }
       // Зоны в координатах канваса 560×670 — того самого, что масштабирует
       // окно. Нативный слой сам учтёт cover-масштаб и поля телевизора.
       final canvasCtx = _canvasKey.currentContext;
@@ -540,6 +554,28 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       _lastZonesKey = key;
       _native.invokeMethod('setZones', zones);
     });
+  }
+
+  /// Прямоугольники кнопок окна в координатах канваса: раннер не отдаёт
+  /// их невидимому титулу и пропускает клики во Flutter.
+  void _sendChromeRects() {
+    final canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+    if (canvasBox == null || !canvasBox.attached) return;
+    final rects = <Map<String, dynamic>>[];
+    for (final key in [_winMinKey, _winCloseKey]) {
+      final ctx = key.currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject() as RenderBox?;
+      if (box == null || !box.attached) continue;
+      final topLeft = box.localToGlobal(Offset.zero, ancestor: canvasBox);
+      rects.add({
+        'x': topLeft.dx,
+        'y': topLeft.dy,
+        'w': box.size.width,
+        'h': box.size.height,
+      });
+    }
+    _native.invokeMethod('chromeRects', rects);
   }
 
   void _scheduleTracking() {
@@ -2859,7 +2895,26 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       ),
       child: MouseRegion(
         cursor: done ? SystemMouseCursors.grab : MouseCursor.defer,
-        child: Row(children: [
+        // Windows: drag файла стартует горизонтальным жестом по строке
+        // (вертикаль оставлена скроллу очереди).
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (ev) =>
+              _winDragSource = (Platform.isWindows && done && it.files.isNotEmpty
+                      && ev.buttons & kPrimaryButton != 0)
+                  ? ev.position
+                  : null,
+          onPointerMove: (ev) {
+            if (_winDragSource == null || _winDragBusy) return;
+            final d = ev.position - _winDragSource!;
+            if (d.dx.abs() < 12 || d.dx.abs() <= d.dy.abs()) return;
+            _winDragBusy = true;
+            _native.invokeMethod('beginDrag', it.files.first)
+                .whenComplete(() => _winDragBusy = false);
+          },
+          onPointerUp: (_) => _winDragSource = null,
+          onPointerCancel: (_) => _winDragSource = null,
+          child: Row(children: [
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(title,
@@ -2928,6 +2983,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           ),
         ],
         ]),
+        ),
       ),
     );
   }
@@ -3140,6 +3196,29 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             ),
           ),
         ),
+        if (Platform.isWindows) ...[
+          // Кнопки окна: на маке — системные светофоры поверх контента,
+          // здесь рисуем сами. Прямоугольники уходят в раннер (_sendChromeRects),
+          // чтобы невидимый титул не съедал клики.
+          Positioned(
+            right: 12,
+            top: 6,
+            child: _WinButton(
+              key: _winCloseKey,
+              glyph: '×',
+              onTap: () => _native.invokeMethod('close'),
+            ),
+          ),
+          Positioned(
+            right: 42,
+            top: 6,
+            child: _WinButton(
+              key: _winMinKey,
+              glyph: '–',
+              onTap: () => _native.invokeMethod('minimize'),
+            ),
+          ),
+        ],
       ]),
     );
   }
@@ -4061,6 +4140,36 @@ class _ActButtonState extends State<_ActButton> {
                 const DashedBorderPainter(color: Color(0x73FFB000)),
             child: Center(child: widget.icon(hover)),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Кнопка окна Windows: сворачивание/закрытие безрамочного окна.
+/// Прямоугольники уходят в раннер (chromeRects), чтобы клики проходили
+/// сквозь невидимый титул.
+class _WinButton extends StatelessWidget {
+  const _WinButton({super.key, required this.glyph, required this.onTap});
+
+  final String glyph;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 26,
+          height: 24,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: const Color(0x26FFFFFF),
+            border: Border.all(color: const Color(0x4DFFB000)),
+          ),
+          child: Text(glyph, style: T.ps(9, c: Pal.soft)),
         ),
       ),
     );
