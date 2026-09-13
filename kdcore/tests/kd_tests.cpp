@@ -18,6 +18,14 @@
 #include <fstream>
 #include <future>
 #include <iostream>
+
+#ifdef _WIN32
+static void testSetenv (const char* k, const char* v) { ::_putenv_s (k, v); }
+static void testUnsetenv (const char* k) { ::_putenv_s (k, ""); }
+#else
+static void testSetenv (const char* k, const char* v) { ::setenv (k, v, 1); }
+static void testUnsetenv (const char* k) { ::unsetenv (k); }
+#endif
 #include <string>
 #include <thread>
 
@@ -293,13 +301,13 @@ sleep 30
 
     // Возобновление: маркер-файл заставит приманку завершиться мгновенно.
     { const std::ofstream f (out / "done.marker"); }
-    ::setenv ("KD_STUB_DONE", (fs::path (out) / "done.marker").string().c_str(), 1);
+    testSetenv ("KD_STUB_DONE", (fs::path (out) / "done.marker").string().c_str());
     kd_set_paused (e, 0);
     check (kd_is_paused (e) == 0, "kd_is_paused после возобновления");
     const auto r2 = waitForState (e, 2, "done", "failed", 30);
     check (r2.find ("\"state\":\"done\"") != std::string::npos,
         "возобновлённое задание докачалось", r2.substr (0, 300));
-    ::unsetenv ("KD_STUB_DONE");
+    testUnsetenv ("KD_STUB_DONE");
 
     // Выход приложения на паузе не должен зависать: воркеры спят в паузе,
     // деструктор должен разбудить каждого.
@@ -316,7 +324,7 @@ sleep 30
     }
 
     kd_engine_destroy (e);
-    ::unsetenv ("K_LOAD_TOOLS"); // живые тесты ниже ищут инструменты сами
+    testUnsetenv ("K_LOAD_TOOLS"); // живые тесты ниже ищут инструменты сами
     fs::remove_all (tools);
     fs::remove_all (out);
 }

@@ -14,6 +14,10 @@ if(APPLE)
     endif()
 endif()
 
+if(WIN32)
+    add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX)
+endif()
+
 find_package(CURL REQUIRED)
 message(STATUS "CURL_INCLUDE_DIRS: ${CURL_INCLUDE_DIRS}")
 message(STATUS "CURL_LIBRARIES: ${CURL_LIBRARIES}")
