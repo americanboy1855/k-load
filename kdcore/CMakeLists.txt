@@ -14,6 +14,11 @@ if(APPLE)
     endif()
 endif()
 
+if(MSVC)
+    # Исходники в UTF-8: без этого MSVC читает литералы в системной
+    # кодировке и вся кириллица ядра (сообщения, имена, тире) портится.
+    add_compile_options(/utf-8)
+endif()
 if(WIN32)
     add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX)
 endif()
