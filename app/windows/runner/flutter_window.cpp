@@ -2,6 +2,10 @@
 
 #include <optional>
 
+#include <flutter/method_channel.h>
+#include <flutter/standard_method_codec.h>
+#include <variant>
+
 #include <shlobj.h>
 #include <windowsx.h>
 
