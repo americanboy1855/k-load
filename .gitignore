@@ -30,3 +30,4 @@ docs/AUDIT-REPORT-GLM.md
 
 # сборочные pkg у app (историческая страховка)
 app/*.pkg
+win/dist/
