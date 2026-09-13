@@ -18,9 +18,14 @@ inline Str folderName() { return "K LOAD"; }
 
 inline fs::path homeDir()
 {
+#ifdef _WIN32
+    if (const char* profile = ::getenv ("USERPROFILE"))
+        if (*profile != '\0') return fs::u8path (profile);
+#else
     if (const char* home = ::getenv ("HOME"))
         if (*home != '\0') return fs::u8path (home);
-    return fs::path ("~");
+#endif
+    return fs::path (".");
 }
 
 // База (без подпапки). Загрузок нет (нестандартная система) — Документы.

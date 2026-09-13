@@ -1,0 +1,29 @@
+name: win-build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  kernel:
+    # Этап 1: ядро kdcore.dll + контрактные тесты на Windows.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установка curl (vcpkg, schannel, статика с /MD)
+        run: vcpkg install "curl[schannel]:x64-windows-static-md"
+
+      - name: Конфигурация CMake
+        run: >
+          cmake -S kdcore -B kdcore/build-win
+          -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+
+      - name: Сборка kdcore.dll и kd_tests
+        run: cmake --build kdcore/build-win --config Release
+
+      - name: Контрактные тесты ядра
+        run: ./kdcore/build-win/Release/kd_tests.exe

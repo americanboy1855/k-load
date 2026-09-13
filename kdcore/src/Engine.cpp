@@ -12,7 +12,11 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <mach-o/dyld.h>
+#endif
 #include <sys/stat.h>
 #include <sstream>
 
@@ -24,13 +28,24 @@ using json = nlohmann::json;
 
 static const char* ytdlpBinaryName()
 {
-    return "yt-dlp_macos"; // Windows-вариант появится на своём этапе
+#ifdef _WIN32
+    return "yt-dlp.exe";
+#else
+    return "yt-dlp_macos";
+#endif
 }
 
-// Папка данных приложения: ~/Library/Application Support.
+// Папка данных приложения: macOS — ~/Library/Application Support,
+// Windows — %APPDATA% (Roaming).
 static fs::path appDataRoot()
 {
+#ifdef _WIN32
+    if (const char* appdata = ::getenv ("APPDATA"))
+        if (*appdata != '\0') return fs::u8path (appdata);
+    return DestResolver::homeDir() / "AppData" / "Roaming";
+#else
     return DestResolver::homeDir() / "Library" / "Application Support";
+#endif
 }
 
 // Журнал движка: без него жалоба «не качает» не диагностируема.
@@ -51,7 +66,11 @@ void Engine::engineLog (const Str& line)
     char stamp[32] = {};
     std::time_t t = std::time (nullptr);
     std::tm tm {};
+#ifdef _WIN32
+    localtime_s (&tm, &t);
+#else
     localtime_r (&t, &tm);
+#endif
     std::strftime (stamp, sizeof (stamp), "%Y-%m-%d %H:%M:%S", &tm);
     out << "[" << stamp << "] " << line << "\n";
 }
@@ -683,11 +702,17 @@ fs::path Engine::findToolsDir()
     if (hasTools (systemTools)) return toolsRoot (systemTools);
 
     // 3. Ресурсы собственного бандла — у приложения инструменты лежат здесь.
+    fs::path exe;
+#ifdef _WIN32
+    wchar_t exePathW[MAX_PATH] = {};
+    if (::GetModuleFileNameW (nullptr, exePathW, MAX_PATH) > 0)
+        exe = fs::path (exePathW);
+#else
     char exePath [4096] = {};
     uint32_t size = sizeof (exePath);
-    fs::path exe;
     if (_NSGetExecutablePath (exePath, &size) == 0)
         exe = fs::u8path (exePath);
+#endif
     if (! exe.empty())
     {
         const auto resources = exe.parent_path().parent_path() / "Resources";
@@ -754,10 +779,17 @@ StrVec Engine::baseArgs (const fs::path& dest, const Str& cookie) const
 // системные пути — yt-dlp находит deno/node для JS-челленджей YouTube.
 static Str childPath (const fs::path& tools)
 {
+#ifdef _WIN32
+    Str path = kd::pathStr (tools) + ";C:\\Windows\\System32;C:\\Windows";
+    if (const char* p = ::getenv ("PATH"))
+        path += Str (";") + p;
+    return path;
+#else
     Str path = kd::pathStr (tools) + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
     if (const char* p = ::getenv ("PATH"))
         path += Str (":") + p;
     return path;
+#endif
 }
 
 // Тихий запуск yt-dlp: весь stdout одним куском (для -J разбора).
@@ -2331,6 +2363,26 @@ bool Engine::downloadPinterestPhoto (const QueueItemPtr& item)
     {
         auto converted = finalPath;
         converted.replace_extension (wantExt);
+#ifdef _WIN32
+        // Конвертация штатным ffmpeg из комплекта (sips — только macOS).
+        kd::ChildProcess cvt;
+        const auto cvtTools = findToolsDir();
+        if (kd::isFile (cvtTools / "ffmpeg.exe")
+            && cvt.start ({ kd::pathStr (cvtTools / "ffmpeg.exe"), "-y",
+                            "-loglevel", "error", "-i", kd::pathStr (finalPath),
+                            kd::pathStr (converted) }))
+        {
+            const int code = cvt.waitExitCode();
+            if (code == 0 && fs::exists (converted))
+            {
+                fs::remove (finalPath, ec);
+                const std::lock_guard<std::mutex> sl (mutex);
+                item->files.push_back (kd::pathStr (converted));
+                if (! title.empty()) item->title = title;
+                return true;
+            }
+        }
+#else
         kd::ChildProcess sips;
         if (sips.start ({ "/usr/bin/sips", "-s", "format",
                           wantExt == "png" ? "png" : "jpeg",
@@ -2347,6 +2399,7 @@ bool Engine::downloadPinterestPhoto (const QueueItemPtr& item)
                 return true;
             }
         }
+#endif
     }
 
     {

@@ -143,10 +143,11 @@ class KdBindings {
   static KdBindings open() {
     if (_instance != null) return _instance!;
     final exeDir = File(Platform.resolvedExecutable).parent.path;
+    final libName = Platform.isWindows ? 'kdcore.dll' : 'libkdcore.dylib';
     final candidates = <String>[
       if (Platform.environment['K_LOAD_DYLIB'] != null)
         Platform.environment['K_LOAD_DYLIB']!,
-      '$exeDir/libkdcore.dylib',
+      '$exeDir/$libName',
     ];
     Object? lastError;
     for (final path in candidates) {
@@ -159,7 +160,7 @@ class KdBindings {
       }
     }
     throw StateError(
-        'libkdcore.dylib не найдена (пути: $candidates): $lastError\n'
+        '$libName не найдена (пути: $candidates): $lastError\n'
         'Собери ядро и запусти через mac/dev-build.sh');
   }
 
