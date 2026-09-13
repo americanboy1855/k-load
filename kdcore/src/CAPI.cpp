@@ -132,7 +132,13 @@ static json itemToJson (const QueueItem& i)
 kd_engine* kd_engine_create (const char* tools_dir)
 {
     if (tools_dir != nullptr && tools_dir[0] != '\0')
+    {
+#ifdef _WIN32
+        ::_putenv_s ("K_LOAD_TOOLS", tools_dir);
+#else
         ::setenv ("K_LOAD_TOOLS", tools_dir, 1);
+#endif
+    }
 
     auto e = new kd_engine();
     e->engine = std::make_unique<Engine>();
