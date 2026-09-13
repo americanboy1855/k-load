@@ -117,6 +117,10 @@ static void testPredictFiles()
     std::error_code ec;
     const auto tmp = fs::temp_directory_path() / "kd_predict_test";
     fs::create_directories (tmp, ec);
+#ifdef _WIN32
+    std::cout << "  (диагностика: папка создана, ec=" << ec.message()
+              << ", есть: " << (kd::isDir (tmp) ? "да" : "НЕТ") << ")\n";
+#endif
     auto dirJson = tmp.u8string();
 #ifdef _WIN32
     std::replace (dirJson.begin(), dirJson.end(), '\\', '/'); // JSON-безопасно
@@ -137,13 +141,20 @@ static void testPredictFiles()
     {
         std::ofstream f (tmp / "Clip： Первый？ [00:00–00:10].mp4");
         f << "x";
+#ifdef _WIN32
+        std::cout << "  (диагностика: ofstream открыт: " << (f.good() ? "да" : "НЕТ") << ")\n";
+#endif
     }
 #ifdef _WIN32
     {
-        const auto probe = kd::u8path (dirJson) / "Clip： Первый？ [00:00–00:10].mp4";
         std::error_code ec2;
-        std::cout << "  (диагностика: файл виден сразу после создания: "
-                  << (fs::exists (probe, ec2) ? "да" : "НЕТ") << ")\n";
+        const auto probe = kd::u8path (dirJson) / "Clip： Первый？ [00:00–00:10].mp4";
+        std::cout << "  (диагностика: файл виден: "
+                  << (fs::exists (probe, ec2) ? "да" : "НЕТ")
+                  << ", ec=" << ec2.message() << ")\n";
+        std::cout << "  (диагностика: содержимое папки)\n";
+        for (const auto& entry : fs::directory_iterator (kd::u8path (dirJson)))
+            std::cout << "    [" << kd::pathStr (entry.path()) << "]\n";
     }
 #endif
     out = kd_predict_files (nullptr, ("{\"files\":["
