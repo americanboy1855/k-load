@@ -1,0 +1,24 @@
+#!/bin/bash
+# K LOAD: чистое обновление при переустановке. Перед распаковкой payload
+# удаляем прежнюю копию приложения, чтобы новая версия вставала целиком —
+# без файлов, оставшихся от старых версий, и без «вкладывания» payload
+# в найденный старый бандл с тем же bundle id.
+
+remove_app() {
+    case "$1" in
+        *"K LOAD dev"*) return ;;  # dev-сборка владельца — не трогать
+    esac
+    [ -d "$1" ] && rm -rf "$1"
+}
+
+# Штатное место установки.
+remove_app "/Applications/K LOAD.app"
+
+# Прочие копии с нашим bundle id (Spotlight, best effort).
+if command -v mdfind >/dev/null 2>&1; then
+    while IFS= read -r p; do remove_app "$p"; done < <(
+        mdfind "kMDItemCFBundleIdentifier == 'ru.kvartal.kload'" 2>/dev/null
+    )
+fi
+
+exit 0

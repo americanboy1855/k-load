@@ -22,13 +22,27 @@ mkdir -p "$T"
 cp -R ../core/tools/ytdlp "$T/ytdlp"
 cp ../core/tools/ffmpeg "$T/ffmpeg"
 cp ../core/tools/ffprobe "$T/ffprobe"
-[ -f "$HOME/Library/Application Support/K LOAD/tools/deno" ] && \
+# deno: universal из core/tools; App Support — запаска (может быть arm64-only)
+if [ -f ../core/tools/deno ]; then
+  cp ../core/tools/deno "$T/deno"
+elif [ -f "$HOME/Library/Application Support/K LOAD/tools/deno" ]; then
   cp "$HOME/Library/Application Support/K LOAD/tools/deno" "$T/deno"
+fi
 [ -d "scripts/pkg/LICENSES" ] && cp -R scripts/pkg/LICENSES "$T/LICENSES"
 
 xattr -cr "$STAGE/K LOAD.app"
 codesign --force --deep --sign - "$STAGE/K LOAD.app"
 codesign --verify --deep --strict "$STAGE/K LOAD.app"
+
+# Gates Intel и Apple Silicon: каждый бинарник обязан быть universal
+for BIN in "$STAGE/K LOAD.app/Contents/MacOS/K LOAD" \
+           "$STAGE/K LOAD.app/Contents/MacOS/libkdcore.dylib" \
+           "$T/ytdlp/yt-dlp_macos" "$T/ffmpeg" "$T/ffprobe" "$T/deno"; do
+  INFO=$(lipo -info "$BIN" 2>&1)
+  echo "$INFO" | grep -q x86_64 && echo "$INFO" | grep -q arm64 || \
+    { echo "НЕ UNIVERSAL: $BIN — $INFO"; exit 1; }
+done
+echo "Все бинарники universal (x86_64 + arm64)"
 
 pkgbuild --root "$STAGE" --identifier ru.kvartal.kload --version 1.0.0 \
   --install-location /Applications --scripts scripts/pkg/scripts \

@@ -5,12 +5,10 @@
     <domains enable_localSystem="true" enable_currentUserHome="false" enable_anywhere="true"/>
     <background file="background.png" mime-type="image/png"
         alignment="center" scaling="proportional"/>
-    <background-dark file="background.png" mime-type="image/png"
+    <background-darkAqua file="background.png" mime-type="image/png"
         alignment="center" scaling="proportional"/>
-    <welcome file="welcome-ru.txt" mime-type="text/plain" localization="ru"/>
-    <welcome file="welcome-en.txt" mime-type="text/plain" localization="en"/>
-    <readme file="readme-ru.txt" mime-type="text/plain" localization="ru"/>
-    <readme file="readme-en.txt" mime-type="text/plain" localization="en"/>
+    <welcome file="welcome-ru.txt" mime-type="text/plain"/>
+    <readme file="readme-ru.txt" mime-type="text/plain"/>
     <choices-outline>
         <line choice="kload"/>
     </choices-outline>
