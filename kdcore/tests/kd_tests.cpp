@@ -132,7 +132,11 @@ static void testPredictFiles()
         "\"title\":\"Clip: Первый?\",\"service\":0,\"ext\":\"mp4\",\"sections\":\"0:00-0:10\"}]}").c_str());
     std::string res = out ? out : "";
     kd_string_free (out);
-    check (res.find ("Clip： Первый？ [00:00–00:10].mp4") != std::string::npos,
+    auto expectedName = std::string ("Clip： Первый？ [00:00–00:10].mp4");
+#ifdef _WIN32
+    expectedName = kd::replaceAll (expectedName, ":", "：");
+#endif
+    check (res.find (expectedName) != std::string::npos,
            "template: полноширинные + суффикс ХРОНа", res);
     check (res.find ("\"exists\":false") != std::string::npos, "template: файла нет", res);
 
