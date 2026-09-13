@@ -207,7 +207,7 @@ Win32Window::MessageHandler(HWND hwnd,
     case WM_NCHITTEST: {
       // Края — ресайз; верхняя полоса — невидимый титул (перетаскивание),
       // как у macOS с fullSizeContentView.
-      const POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+      POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
       ::ScreenToClient(hwnd, &pt);
       const RECT rc = GetClientArea();
       const UINT dpi = ::GetDpiForWindow(hwnd);

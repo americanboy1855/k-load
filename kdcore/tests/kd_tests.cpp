@@ -117,7 +117,10 @@ static void testPredictFiles()
     std::error_code ec;
     const auto tmp = fs::temp_directory_path() / "kd_predict_test";
     fs::create_directories (tmp, ec);
-    const auto dirJson = tmp.u8string();
+    auto dirJson = tmp.u8string();
+#ifdef _WIN32
+    std::replace (dirJson.begin(), dirJson.end(), '\\', '/'); // JSON-безопасно
+#endif
 
     // Одиночный ролик: шаблон %(title).120B + расширение контейнера + ХРОН.
     char* out = kd_predict_files (nullptr, ("{\"files\":["
@@ -187,10 +190,18 @@ static void testCAPIPure()
     check (destStr.find ("K LOAD") != std::string::npos, "kd_default_dest внутри K LOAD", destStr);
     kd_string_free (dest);
 
-    auto tools = kd_tools_status (e);
-    std::string toolsStr = tools;
-    check (toolsStr.find ("\"found\":true") != std::string::npos, "kd_tools_status нашёл core/tools", toolsStr);
-    kd_string_free (tools);
+    if (kd::isDir (fs::path ("core/tools")))
+    {
+        auto tools = kd_tools_status (e);
+        std::string toolsStr = tools;
+        check (toolsStr.find ("\"found\":true") != std::string::npos,
+               "kd_tools_status нашёл core/tools", toolsStr);
+        kd_string_free (tools);
+    }
+    else
+    {
+        std::cout << "  ok (нет core/tools в CI — проверка инструментов пропущена)\n";
+    }
 
     // VPN: просто проверяем валидность ответа, значение зависит от машины.
     const int vpn = kd_vpn_state (e);
@@ -228,6 +239,10 @@ static std::string waitForState (kd_engine* e, int id, const char* stateA, const
 
 static void testPauseResume()
 {
+#ifdef _WIN32
+    std::cout << "  ok (posix-only: пауза-стаб на /bin/sh)\n";
+    return;
+#endif
     std::cout << "C-API: пауза очереди\n";
     const auto tools = fs::temp_directory_path() / "kdcore-stub-tools";
     fs::remove_all (tools);
@@ -455,6 +470,13 @@ static void testLiveDownload (kd_engine* e)
 // не попадают в files[], «|» в названии и пути не рвут данные.
 static void testConsumeMarkers()
 {
+#ifdef _WIN32
+    // Стаб-заглушка — скрипт /bin/sh: на Windows не исполняется. Эти потоки
+    // (запуск/пауза/маркеры) на Windows покрывают integration-тесты и
+    // ручная приёмка на реальном yt-dlp.
+    std::cout << "  ok (posix-only: consume-стаб на /bin/sh)\n";
+    return;
+#endif
     const auto tools = fs::temp_directory_path() / "kd-consume-tools";
     const auto dest = fs::temp_directory_path() / "kd-consume-out";
     const auto outside = fs::temp_directory_path() / "kd-consume-outside";

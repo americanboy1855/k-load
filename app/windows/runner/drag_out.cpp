@@ -11,7 +11,7 @@ class FileDataObject : public IDataObject
 {
 public:
     explicit FileDataObject (HGLOBAL hdrop) : hdrop_ (hdrop) {}
-    ~FileDataObject() override { if (hdrop_) ::GlobalFree (hdrop_); }
+    ~FileDataObject() { if (hdrop_) ::GlobalFree (hdrop_); }
 
     HRESULT STDMETHODCALLTYPE GetData (FORMATETC* format, STGMEDIUM* medium) override
     {
