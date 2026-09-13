@@ -12,8 +12,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Установка curl (vcpkg, schannel, статика с /MD)
-        run: vcpkg install "curl[schannel]:x64-windows-static-md"
+      - name: Установка curl (vcpkg; TLS = Schannel по умолчанию)
+        run: vcpkg install "curl:x64-windows-static-md"
 
       - name: Конфигурация CMake
         run: >
@@ -27,3 +27,49 @@ jobs:
 
       - name: Контрактные тесты ядра
         run: ./kdcore/build-win/Release/kd_tests.exe
+
+  app:
+    # Сборка приложения: ядро + Flutter + портативная папка.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Установка curl (vcpkg)
+        run: vcpkg install "curl:x64-windows-static-md"
+
+      - name: Сборка ядра kdcore.dll
+        run: >
+          cmake -S kdcore -B kdcore/build-win
+          -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+
+        shell: pwsh
+
+      - name: Копирование ядра
+        run: cmake --build kdcore/build-win --config Release
+
+      - name: Юнит-тесты Flutter
+        run: flutter test
+        working-directory: app
+
+      - name: Сборка приложения
+        run: flutter build windows --release
+        working-directory: app
+
+      - name: Компоновка портативной папки
+        shell: pwsh
+        run: |
+          $out = "dist/K LOAD"
+          New-Item -ItemType Directory -Force -Path "$out/tools/ytdlp" | Out-Null
+          Copy-Item "app/build/windows/x64/runner/Release/*" $out -Recurse -Force
+          Copy-Item "kdcore/build-win/Release/kdcore.dll" $out -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: K-LOAD-win-portable
+          path: dist/K LOAD
