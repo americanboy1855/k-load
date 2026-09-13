@@ -7,7 +7,7 @@ on:
 
 jobs:
   kernel:
-    # Этап 1: ядро kdcore.dll + контрактные тесты на Windows.
+    # Ядро kdcore.dll + контрактные тесты на Windows.
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -43,7 +43,7 @@ jobs:
           exit $p.ExitCode
 
   app:
-    # Сборка приложения: ядро + Flutter + портативная папка.
+    # Сборка приложения + установщик Inno Setup.
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -71,6 +71,9 @@ jobs:
         run: flutter build windows --release
         working-directory: app
 
+      - name: Инструменты (yt-dlp/ffmpeg/ffprobe/deno)
+        run: pwsh win/fetch-tools-win.ps1
+
       - name: Компоновка портативной папки
         shell: pwsh
         run: |
@@ -78,8 +81,52 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$out/tools/ytdlp" | Out-Null
           Copy-Item "app/build/windows/x64/runner/Release/*" $out -Recurse -Force
           Copy-Item "kdcore/build-win/Release/kdcore.dll" $out -Force
+          Copy-Item "core/tools-win/*" "$out/tools/" -Recurse -Force
+
+      - name: Установка Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Сборка установщика
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" win/installer.iss'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: K-LOAD-V1.0-Setup
+          path: dist/K-LOAD-V1.0-Setup.exe
 
       - uses: actions/upload-artifact@v4
         with:
           name: K-LOAD-win-portable
           path: dist/K LOAD
+
+  e2e:
+    # E2E «как пользователь» на реальном приложении: boot + скачивание.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Установка curl (vcpkg)
+        run: vcpkg install "curl:x64-windows-static-md"
+
+      - name: Сборка ядра kdcore.dll
+        run: |
+          cmake -S kdcore -B kdcore/build-win `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+          cmake --build kdcore/build-win --config Release
+
+      - name: Инструменты (yt-dlp/ffmpeg/ffprobe/deno)
+        run: pwsh win/fetch-tools-win.ps1
+
+      - name: E2E-тесты (реальное приложение, реальные скачивания)
+        working-directory: app
+        shell: pwsh
+        env:
+          K_LOAD_DYLIB: ${{ github.workspace }}/kdcore/build-win/Release/kdcore.dll
+          K_LOAD_TOOLS: ${{ github.workspace }}/core/tools-win
+        run: flutter test integration_test -d windows

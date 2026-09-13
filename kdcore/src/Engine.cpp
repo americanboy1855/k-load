@@ -2509,6 +2509,24 @@ Str Engine::predictFiles (const Str& requestJson)
     // Заявки приносит интерфейс — из тех же данных, что уйдут в очередь
     // (заголовок разбора, формат, ХРОН), поэтому имена совпадают байт в
     // байт с тем, что потом назовёт yt-dlp. Сеть и разбор не нужны.
+    try
+    {
+        return predictFilesImpl (requestJson);
+    }
+    catch (const std::exception& e)
+    {
+        return json { { "results", json::array() },
+                      { "error", e.what() } }.dump();
+    }
+    catch (...)
+    {
+        return json { { "results", json::array() },
+                      { "error", "unknown" } }.dump();
+    }
+}
+
+Str Engine::predictFilesImpl (const Str& requestJson)
+{
     const auto data = json::parse (requestJson, nullptr, false);
     json results = json::array();
     if (data.is_discarded() || ! data.is_object()
