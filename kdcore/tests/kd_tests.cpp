@@ -134,7 +134,18 @@ static void testPredictFiles()
 
     // Такой же файл, созданный на диске, — exists = true: проверка по папке,
     // а не по диспетчеру (работает после очистки и перезапуска).
-    std::ofstream (tmp / "Clip： Первый？ [00:00–00:10].mp4") << "x";
+    {
+        std::ofstream f (tmp / "Clip： Первый？ [00:00–00:10].mp4");
+        f << "x";
+    }
+#ifdef _WIN32
+    {
+        const auto probe = kd::u8path (dirJson) / "Clip： Первый？ [00:00–00:10].mp4";
+        std::error_code ec2;
+        std::cout << "  (диагностика: файл виден сразу после создания: "
+                  << (fs::exists (probe, ec2) ? "да" : "НЕТ") << ")\n";
+    }
+#endif
     out = kd_predict_files (nullptr, ("{\"files\":["
         "{\"kind\":\"template\",\"dir\":\"" + dirJson + "\","
         "\"title\":\"Clip: Первый?\",\"service\":0,\"ext\":\"mp4\",\"sections\":\"0:00-0:10\"}]}").c_str());
