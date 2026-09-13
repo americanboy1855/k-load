@@ -1,0 +1,38 @@
+name: win-e2e
+
+# E2E на реальном приложении — вручную: на CI flutter_tools иногда
+# роняет финализацию (flutter_test_listener, PathNotFoundException).
+on:
+  workflow_dispatch:
+
+jobs:
+    # E2E «как пользователь» на реальном приложении: boot + скачивание.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Установка curl (vcpkg)
+        run: vcpkg install "curl:x64-windows-static-md"
+
+      - name: Сборка ядра kdcore.dll
+        run: |
+          cmake -S kdcore -B kdcore/build-win `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+          cmake --build kdcore/build-win --config Release
+
+      - name: Инструменты (yt-dlp/ffmpeg/ffprobe/deno)
+        run: pwsh win/fetch-tools-win.ps1
+
+      - name: E2E-тесты (реальное приложение, реальные скачивания)
+        working-directory: app
+        shell: pwsh
+        env:
+          K_LOAD_DYLIB: ${{ github.workspace }}/kdcore/build-win/Release/kdcore.dll
+          K_LOAD_TOOLS: ${{ github.workspace }}/core/tools-win
+        run: flutter test integration_test -d windows
