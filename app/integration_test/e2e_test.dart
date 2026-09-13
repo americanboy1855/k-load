@@ -21,6 +21,20 @@ void main() {
   final downloads =
       Directory('${Platform.environment['USERPROFILE']}/Downloads/K LOAD');
 
+  /// Плашка «VPN отключён» закрывается крестиком; без этого она
+  /// перехватывает тапы (BackdropFilter поверх контента).
+  Future<void> dismissVpnPlate(WidgetTester tester) async {
+    final plate = find.textContaining('VPN ОТКЛЮЧЁН');
+    for (var attempt = 0; attempt < 5; attempt++) {
+      await tester.pump(const Duration(seconds: 1));
+      if (plate.evaluate().isNotEmpty) {
+        await tester.tap(find.text('×').last, warnIfMissed: false);
+        await tester.pump(const Duration(milliseconds: 400));
+      }
+      if (plate.evaluate().isEmpty) return;
+    }
+  }
+
   testWidgets('boot: ядро поднялось, инструменты найдены',
       (tester) async {
     app.main();
@@ -29,9 +43,11 @@ void main() {
     for (var i = 0; i < 8; i++) {
       await tester.pump(const Duration(seconds: 1));
     }
+    await dismissVpnPlate(tester);
+    await tester.pump(const Duration(seconds: 1));
 
-    // Диспетчер (низ экрана) и поле ввода — признак живого экрана.
-    expect(find.textContaining('K LOAD'), findsWidgets);
+    // Поле ввода — признак живого экрана.
+    expect(find.byType(TextField), findsWidgets);
   });
 
   testWidgets('e2e: YouTube — ссылка разбирается и скачивается',
@@ -44,6 +60,8 @@ void main() {
     for (var i = 0; i < 8; i++) {
       await tester.pump(const Duration(seconds: 1));
     }
+    await dismissVpnPlate(tester);
+    await tester.pump(const Duration(seconds: 1));
 
     // Вставка ссылки (знаменитый «Me at the zoo», 19 секунд, ~2 МБ).
     await tester.enterText(
