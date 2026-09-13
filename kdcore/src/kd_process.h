@@ -8,6 +8,9 @@
 
 #ifdef _WIN32
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 
 #include <cstring>
@@ -47,6 +50,7 @@ public:
         ::SetHandleInformation (outRead, HANDLE_FLAG_INHERIT, 0);
 
         const auto cmd = buildCommandLine (args);
+        std::wstring mutableCmd = cmd;
         const auto envBlock = pathEnv.empty() ? std::wstring()
                                               : buildEnvBlock (toWide (pathEnv));
 
@@ -58,7 +62,7 @@ public:
         si.hStdError = outWrite;
 
         DWORD flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
-        const BOOL ok = ::CreateProcessW (toWide (args[0]).c_str(), cmd.data(),
+        const BOOL ok = ::CreateProcessW (toWide (args[0]).c_str(), mutableCmd.data(),
                                           nullptr, nullptr, TRUE, flags,
                                           envBlock.empty() ? nullptr : envBlock.data(),
                                           nullptr, &si, &pi);
