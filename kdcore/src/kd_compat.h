@@ -237,7 +237,16 @@ inline Str urlEscape (const Str& s)
 
 // ---- файлы ----
 
-inline Str pathStr (const fs::path& p) { return p.string(); }
+// UTF-8 везде: .string() на Windows конвертирует в системную ANSI-кодировку
+// и кириллица в путях (названия треков!) бросает исключение или портится.
+inline Str pathStr (const fs::path& p)
+{
+#ifdef _WIN32
+    return p.u8string();
+#else
+    return p.string();
+#endif
+}
 
 inline fs::path childFile (const fs::path& dir, const Str& name) { return dir / fs::u8path (name); }
 
@@ -259,9 +268,23 @@ inline void ensureDir (const fs::path& p)
     fs::create_directories (p, ec);
 }
 
-inline Str fileName (const fs::path& p) { return p.filename().string(); }
+inline Str fileName (const fs::path& p)
+{
+#ifdef _WIN32
+    return p.filename().u8string();
+#else
+    return p.filename().string();
+#endif
+}
 
-inline Str stem (const fs::path& p) { return p.stem().string(); }
+inline Str stem (const fs::path& p)
+{
+#ifdef _WIN32
+    return p.stem().u8string();
+#else
+    return p.stem().string();
+#endif
+}
 
 } // namespace kd
 

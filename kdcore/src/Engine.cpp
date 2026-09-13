@@ -501,8 +501,13 @@ static void cleanupFreshPartial (const QueueItemPtr& item)
     {
         if (! entry.is_regular_file (ec)) continue;
         if (kd::stem (entry.path()) != item->title) continue;
+#ifdef _WIN32
+        struct _stat st {};
+        if (::_wstat (entry.path().c_str(), &st) != 0) continue;
+#else
         struct stat st {};
         if (::stat (entry.path().string().c_str(), &st) != 0) continue;
+#endif
         if (st.st_mtime >= item->startedWall - 2)
             fs::remove (entry.path(), ec);
     }
@@ -723,6 +728,7 @@ fs::path Engine::findToolsDir()
         if (hasTools (besideApp)) return besideApp;
     }
 
+#ifndef _WIN32
     // 5. Установленное приложение K LOAD: инструменты одни на машину,
     //    будущий плагин в DAW пользуется ими же.
     for (const auto* appPath : { "~/Applications/K LOAD.app", "/Applications/K LOAD.app" })
@@ -733,6 +739,7 @@ fs::path Engine::findToolsDir()
         const auto res = p / "Contents" / "Resources";
         if (hasTools (res)) return toolsRoot (res);
     }
+#endif
 
     // 6. Дерево репозитория — разработка без установки (core/tools).
     auto dir = exe.empty() ? fs::current_path() : exe.parent_path();
@@ -948,7 +955,7 @@ bool Engine::runYtDlp (const QueueItemPtr& item, const StrVec& args,
                 std::error_code ec;
                 for (const auto& entry : fs::directory_iterator (item->dest))
                 {
-                    const auto name = entry.path().filename().string();
+                    const auto name = kd::fileName (entry.path());
                     if (entry.path().extension() == ".part"
                         || entry.path().extension() == ".ytdl"
                         || kd::contains (name, ".part-Frag"))
@@ -2013,7 +2020,7 @@ Str Engine::cachedThumbnail (const Str& url, const int timeoutMs)
         return kd::pathStr (target);
     }
 
-    const auto tmp = target.string() + ".part";
+    const auto tmp = kd::pathStr (target) + ".part";
     if (kd::http::downloadToFile (url, tmp, timeoutMs))
     {
         std::error_code ec;

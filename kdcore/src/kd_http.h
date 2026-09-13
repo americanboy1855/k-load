@@ -85,7 +85,11 @@ inline bool downloadToFile (const Str& url, const fs::path& target, int timeoutM
 {
     CURL* c = makeEasy (timeoutMs);
     if (c == nullptr) return false;
+#ifdef _WIN32
+    FILE* f = _wfopen (target.c_str(), L"wb");
+#else
     FILE* f = fopen (target.string().c_str(), "wb");
+#endif
     if (f == nullptr) { curl_easy_cleanup (c); return false; }
     Sink sink;
     sink.file = f;
