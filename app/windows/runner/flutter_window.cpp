@@ -191,24 +191,20 @@ void FlutterWindow::HandleMethodCall(
 
   if (method == "chromeRects") {
     // Кнопки окна в координатах канваса 560×670: hit-test не отдаёт их
-    // титулу, и клики доходят до Flutter.
+    // титулу, и клики доходят до Flutter. Плоский список [x,y,w,h, …].
     chrome_rects_.clear();
     if (const auto* list = std::get_if<flutter::EncodableList>(call.arguments())) {
-      for (const auto& entry : *list) {
-        const auto* map = std::get_if<flutter::EncodableMap>(entry);
-        if (map == nullptr) continue;
-        auto num = [&map](const char* key) -> double {
-          auto it = map->find(flutter::EncodableValue(key));
-          if (it == map->end()) return 0.0;
-          if (const auto* d = std::get_if<double>(&it->second)) return *d;
-          if (const auto* i = std::get_if<int32_t>(&it->second))
-            return static_cast<double>(*i);
-          if (const auto* i64 = std::get_if<int64_t>(&it->second))
-            return static_cast<double>(*i64);
-          return 0.0;
-        };
-        chrome_rects_.push_back({num("x"), num("y"), num("w"), num("h")});
-      }
+      auto num = [&list](size_t idx) -> double {
+        const auto& v = (*list)[idx];
+        if (const auto* d = std::get_if<double>(&v)) return *d;
+        if (const auto* i = std::get_if<int32_t>(&v))
+          return static_cast<double>(*i);
+        if (const auto* i64 = std::get_if<int64_t>(&v))
+          return static_cast<double>(*i64);
+        return 0.0;
+      };
+      for (size_t i = 0; i + 3 < list->size(); i += 4)
+        chrome_rects_.push_back({num(i), num(i + 1), num(i + 2), num(i + 3)});
     }
     result->Success();
     return;

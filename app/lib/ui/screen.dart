@@ -561,19 +561,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   void _sendChromeRects() {
     final canvasBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
     if (canvasBox == null || !canvasBox.attached) return;
-    final rects = <Map<String, dynamic>>[];
+    final rects = <double>[];
     for (final key in [_winMinKey, _winCloseKey]) {
       final ctx = key.currentContext;
       if (ctx == null) continue;
       final box = ctx.findRenderObject() as RenderBox?;
       if (box == null || !box.attached) continue;
       final topLeft = box.localToGlobal(Offset.zero, ancestor: canvasBox);
-      rects.add({
-        'x': topLeft.dx,
-        'y': topLeft.dy,
-        'w': box.size.width,
-        'h': box.size.height,
-      });
+      rects.addAll([topLeft.dx, topLeft.dy, box.size.width, box.size.height]);
     }
     _native.invokeMethod('chromeRects', rects);
   }

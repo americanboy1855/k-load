@@ -27,7 +27,20 @@ jobs:
         run: cmake --build kdcore/build-win --config Release
 
       - name: Контрактные тесты ядра
-        run: ./kdcore/build-win/Release/kd_tests.exe
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "./kdcore/build-win/Release/kd_tests.exe" `
+            -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput "kd-tests-out.txt" `
+            -RedirectStandardError "kd-tests-err.txt"
+          Write-Host "exit: $($p.ExitCode)"
+          if (Test-Path "kd-tests-out.txt") {
+            Get-Content "kd-tests-out.txt" | Select-Object -Last 80 | Write-Host
+          }
+          if (Test-Path "kd-tests-err.txt") {
+            Get-Content "kd-tests-err.txt" | Select-Object -First 40 | Write-Host
+          }
+          exit $p.ExitCode
 
   app:
     # Сборка приложения: ядро + Flutter + портативная папка.
