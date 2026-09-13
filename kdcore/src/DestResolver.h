@@ -20,10 +20,10 @@ inline fs::path homeDir()
 {
 #ifdef _WIN32
     if (const char* profile = ::getenv ("USERPROFILE"))
-        if (*profile != '\0') return fs::u8path (profile);
+        if (*profile != '\0') return kd::u8path (profile);
 #else
     if (const char* home = ::getenv ("HOME"))
-        if (*home != '\0') return fs::u8path (home);
+        if (*home != '\0') return kd::u8path (home);
 #endif
     return fs::path (".");
 }

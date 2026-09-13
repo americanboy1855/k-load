@@ -41,7 +41,7 @@ static fs::path appDataRoot()
 {
 #ifdef _WIN32
     if (const char* appdata = ::getenv ("APPDATA"))
-        if (*appdata != '\0') return fs::u8path (appdata);
+        if (*appdata != '\0') return kd::u8path (appdata);
     return DestResolver::homeDir() / "AppData" / "Roaming";
 #else
     return DestResolver::homeDir() / "Library" / "Application Support";
@@ -683,9 +683,9 @@ fs::path Engine::findToolsDir()
 {
     // 1. Указанный вручную (тесты и нестандартные установки).
     if (const char* env = ::getenv ("K_LOAD_TOOLS"))
-        if (kd::isDir (fs::u8path (env))) return fs::u8path (env);
+        if (kd::isDir (kd::u8path (env))) return kd::u8path (env);
     if (const char* env = ::getenv ("K_DOWNLOADER_TOOLS")) // прежнее имя переменной
-        if (kd::isDir (fs::u8path (env))) return fs::u8path (env);
+        if (kd::isDir (kd::u8path (env))) return kd::u8path (env);
 
     // Инструменты лежат либо в самой папке, либо в подпапке tools/
     // (раскладка бандла: Contents/Resources/tools).
@@ -716,7 +716,7 @@ fs::path Engine::findToolsDir()
     char exePath [4096] = {};
     uint32_t size = sizeof (exePath);
     if (_NSGetExecutablePath (exePath, &size) == 0)
-        exe = fs::u8path (exePath);
+        exe = kd::u8path (exePath);
 #endif
     if (! exe.empty())
     {
@@ -1065,7 +1065,7 @@ void Engine::consume (const Str& line, const QueueItemPtr& item, Str& errTail)
         Str accepted;
         if (! path.empty())
         {
-            const auto target = fs::u8path (path);
+            const auto target = kd::u8path (path);
             // Аудит: в files[] не должно попадать чужое. Принимаем только
             // абсолютный путь внутри папки назначения, записанный не раньше
             // старта этой попытки (перевод строки в названии источника
@@ -1101,7 +1101,7 @@ void Engine::consume (const Str& line, const QueueItemPtr& item, Str& errTail)
             item->progress = 1;
             // Финальное имя файла — истина: строка «в процессе» и после
             // «Готово» совпадают.
-            item->title = kd::stem (fs::u8path (accepted));
+            item->title = kd::stem (kd::u8path (accepted));
         }
     }
 }
@@ -1444,7 +1444,7 @@ void Engine::startNative (const QueueItemPtr& item)
                 if (fromSec >= 0 && toSec > fromSec && ! tools.empty())
                 {
                     setStage (item, "Режу отрезок…");
-                    const auto src = fs::u8path (item->files.front());
+                    const auto src = kd::u8path (item->files.front());
                     auto cut = src; cut.replace_extension (Str (".cut.mp4"));
                     kd::ChildProcess ff;
                     const bool ran = ff.start ({ kd::pathStr (tools / "ffmpeg"),
@@ -1495,14 +1495,14 @@ void Engine::startNative (const QueueItemPtr& item)
                 const int toSec = parts.size() > 1 ? parseTimecode (parts[1]) : -1;
             const double want = fromSec >= 0 && toSec > fromSec
                 ? (double) (toSec - fromSec) : 0.0;
-            const double got = probeFileDuration (fs::u8path (item->files.front()));
+            const double got = probeFileDuration (kd::u8path (item->files.front()));
             // Отрезок обязан быть отрезком: источник, отдавший запись
             // целиком (или огрызок), не засчитывается (аудит KL-006).
             const double slack = want * 0.1 + 3.0;
             if (want > 0 && got > 0 && (got < want - slack || got > want + slack))
             {
                 std::error_code ec;
-                fs::remove (fs::u8path (item->files.front()), ec);
+                fs::remove (kd::u8path (item->files.front()), ec);
                 {
                     const std::lock_guard<std::mutex> sl (mutex);
                     item->files.clear();
@@ -1522,11 +1522,11 @@ void Engine::startNative (const QueueItemPtr& item)
                 setStage (item, "Проверяю файл…");
                 bool audioOk = true;
                 for (const auto& f : item->files)
-                    if (probeFileDuration (fs::u8path (f)) <= 0.0)
+                    if (probeFileDuration (kd::u8path (f)) <= 0.0)
                     {
                         audioOk = false;
                         std::error_code ec;
-                        fs::remove (fs::u8path (f), ec);
+                        fs::remove (kd::u8path (f), ec);
                     }
                 if (! audioOk)
                 {
@@ -1554,7 +1554,7 @@ void Engine::startNative (const QueueItemPtr& item)
             {
                 setStage (item, "Извлекаю звук…");
                 const auto tools = findToolsDir();
-                const auto src = fs::u8path (item->files.front());
+                const auto src = kd::u8path (item->files.front());
                 auto out = src;
                 out.replace_extension (Str (".mp3"));
                 kd::ChildProcess ff;
@@ -1582,7 +1582,7 @@ void Engine::startNative (const QueueItemPtr& item)
             if (! item->sections.empty() && item->files.size() == 1)
             {
                 const std::lock_guard<std::mutex> sl (mutex);
-                item->title = kd::stem (fs::u8path (item->files.front()));
+                item->title = kd::stem (kd::u8path (item->files.front()));
             }
             finish (item, QueueItem::State::done, stage);
             return;
@@ -1690,7 +1690,7 @@ void Engine::startResolve (const QueueItemPtr& item)
     // Альбом складываем в отдельную папку.
     if (tracks.size() > 1 && ! album.empty())
     {
-        const auto folder = item->dest / fs::u8path (safeName (album));
+        const auto folder = item->dest / kd::u8path (safeName (album));
         kd::ensureDir (folder);
         const std::lock_guard<std::mutex> sl (mutex);
         item->dest = folder;
@@ -1732,7 +1732,7 @@ void Engine::startResolve (const QueueItemPtr& item)
     if (! item->sections.empty() && item->files.size() == 1)
     {
         const std::lock_guard<std::mutex> sl (mutex);
-        item->title = kd::stem (fs::u8path (item->files.front()));
+        item->title = kd::stem (kd::u8path (item->files.front()));
     }
     finish (item, QueueItem::State::done,
             tracks.size() > 1
@@ -1998,7 +1998,7 @@ Str Engine::cachedThumbnail (const Str& url, const int timeoutMs)
     {
         const std::lock_guard<std::mutex> lock (thumbMutex);
         const auto it = thumbIndex.find (url);
-        if (it != thumbIndex.end() && kd::isFile (fs::u8path (it->second)))
+        if (it != thumbIndex.end() && kd::isFile (kd::u8path (it->second)))
             return it->second;
     }
 
@@ -2011,7 +2011,7 @@ Str Engine::cachedThumbnail (const Str& url, const int timeoutMs)
     for (const unsigned char c : url) { h ^= c; h *= 1099511628211ull; }
     char hex[20] = {};
     std::snprintf (hex, sizeof (hex), "%llx", (unsigned long long) h);
-    const auto target = fs::u8path (thumbCacheDir()) / (Str (hex) + "." + ext);
+    const auto target = kd::u8path (thumbCacheDir()) / (Str (hex) + "." + ext);
 
     if (kd::isFile (target))
     {
@@ -2350,7 +2350,7 @@ bool Engine::downloadPinterestPhoto (const QueueItemPtr& item)
     if (! wantExt.empty()) ext = wantExt == "png" ? "png" : "jpg";
 
     const auto name = safeName (title.empty() ? Str ("Фотография Pinterest") : title) + "." + ext;
-    const auto finalPath = item->dest / fs::u8path (name);
+    const auto finalPath = item->dest / kd::u8path (name);
     std::error_code ec;
     fs::rename (target, finalPath, ec);
     if (ec)
@@ -2590,8 +2590,8 @@ Str Engine::predictFilesStage (const Str& requestJson, Str& stage)
         if (! ext.empty()) name += "." + ext;
 
         stage = "path";
-        const auto target = dir.empty() ? fs::u8path (name)
-                                        : fs::u8path (dir) / fs::u8path (name);
+        const auto target = dir.empty() ? kd::u8path (name)
+                                        : kd::u8path (dir) / kd::u8path (name);
         std::error_code ec;
         stage = "exists";
         const bool exists = ! dir.empty() && ! name.empty()

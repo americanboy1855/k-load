@@ -248,7 +248,23 @@ inline Str pathStr (const fs::path& p)
 #endif
 }
 
-inline fs::path childFile (const fs::path& dir, const Str& name) { return dir / fs::u8path (name); }
+// fs::u8path на свежем MSVC кидает «No mapping for the Unicode character…»
+// даже на валидном UTF-8 — строим путь через wide напрямую.
+inline fs::path u8path (const Str& s)
+{
+#ifdef _WIN32
+    if (s.empty()) return {};
+    const int n = ::MultiByteToWideChar (CP_UTF8, 0, s.c_str(), (int) s.size(),
+                                         nullptr, 0);
+    std::wstring w ((size_t) n, L'\0');
+    ::MultiByteToWideChar (CP_UTF8, 0, s.c_str(), (int) s.size(), w.data(), n);
+    return fs::path (w);
+#else
+    return fs::u8path (s);
+#endif
+}
+
+inline fs::path childFile (const fs::path& dir, const Str& name) { return dir / u8path (name); }
 
 inline bool isFile (const fs::path& p)
 {

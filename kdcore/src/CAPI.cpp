@@ -211,7 +211,7 @@ static Engine::Options parseOptions (const char* options_json)
     if (data.is_discarded() || ! data.is_object()) return o;
 
     if (data.contains ("dest") && data["dest"].is_string() && ! data["dest"].get<std::string>().empty())
-        o.dest = fs::u8path (data["dest"].get<std::string>());
+        o.dest = kd::u8path (data["dest"].get<std::string>());
     if (data.contains ("mode") && data["mode"] == "audio") o.mode = MediaMode::audio;
     if (data.contains ("quality") && data["quality"].is_string())
     {
