@@ -2588,6 +2588,12 @@ Str Engine::predictFilesStage (const Str& requestJson, Str& stage)
                  + suffix + chronSuffix (sections);
         }
         if (! ext.empty()) name += "." + ext;
+#ifdef _WIN32
+        // yt-dlp на Windows приводит ':' к полноширинной '：' (запрещена в
+        // именах файлов) — предсказание зеркалит это. ХРОН-суффикс
+        // «[00:00–00:10]» на Windows тоже становится «[00：00–00：10]».
+        name = kd::replaceAll (name, ":", "：");
+#endif
 
         stage = "path";
         const auto target = dir.empty() ? kd::u8path (name)

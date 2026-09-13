@@ -137,32 +137,24 @@ static void testPredictFiles()
     check (res.find ("\"exists\":false") != std::string::npos, "template: файла нет", res);
 
     // Такой же файл, созданный на диске, — exists = true: проверка по папке,
-    // а не по диспетчеру (работает после очистки и перезапуска).
+    // а не по диспетчеру (работает после очистки и перезапуска). На Windows
+    // двоеточия таймкодов санитизируются, как это делает yt-dlp.
+    auto createdName = std::string ("Clip： Первый？ [00:00–00:10].mp4");
+#ifdef _WIN32
+    createdName = kd::replaceAll (createdName, ":", "：");
+#endif
     {
-        std::ofstream f (tmp / "Clip： Первый？ [00:00–00:10].mp4");
+        std::ofstream f (tmp / kd::u8path (createdName));
         f << "x";
-#ifdef _WIN32
-        std::cout << "  (диагностика: ofstream открыт: " << (f.good() ? "да" : "НЕТ") << ")\n";
-#endif
     }
-#ifdef _WIN32
-    {
-        std::error_code ec2;
-        const auto probe = kd::u8path (dirJson) / "Clip： Первый？ [00:00–00:10].mp4";
-        std::cout << "  (диагностика: файл виден: "
-                  << (fs::exists (probe, ec2) ? "да" : "НЕТ")
-                  << ", ec=" << ec2.message() << ")\n";
-        std::cout << "  (диагностика: содержимое папки)\n";
-        for (const auto& entry : fs::directory_iterator (kd::u8path (dirJson)))
-            std::cout << "    [" << kd::pathStr (entry.path()) << "]\n";
-    }
-#endif
     out = kd_predict_files (nullptr, ("{\"files\":["
         "{\"kind\":\"template\",\"dir\":\"" + dirJson + "\","
         "\"title\":\"Clip: Первый?\",\"service\":0,\"ext\":\"mp4\",\"sections\":\"0:00-0:10\"}]}").c_str());
     res = out ? out : "";
     kd_string_free (out);
-    check (res.find ("\"exists\":true") != std::string::npos, "template: файл в папке найден", res);
+    check (res.find ("\"exists\":true") != std::string::npos
+               && res.find (createdName) != std::string::npos,
+           "template: файл в папке найден", res);
 
     // Ролик плейлиста: имя задаёт приложение, расширение — формат аудио.
     out = kd_predict_files (nullptr, ("{\"files\":["
