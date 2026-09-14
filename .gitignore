@@ -18,7 +18,6 @@ skills-lock.json
 .video_agent/
 out/
 .DS_Store
-SLIMZ YT DOWNLOADER macOS Universal.dmg
 kdcore/build-release/
 app/scripts/pkg/*.pkg
 
