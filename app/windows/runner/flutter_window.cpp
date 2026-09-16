@@ -118,6 +118,16 @@ LRESULT CALLBACK FlutterWindow::ViewProcThunk(HWND hwnd, UINT message,
       // Двойной клик по титулу не разворачивает окно (паритет с macOS).
       return 0;
     }
+    if (message == WM_WINDOWPOSCHANGING) {
+      // View занимает клиентскую область целиком и всегда в (0,0):
+      // что-то в процессе старта сдвигало его внутрь окна, из-за чего
+      // контент рисовался со сдвигом и обрезкой (см. отчёт, правка 2).
+      auto* wp = reinterpret_cast<WINDOWPOS*>(lparam);
+      if (wp != nullptr && (wp->x != 0 || wp->y != 0)) {
+        wp->x = 0;
+        wp->y = 0;
+      }
+    }
   }
   return ::CallWindowProc(self ? self->default_view_proc_ : nullptr, hwnd,
                           message, wparam, lparam);

@@ -63,20 +63,35 @@ public:
         si.hStdError = outWrite;
 
         DWORD flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
-        const BOOL ok = ::CreateProcessW (toWide (args[0]).c_str(), mutableCmd.data(),
-                                          nullptr, nullptr, TRUE, flags,
-                                          envBlock.empty()
-                                              ? nullptr
-                                              : reinterpret_cast<LPVOID> (envBlock.data()),
-                                          nullptr, &si, &pi);
-        ::CloseHandle (outWrite);
-        outWrite = nullptr;
-
-        if (! ok)
         {
-            ::CloseHandle (outRead);
-            outRead = nullptr;
-            return false;
+            const BOOL ok = ::CreateProcessW (resolveExecutable (toWide (args[0])).c_str(),
+                                              mutableCmd.data(),
+                                              nullptr, nullptr, TRUE, flags,
+                                              envBlock.empty()
+                                                  ? nullptr
+                                                  : reinterpret_cast<LPVOID> (envBlock.data()),
+                                              nullptr, &si, &pi);
+            if (ok) { started = true; return true; }
+            spawnError = ::GetLastError();
+        }
+        // Некоторые машины/перехватчики отвергают любой явный env-блок
+        // (err 87/183), хотя наследование работает. Повтор без блока:
+        // бинарь и так указан абсолютным путём, PATH нужен лишь для
+        // поиска deno — им жертвуем, зато загрузчик стартует всегда.
+        {
+            const BOOL ok = ::CreateProcessW (resolveExecutable (toWide (args[0])).c_str(),
+                                              mutableCmd.data(),
+                                              nullptr, nullptr, TRUE, flags,
+                                              nullptr, nullptr, &si, &pi);
+            ::CloseHandle (outWrite);
+            outWrite = nullptr;
+            if (! ok)
+            {
+                spawnError = ::GetLastError();
+                ::CloseHandle (outRead);
+                outRead = nullptr;
+                return false;
+            }
         }
         started = true;
         return true;
@@ -152,6 +167,10 @@ public:
         }
     }
 
+    // GetLastError последней неудачи start() (0 — успех). Публично:
+    // движок показывает код в журнале и в сообщении пользователю.
+    DWORD spawnError = 0;
+
 private:
     static std::wstring toWide (const Str& s)
     {
@@ -161,6 +180,23 @@ private:
         std::wstring w ((size_t) n, L'\0');
         ::MultiByteToWideChar (CP_UTF8, 0, s.c_str(), (int) s.size(), w.data(), n);
         return w;
+    }
+
+    // CreateProcessW не добавляет .exe, если имя содержит путь, — а ядро
+    // зовёт "tools/ffprobe" и "tools/ffmpeg" без расширения: спавн падал
+    // с err=2 (см. отчёт ERR-13). Подставляем .exe сами, когда нужно.
+    static std::wstring resolveExecutable (const std::wstring& exe)
+    {
+        if (exe.size() > 4 && _wcsnicmp (exe.c_str() + exe.size() - 4, L".exe", 4) == 0)
+            return exe;
+        std::wstring withExt = exe + L".exe";
+        const DWORD a1 = ::GetFileAttributesW (withExt.c_str());
+        if (a1 != INVALID_FILE_ATTRIBUTES && ! (a1 & FILE_ATTRIBUTE_DIRECTORY))
+            return withExt;
+        const DWORD a2 = ::GetFileAttributesW (exe.c_str());
+        if (a2 != INVALID_FILE_ATTRIBUTES && ! (a2 & FILE_ATTRIBUTE_DIRECTORY))
+            return exe;
+        return withExt;
     }
 
     // Кавычки и обратные слеши — по правилам командной строки Windows.

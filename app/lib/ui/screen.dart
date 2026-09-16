@@ -14,6 +14,16 @@ import 'widgets.dart';
 
 const tvW = 560.0, tvH = 670.0;
 
+// ВРЕМЕННАЯ отладка кликов (убрать после разбора).
+void dbgTap(String s) {
+  try {
+    File('C:\\Temp\\kload-taps.log').writeAsStringSync(
+        '${DateTime.now().toIso8601String()} $s\n',
+        mode: FileMode.append);
+  } catch (_) {}
+}
+
+
 // Классификатор сервисов — зеркально design/main-screen.html.
 class ServiceInfo {
   const ServiceInfo(this.id, this.name, {this.music = false, this.playlist = false});
@@ -150,6 +160,10 @@ UserMessage mapUserMessage(String raw) {
     return const UserMessage('cancelled', 'ЗАГРУЗКА ОТМЕНЕНА',
         'Можно повторить в любой момент', 'retry');
   }
+  if (has(['загрузчик не запущен системой', 'не удалось запустить загрузчик'])) {
+    return const UserMessage('launcherBlocked', 'ЗАГРУЗЧИК ЗАБЛОКИРОВАН',
+        'Система не пустила yt-dlp — проверьте антивирус и повторите', 'retry');
+  }
   if (has(['загрузчик не найден', 'нет ядра', 'инструмент'])) {
     return const UserMessage('toolsMissing', 'ИНСТРУМЕНТЫ НЕ НАЙДЕНЫ',
         'Переустановите приложение', 'close');
@@ -237,6 +251,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   bool mediaMode = false; // в пачке чип ВИДЕО превращается в МЕДИА
   bool musicOnly = false; // музыкальный сервис: видео оттуда не скачать
   String mode = 'video'; // video | music
+  String? _modeAutoLink; // ссылка, для которой режим выставлялся автоматически
+  bool autotestGo = false; // автотест: СКАЧАТЬ после разбора
+  int autotestCount = 0; // автотест: КОЛ-ВО для плейлиста
   bool chronOn = false;   // режим активен — отрезок уйдёт в загрузку
   bool chronOpen = false; // панель ОТ/ДО раскрыта (не влияет на режим)
   bool chronLocked = false;
@@ -385,12 +402,30 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     } on Object catch (e) {
       debugPrint('KD_BOOT ошибка: $e');
     }
+    // АВТОТЕСТ (только при заданном KLOAD_AUTOTEST_URL): тот же путь, что
+    // и ручной ввод — поле + debounce + разбор; KLOAD_AUTOTEST_GO=1
+    // добавляет автонажатие СКАЧАТЬ после успешного разбора;
+    // KLOAD_AUTOTEST_COUNT=N выставляет КОЛ-ВО (плейлисты) до скачивания.
+    final autoUrl = Platform.environment['KLOAD_AUTOTEST_URL'];
+    if (autoUrl != null && autoUrl.isNotEmpty) {
+      Future.delayed(const Duration(seconds: 4), () {
+        if (!mounted) return;
+        dbgTap('autotest: inject url=$autoUrl go='
+            '${Platform.environment['KLOAD_AUTOTEST_GO']}');
+        query.text = autoUrl;
+        _onInputChanged(autoUrl);
+        autotestGo = Platform.environment['KLOAD_AUTOTEST_GO'] == '1';
+        final cnt = Platform.environment['KLOAD_AUTOTEST_COUNT'];
+        if (cnt != null && cnt.isNotEmpty) autotestCount = int.tryParse(cnt) ?? 0;
+      });
+    }
   }
 
   void _onEvent(KdEvent e) {
     final c = core;
     if (c == null) return;
     if (e is KdVpnEvent) {
+      dbgTap('vpn event: on=${e.on} (was ${vpnState})');
       final wasOff = vpnState == 2;
       // VPN пропал: активные загрузки корректно ставим на паузу (yt-dlp
       // сохраняет .part), чтобы они не падали сетевыми ошибками. После
@@ -602,6 +637,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   void _onInputChanged(String _) {
     setState(() {
+      // Поле изменилось — следующая ссылка разбирается «с нуля»:
+      // режим выставится заново по её сервису.
+      _modeAutoLink = null;
       if (rawText.isEmpty) {
         phase = Phase.idle;
         probe = null;
@@ -768,6 +806,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   }
 
   void _onProbe(KdProbeEvent p) {
+    dbgTap('onProbe arrive: ok=${p.ok} link=${p.link.isEmpty ? '-' : p.link}');
     if (!mounted || rawText.isEmpty) return;
     _probeWatchdog?.cancel();
 
@@ -826,6 +865,12 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     // (SoundCloud и т.п.), а не сырой текст из поля.
     final effective = (p.resolved.isNotEmpty ? p.resolved : p.link);
     final svc = serviceOf(effective.startsWith('http') ? effective : rawText);
+    // Повторный разбор той же ссылки (догрузка длительности, повтор после
+    // VPN) не должен затирать выбор пользователя: режим/ХРОН/качество
+    // выставляются только на свежей ссылке — иначе кнопка «МУЗЫКА»
+    // «не нажимается»: тап срабатывает, а приехавший переразбор возвращает
+    // ВИДЕО (см. отчёт FIX-11).
+    final freshParse = effective != _modeAutoLink;
     setState(() {
       probe = p;
       phase = Phase.found;
@@ -841,18 +886,33 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       if (results.isNotEmpty) searchResults = results;
       // музыкальный сервис: видео оттуда не скачать — сразу плашка МУЗЫКА
       musicOnly = svc.music && !p.isPlaylist;
-      mode = musicOnly ? 'music' : 'video';
-      chronLocked = p.isPlaylist || p.isPhoto || !p.ok;
-      chronOn = false;
-      chronOpen = false;
-      openPanel = '';
-      quality = '1080';
-      qualityOpen = false;
-      videoContainer = 'mp4';
-      audioFormat = 'mp3';
-      imageFormat = 'jpg';
-      playlistLimit = 0;
+      if (freshParse) {
+        _modeAutoLink = effective;
+        mode = musicOnly ? 'music' : 'video';
+        chronLocked = p.isPlaylist || p.isPhoto || !p.ok;
+        chronOn = false;
+        chronOpen = false;
+        openPanel = '';
+        quality = '1080';
+        qualityOpen = false;
+        videoContainer = 'mp4';
+        audioFormat = 'mp3';
+        imageFormat = 'jpg';
+        playlistLimit = 0;
+      }
     });
+    // АВТОТЕСТ: после успешного разбора — автоматический СКАЧАТЬ.
+    if (autotestGo && p.ok) {
+      autotestGo = false;
+      if (autotestCount > 0) {
+        setState(() => playlistLimit = autotestCount);
+        autotestCount = 0;
+      }
+      dbgTap('autotest: GO -> _download()');
+      Future.delayed(const Duration(milliseconds: 400), () {
+        if (mounted) _download();
+      });
+    }
     _scheduleDurationRetry();
   }
 
@@ -1350,7 +1410,19 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   Future<void> _openPath(String path) async {
     try {
-      await Process.run('open', [path]);
+      // macOS — open; Windows — по типу: URL отдаём ShellExecute-обёртке
+      // (explorer с адресом, содержащим ? и &, открывает «Документы»),
+      // папки — explorer'у.
+      if (Platform.isWindows) {
+        if (path.startsWith('http://') || path.startsWith('https://')) {
+          await Process.run(
+              'rundll32.exe', ['url.dll,FileProtocolHandler', path]);
+        } else {
+          await Process.run('explorer.exe', [path]);
+        }
+      } else {
+        await Process.run('open', [path]);
+      }
     } on Object catch (e) {
       debugPrint('open $path: $e');
     }
@@ -1466,8 +1538,33 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         ),
       ),
       child: Column(children: [
-        // верхняя рамка: родные кнопки светофора рисует macOS поверх
-        const SizedBox(height: 42),
+        // верхняя рамка: зона перетаскивания; на Windows здесь же —
+        // кнопки окна (свернуть/закрыть), как в макете без рамки.
+        SizedBox(
+          height: 42,
+          child: Stack(children: [
+            if (Platform.isWindows) ...[
+              Positioned(
+                right: 10,
+                top: 8,
+                child: _WinButton(
+                  key: _winCloseKey,
+                  glyph: '×',
+                  onTap: () => _native.invokeMethod('close'),
+                ),
+              ),
+              Positioned(
+                right: 40,
+                top: 8,
+                child: _WinButton(
+                  key: _winMinKey,
+                  glyph: '–',
+                  onTap: () => _native.invokeMethod('minimize'),
+                ),
+              ),
+            ],
+          ]),
+        ),
         Expanded(child: _glass()),
         _band(),
       ]),
@@ -1534,6 +1631,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       // Клик вне панелей закрывает их (дети перехватывают свои тапы).
       behavior: HitTestBehavior.translucent,
       onTap: () {
+        dbgTap('_ui outer tap (panel-close)');
         if (openPanel.isNotEmpty || chronOpen || showResultList) {
           setState(() {
             openPanel = '';
@@ -2503,7 +2601,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             on: mode == 'music',
             locked: false,
             hidden: photo,
-            onTap: () => setState(() => mode = 'music')),
+            onTap: () {
+              dbgTap('chip MUSICA tapped');
+              setState(() => mode = 'music');
+            }),
         if (!playlist)
           _ModeChip(
               key: chipKeys['chron'],
@@ -2859,6 +2960,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   /// удаляются и в корзину не перемещаются. Пауза при этом сбрасывается:
   /// следующее «СКАЧАТЬ» запускает загрузку сразу, без отдельного ▶.
   void _clearQueueHistory() {
+    dbgTap('CLEAR tapped');
     core?.setPaused(false);
     core?.clearFinished();
     setState(() {
@@ -2943,6 +3045,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             onTap: () => core?.cancel(it.id),
           )
         else if (done) ...[
+          _ActButton(
+            icon: (_) => const Icon(Icons.close, size: 13, color: Pal.soft),
+            // «Передумал» работает и на только что готовом: короткий ролик
+            // успевает скачаться быстрее, чем человек жмёт × (репорт
+            // FIX-20) — крестик готовой строки убирает файл и строку.
+            onTap: () => _trashRow(it),
+          ),
+          const SizedBox(width: 6),
           _ActButton(
             icon: (hover) => FolderIcon(
                 size: 14,
@@ -3191,29 +3301,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             ),
           ),
         ),
-        if (Platform.isWindows) ...[
-          // Кнопки окна: на маке — системные светофоры поверх контента,
-          // здесь рисуем сами. Прямоугольники уходят в раннер (_sendChromeRects),
-          // чтобы невидимый титул не съедал клики.
-          Positioned(
-            right: 12,
-            top: 6,
-            child: _WinButton(
-              key: _winCloseKey,
-              glyph: '×',
-              onTap: () => _native.invokeMethod('close'),
-            ),
-          ),
-          Positioned(
-            right: 42,
-            top: 6,
-            child: _WinButton(
-              key: _winMinKey,
-              glyph: '–',
-              onTap: () => _native.invokeMethod('minimize'),
-            ),
-          ),
-        ],
+        // Кнопки окна на Windows переехали в верхнюю полосу (_tv) —
+        // по макету без рамки: плоские квадраты в правом верхнем углу.
       ]),
     );
   }
@@ -3339,7 +3428,7 @@ class _ModeChipState extends State<_ModeChip> {
           cursor: widget.locked
               ? SystemMouseCursors.forbidden
               : SystemMouseCursors.click,
-          onEnter: (_) => setState(() => hover = true),
+          onEnter: (_) { dbgTap('chip hover: ${widget.label}'); setState(() => hover = true); },
           onExit: (_) => setState(() => hover = false),
           child: AnimatedOpacity(
             opacity: widget.locked ? .3 : 1,
@@ -3474,12 +3563,13 @@ class _TextLinkState extends State<_TextLink> {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () {
+        dbgTap('TextLink tapped: ${widget.label}');
         _setHover(false);
         widget.onTap();
       },
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
-        onEnter: (_) => _setHover(true),
+        onEnter: (_) { dbgTap('TextLink hover: ${widget.label}'); _setHover(true); },
         onExit: (_) => _setHover(false),
         onHover: (_) => _setHover(true),
         child: TweenAnimationBuilder<double>(
@@ -3560,6 +3650,7 @@ class _GoButtonState extends State<_GoButton> {
   }
 
   void _onTap() {
+    dbgTap('GO button tapped, enabled=${widget.enabled}');
     context
         .findAncestorStateOfType<_KLoadScreenState>()
         ?._download();

@@ -1,4 +1,4 @@
-# Локальная сборка K LOAD на Windows.
+﻿# Локальная сборка K LOAD на Windows.
 # Использование:  pwsh win/build.ps1 [-Installer]
 #
 # Требует: Flutter SDK (stable), Git, vcpkg (VCPKG_ROOT) — для curl.
@@ -17,6 +17,17 @@ if (-not (Test-Path "core/tools-win/ytdlp/yt-dlp.exe")) {
 }
 
 # 2. Ядро kdcore.dll (vcpkg: curl, TLS = Schannel).
+# VCPKG_ROOT ищем в нескольких местах: %LOCALAPPDATA%\vcpkg ломается,
+# если имя пользователя не ASCII (см. отчёт ERR-03) — тогда берём
+# установленную в ASCII-путь копию.
+if (-not $env:VCPKG_ROOT) {
+    foreach ($cand in @("$env:LOCALAPPDATA/vcpkg", "C:/vcpkg", "C:/dev/vcpkg")) {
+        if (Test-Path "$cand/scripts/buildsystems/vcpkg.cmake") {
+            $env:VCPKG_ROOT = $cand
+            break
+        }
+    }
+}
 if (-not $env:VCPKG_ROOT) { $env:VCPKG_ROOT = "$env:LOCALAPPDATA/vcpkg" }
 & vcpkg install "curl:x64-windows-static-md"
 cmake -S kdcore -B kdcore/build-win -G "Visual Studio 17 2022" -A x64 `

@@ -6,7 +6,7 @@
 #define AppName "K LOAD"
 #define AppVersion "1.0.0"
 #define AppPublisher "kvartal records"
-#define AppExe "K LOAD.exe"
+#define AppExe "kload.exe"
 
 [Setup]
 AppId={{5ECD3C05-B2FE-405B-AA0B-B153195A4822}

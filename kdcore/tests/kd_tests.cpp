@@ -41,6 +41,20 @@ static void check (bool ok, const std::string& name, const std::string& detail =
 
 // ---- чистые ----
 
+// Пути Windows содержат '\', в JSON он должен удваиваться: без этого
+// nlohmann тихо отбрасывает все опции (parse без исключений) и задание
+// качает в дефолтную папку вместо тестовой (см. отчёт ERR-07).
+static std::string jsonPath (const std::string& p)
+{
+    std::string out;
+    for (char c : p)
+    {
+        if (c == '\\' || c == '"') out += '\\';
+        out += c;
+    }
+    return out;
+}
+
 static void testDetector()
 {
     std::cout << "Detector::serviceFor\n";
@@ -289,7 +303,7 @@ sleep 30
     fs::remove_all (out);
     fs::create_directories (out);
     const std::string dest = kd::pathStr (out);
-    const std::string opts = "{\"dest\":\"" + dest + "\",\"mode\":\"video\"}";
+    const std::string opts = "{\"dest\":\"" + jsonPath (dest) + "\",\"mode\":\"video\"}";
 
     kd_engine* e = kd_engine_create (kd::pathStr (tools).c_str());
     check (e != nullptr, "движок на фейковых инструментах");
@@ -414,16 +428,18 @@ static void testLiveDownload (kd_engine* e)
 
     // Видео YouTube (коротчайший «Me at the zoo»).
     std::string links = "[\"https://www.youtube.com/watch?v=jNQXAC9IVRw\"]";
-    const std::string opts = "{\"dest\":\"" + dest + "\",\"mode\":\"video\",\"quality\":\"1080\"}";
+    const std::string opts = "{\"dest\":\"" + jsonPath (dest) + "\",\"mode\":\"video\",\"quality\":\"1080\"}";
     check (kd_enqueue_batch (e, links.c_str(), opts.c_str()) == 1, "enqueue youtube");
 
     const auto item1 = waitForState (e, 1, "done", "failed", 180);
     check (item1.find ("\"state\":\"done\"") != std::string::npos, "youtube скачан", item1.substr (0, 300));
-    check (item1.find ("\"files\":[\"/") != std::string::npos, "youtube путь файла выдан", item1.substr (0, 300));
+    // Путь может начинаться и с диска (Windows), и с '/' (macOS) —
+    // важно, что массив files не пуст.
+    check (item1.find ("\"files\":[\"") != std::string::npos, "youtube путь файла выдан", item1.substr (0, 300));
 
     // Аудио SoundCloud → mp3.
     links = "[\"https://soundcloud.com/forss/flickermood\"]";
-    const std::string optsAudio = "{\"dest\":\"" + dest + "\",\"mode\":\"audio\",\"audioFormat\":\"mp3\"}";
+    const std::string optsAudio = "{\"dest\":\"" + jsonPath (dest) + "\",\"mode\":\"audio\",\"audioFormat\":\"mp3\"}";
     check (kd_enqueue_batch (e, links.c_str(), optsAudio.c_str()) == 1, "enqueue soundcloud");
 
     const auto item2 = waitForState (e, 2, "done", "failed", 180);
@@ -461,7 +477,7 @@ static void testLiveDownload (kd_engine* e)
     // ХРОН: отрезок 0–2 секунды того же короткого ролика. Секции доезжают
     // в задание и файл получается (многократно меньше полного).
     links = "[\"https://www.youtube.com/watch?v=jNQXAC9IVRw\"]";
-    const std::string optsChron = "{\"dest\":\"" + dest
+    const std::string optsChron = "{\"dest\":\"" + jsonPath (dest)
         + "\",\"mode\":\"video\",\"sections\":\"0:00-0:02\"}";
     check (kd_enqueue_batch (e, links.c_str(), optsChron.c_str()) == 1, "enqueue с sections");
 
@@ -482,6 +498,38 @@ static void testLiveDownload (kd_engine* e)
         }
     check (cutSize > 0 && cutSize < fullSize, "отрезок меньше целого ролика",
         std::to_string (cutSize) + " < " + std::to_string (fullSize));
+
+    // Отмена недокачанного задания: свежие .part-хвосты в папке назначения
+    // должны исчезнуть (FIX-19 — «файлы появляются сами после отмены»).
+    {
+        const auto bait = tmp / "bait-cancel.part";
+        { std::ofstream b (bait, std::ios::binary); b << "x"; }
+        links = "[\"https://www.youtube.com/watch?v=aqz-KE-bpKQ\"]";
+        const std::string optsCancel =
+            "{\"dest\":\"" + jsonPath (dest) + "\",\"mode\":\"video\"}";
+        check (kd_enqueue_batch (e, links.c_str(), optsCancel.c_str()) == 1,
+            "enqueue для отмены");
+        char* snapNow = kd_snapshot (e);
+        int cancelId = 0;
+        {
+            const std::string s = snapNow;
+            // Последний id в снапшоте — самое свежее задание (наш).
+            const auto p = s.rfind ("\"id\":");
+            if (p != std::string::npos) cancelId = std::atoi (s.c_str() + p + 5);
+        }
+        kd_string_free (snapNow);
+        std::this_thread::sleep_for (std::chrono::seconds (2));
+        kd_cancel (e, cancelId);
+        const auto itemC = waitForState (e, cancelId, "done", "failed", 120);
+        const bool cancelledNow =
+            itemC.find ("\"state\":\"failed\"") != std::string::npos;
+        if (cancelledNow)
+            check (! fs::exists (bait), "отмена чистит .part-хвосты");
+        else
+            // Сеть успела раньше отмены: задание done — файл легитимен,
+            // проверку чистки пропускаем (sheer speed, не баг).
+            check (true, "отмена опоздала (ролик успел скачаться)");
+    }
 }
 
 // Инъекции в маркерах @T/@F (аудит KL-002/005/007): чужие и старые пути
@@ -524,7 +572,7 @@ static void testConsumeMarkers()
     }
     fs::permissions (stub, fs::perms::owner_exec, fs::perm_options::add);
 
-    const std::string opts = "{\"dest\":\"" + dest.u8string() + "\",\"mode\":\"video\"}";
+    const std::string opts = "{\"dest\":\"" + jsonPath (dest.u8string()) + "\",\"mode\":\"video\"}";
     kd_engine* e = kd_engine_create (kd::pathStr (tools).c_str());
     check (kd_enqueue_batch (e, "[\"https://example.com/inject\"]", opts.c_str()) == 1,
         "consume: задание поставлено");

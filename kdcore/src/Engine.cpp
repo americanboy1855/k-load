@@ -36,12 +36,19 @@ static const char* ytdlpBinaryName()
 }
 
 // Папка данных приложения: macOS — ~/Library/Application Support,
-// Windows — %APPDATA% (Roaming).
+// Windows — %APPDATA% (Roaming). Только wide-API: getenv даёт ANSI-байты,
+// которые u8path портит на кириллических профилях.
 static fs::path appDataRoot()
 {
 #ifdef _WIN32
-    if (const char* appdata = ::getenv ("APPDATA"))
-        if (*appdata != '\0') return kd::u8path (appdata);
+    const DWORD need = ::GetEnvironmentVariableW (L"APPDATA", nullptr, 0);
+    if (need > 0 && need <= 4096)
+    {
+        std::wstring v (need, L'\0');
+        ::GetEnvironmentVariableW (L"APPDATA", v.data(), need);
+        v.resize (::wcslen (v.c_str()));
+        if (! v.empty()) return fs::path (v);
+    }
     return DestResolver::homeDir() / "AppData" / "Roaming";
 #else
     return DestResolver::homeDir() / "Library" / "Application Support";
@@ -132,6 +139,9 @@ int Engine::parseTimecode (const Str& s)
 }
 
 // Длительность локального файла через ffprobe (сек, дробью). Не вышло — 0.
+// -2 — проверка не уложилась в общий дедлайн: файл НЕ считается битым
+// (зависший ffprobe раньше держал воркера вечно — «Проверяю файл…»
+// не отпускал строку и очередь, см. отчёт FIX-15).
 double Engine::probeFileDuration (const fs::path& file) const
 {
     const auto tools = findToolsDir();
@@ -143,11 +153,19 @@ double Engine::probeFileDuration (const fs::path& file) const
         return 0.0;
     Str out;
     char chunk[1024];
+    const auto started = std::chrono::steady_clock::now();
     for (;;)
     {
         const int n = probe.read (chunk, (int) sizeof (chunk), 20);
         if (n > 0) out.append (chunk, (size_t) n);
         else if (n == 0) break;
+        if (std::chrono::duration_cast<std::chrono::seconds> (
+                std::chrono::steady_clock::now() - started).count() > 15)
+        {
+            probe.kill();
+            probe.waitExitCode();
+            return -2.0;
+        }
     }
     probe.waitExitCode();
     return kd::getDouble (kd::trim (out));
@@ -513,6 +531,37 @@ static void cleanupFreshPartial (const QueueItemPtr& item)
     }
 }
 
+// Отмена задания: недокачанные хвосты yt-dlp (.part/.ytdl/Frag) в папке
+// назначения — мусор, который пользователь видит как «файлы появились
+// сами» (репорт FIX-19). Убираем свежие хвосты этой попытки; чужие
+// активные загрузки не трогаем — sweep только когда других working нет.
+static void cleanupPartialTails (const QueueItemPtr& item,
+                                 const std::vector<QueueItemPtr>& all)
+{
+    for (const auto& other : all)
+        if (other != item && other->state == QueueItem::State::working)
+            return; // рядом качается другое задание — его .part свят
+    if (item->dest.empty()) return;
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator (item->dest, ec))
+    {
+        const auto name = kd::fileName (entry.path());
+        const bool tail = entry.path().extension() == ".part"
+            || entry.path().extension() == ".ytdl"
+            || kd::contains (name, ".part-Frag");
+        if (! tail) continue;
+#ifdef _WIN32
+        struct _stat st {};
+        if (::_wstat (entry.path().c_str(), &st) != 0) continue;
+#else
+        struct stat st {};
+        if (::stat (entry.path().string().c_str(), &st) != 0) continue;
+#endif
+        if (st.st_mtime >= item->startedWall - 5)
+            fs::remove (entry.path(), ec);
+    }
+}
+
 void Engine::finish (const QueueItemPtr& item, QueueItem::State state, const Str& stage)
 {
     // Недокачанный «хвост» (--no-part после сбоя сети) не должен считаться
@@ -520,6 +569,16 @@ void Engine::finish (const QueueItemPtr& item, QueueItem::State state, const Str
     if (state == QueueItem::State::failed
         && item->files.empty() && item->stallRetried)
         cleanupFreshPartial (item);
+    // Отменённое задание не должно оставлять мусор в папке (FIX-19).
+    if (state == QueueItem::State::failed && stage == "Отменено")
+    {
+        std::vector<QueueItemPtr> all;
+        {
+            const std::lock_guard<std::mutex> sl (mutex);
+            all = items;
+        }
+        cleanupPartialTails (item, all);
+    }
     {
         const std::lock_guard<std::mutex> sl (mutex);
         item->state = state;
@@ -564,7 +623,11 @@ void Engine::workerLoop()
 
         if (next == nullptr)
         {
-            wake.waitForever();
+            // waitForever нельзя: токен Wake одноразовый — если соседний
+            // воркер в момент сигнала был занят и не спал, его токен съест
+            // этот wait, и при уничтожении движка воркер уснёт навсегда
+            // (join в деструкторе зависал). Проверяем quit раз в 500 мс.
+            wake.waitMs (500);
             continue;
         }
 
@@ -759,8 +822,13 @@ fs::path Engine::findToolsDir()
 StrVec Engine::baseArgs (const fs::path& dest, const Str& cookie) const
 {
     StrVec args {
-        "--ignore-config", "--no-warnings", "--newline", "--no-colors",
+        "--ignore-config", "--no-warnings", "--encoding", "utf-8", "--newline", "--no-colors",
         "--retries", "5", "--socket-timeout", "20",
+        // Разрешение и фпс всегда важнее предпочтений кодека/контейнера:
+        // без явной сортировки yt-dlp порой отдавал 1080-avc вместо
+        // выбранного 2160-vp9 («плохое качество при максимальном»).
+        // Склейка остаётся ремуксом без перекодирования — без потерь.
+        "--format-sort", "res,fps,br,vcodec,acodec,proto,ext",
         "--concurrent-fragments", "4", "--no-mtime", "--no-overwrites",
         "--print", "before_dl:@T|%(playlist_index|1)s|%(playlist_count|1)s|%(title)s",
         "--print", "after_move:@F|%(filepath)s",
@@ -804,10 +872,14 @@ static Str childPath (const fs::path& tools)
 // maxSeconds — жёсткий потолок: зависший процесс глохнет, разбор возвращает
 // неудачу (аудит KL-010: зависший -J блокировал все разборы навсегда).
 static bool captureOut (const StrVec& args, Str& out, int* code = nullptr,
-                        int maxSeconds = 120)
+                        int maxSeconds = 120, DWORD* spawnError = nullptr)
 {
     const auto tools = Engine::findToolsDir();
-    if (tools.empty()) return false;
+    if (tools.empty())
+    {
+        if (spawnError != nullptr) *spawnError = 1; // инструменты не найдены
+        return false;
+    }
     const auto tool = tools / "ytdlp" / ytdlpBinaryName();
 
     StrVec all;
@@ -815,7 +887,12 @@ static bool captureOut (const StrVec& args, Str& out, int* code = nullptr,
     all.insert (all.end(), args.begin(), args.end());
 
     kd::ChildProcess proc;
-    if (! proc.start (all, childPath (tools))) return false;
+    if (! proc.start (all, childPath (tools)))
+    {
+        if (spawnError != nullptr)
+            *spawnError = proc.spawnError != 0 ? proc.spawnError : 1;
+        return false;
+    }
 
     char chunk[16384];
     std::ostringstream mb;
@@ -868,14 +945,23 @@ bool Engine::runYtDlp (const QueueItemPtr& item, const StrVec& args,
                    + (stallAttempt > 0
                           ? " (повтор " + std::to_string (stallAttempt) + ")"
                           : Str()));
+        // Пока источник разбирается (до маркера @T) строка честно показывает,
+        // что идёт подключение, а не висит в «Готовлюсь» (FIX-16).
+        setStage (item, stallAttempt > 0
+            ? "Повторяю соединение…" : "Подключаюсь к источнику…");
         rs.current = std::make_unique<kd::ChildProcess>();
         rs.errTail = {};
         rs.buffer = {};
         if (! rs.current->start (all, childPath (tools)))
         {
-            engineLog ("ошибка: процесс не запустился");
+            engineLog ("ошибка: процесс не запустился (GetLastError="
+                       + std::to_string (rs.current->spawnError) + ")");
+            const DWORD err = rs.current->spawnError;
             rs.current = nullptr;
-            finish (item, QueueItem::State::failed, "Не удалось запустить загрузчик");
+            finish (item, QueueItem::State::failed,
+                    err != 0
+                        ? "Загрузчик не запущен системой (ошибка " + std::to_string (err) + ")"
+                        : "Не удалось запустить загрузчик");
             return false;
         }
 
@@ -1076,14 +1162,24 @@ void Engine::consume (const Str& line, const QueueItemPtr& item, Str& errTail)
                 const auto base = fs::weakly_canonical (item->dest, ec);
                 const auto full = fs::weakly_canonical (target, ec).u8string();
                 const auto bs = base.u8string();
+                // Граница: на Windows после префикса стоит '\' — принимаем
+                // оба разделителя, иначе каждый файл отклоняется как «чужой».
                 const bool inside = ! ec && ! bs.empty()
                     && full.size() > bs.size()
                     && full.compare (0, bs.size(), bs) == 0
-                    && (bs == "/" || full[bs.size()] == '/');
+                    && (bs == "/" || full[bs.size()] == '/'
+                        || full[bs.size()] == '\\');
+#ifdef _WIN32
+                struct _stat st {};
+                const bool fresh = ! ec
+                    && ::_wstat (target.c_str(), &st) == 0
+                    && st.st_mtime >= item->startedWall - 2;
+#else
                 struct stat st {};
                 const bool fresh = ! ec
                     && ::stat (kd::pathStr (target).c_str(), &st) == 0
                     && st.st_mtime >= item->startedWall - 2;
+#endif
                 if (inside && fresh)
                     accepted = full;
                 else
@@ -1112,7 +1208,7 @@ void Engine::startPlaylist (const QueueItemPtr& item)
 {
     // Плоский список роликов: быстро, без скачивания. Большому плейлисту
     // даём больше времени, но не бесконечность.
-    StrVec args { "--ignore-config", "--no-warnings", "--socket-timeout", "20",
+    StrVec args { "--ignore-config", "--no-warnings", "--encoding", "utf-8", "--socket-timeout", "20",
                   "--retries", "1", "--flat-playlist", "-J" };
     args.push_back (item->link);
     Str out;
@@ -1242,10 +1338,14 @@ void Engine::startPlaylist (const QueueItemPtr& item)
 
     if (done > 0)
     {
-        const std::lock_guard<std::mutex> sl (mutex);
-        item->progress = 1;
         Str stage = "Готово · файлов: " + std::to_string (done);
         if (failed > 0) stage += " · пропущено: " + std::to_string (failed);
+        {
+            const std::lock_guard<std::mutex> sl (mutex);
+            item->progress = 1;
+        }
+        // finish() сам берёт мьютекс — нельзя вызывать под нашим локом
+        // (std::mutex несъёмный: двойной lock = UB, fail-fast 0xC0000409).
         finish (item, QueueItem::State::done, stage);
     }
     else
@@ -1474,8 +1574,11 @@ void Engine::startNative (const QueueItemPtr& item)
                     {
                         fs::remove (cut, ec);
                         fs::remove (src, ec);
-                        const std::lock_guard<std::mutex> sl (mutex);
-                        item->files.clear();
+                        {
+                            const std::lock_guard<std::mutex> sl (mutex);
+                            item->files.clear();
+                        }
+                        // finish() сам берёт мьютекс — под локом нельзя (UB).
                         finish (item, QueueItem::State::failed,
                             "Обрезка не удалась: источник отдал короткий поток. "
                             "Попробуйте скачать без ХРОНа");
@@ -1522,20 +1625,39 @@ void Engine::startNative (const QueueItemPtr& item)
                 setStage (item, "Проверяю файл…");
                 bool audioOk = true;
                 for (const auto& f : item->files)
-                    if (probeFileDuration (kd::u8path (f)) <= 0.0)
+                {
+                    const double dur = probeFileDuration (kd::u8path (f));
+                    // -2 — ffprobe не уложился в дедлайн: файл считаем
+                    // валидным, не удаляем (FIX-15).
+                    if (dur != -2.0 && dur <= 0.0)
                     {
                         audioOk = false;
                         std::error_code ec;
                         fs::remove (kd::u8path (f), ec);
                     }
+                }
                 if (! audioOk)
                 {
-                    const std::lock_guard<std::mutex> sl (mutex);
-                    item->files.clear();
+                    {
+                        const std::lock_guard<std::mutex> sl (mutex);
+                        item->files.clear();
+                    }
+                    // finish() сам берёт мьютекс — под локом нельзя (UB).
                     finish (item, QueueItem::State::failed,
                         "Аудио не удалось обработать — попробуйте ещё раз");
                     return;
                 }
+            }
+            // Отмена догнала обработку (репорт FIX-20): человек успел
+            // нажать × раньше конца, но ролик короткий и файл уже лёг.
+            // Смысл отмены — «передумал»: убираем успевший файл и строку.
+            if (item->cancelled() && ! item->files.empty())
+            {
+                std::error_code ec;
+                for (const auto& f : item->files)
+                    fs::remove (kd::u8path (f), ec);
+                finish (item, QueueItem::State::failed, "Отменено");
+                return;
             }
             const bool already = item->files.empty() && item->skipped > 0;
             Str stage = already ? Str ("Уже скачано") : Str ("Готово");
@@ -1784,7 +1906,7 @@ static std::vector<VerifyCandidate> ytSearchCandidatesFlat (const Str& query)
     std::vector<VerifyCandidate> out;
     Str outText;
     int code = -1;
-    StrVec args { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
+    StrVec args { "--ignore-config", "--no-warnings", "--encoding", "utf-8", "--flat-playlist", "-J",
                   "ytsearch5:" + query };
     if (! captureOut (args, outText, &code) || code != 0 || outText.empty())
         return out;
@@ -2021,14 +2143,17 @@ Str Engine::cachedThumbnail (const Str& url, const int timeoutMs)
     }
 
     const auto tmp = kd::pathStr (target) + ".part";
-    if (kd::http::downloadToFile (url, tmp, timeoutMs))
+    // u8path обязателен: неявное Str→fs::path на MSVC читает байты в CP1251,
+    // и кириллический %APPDATA% превращался в «Р–РµРЅСЏ» — _wfopen падал,
+    // превью никогда не скачивались (см. отчёт FIX-14).
+    if (kd::http::downloadToFile (url, kd::u8path (tmp), timeoutMs))
     {
         std::error_code ec;
-        fs::rename (tmp, target, ec);
+        fs::rename (kd::u8path (tmp), target, ec);
         if (ec)
         {
             // Переименовать не вышло (кто-то успел раньше) — ок, файл уже там.
-            fs::remove (tmp, ec);
+            fs::remove (kd::u8path (tmp), ec);
         }
         if (kd::isFile (target))
         {
@@ -2708,7 +2833,7 @@ Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
             Probe viaYtdlp;
             int code = -1;
             Str out;
-            StrVec args { "--ignore-config", "--no-warnings", "-J", "--no-playlist" };
+            StrVec args { "--ignore-config", "--no-warnings", "--encoding", "utf-8", "-J", "--no-playlist" };
             args.push_back (link);
             if (captureOut (args, out, &code) && code == 0 && ! out.empty())
             {
@@ -2740,15 +2865,27 @@ Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
             if (! vid.empty())
                 prefetchThumbnail ("https://i.ytimg.com/vi/" + vid + "/hqdefault.jpg");
         }
-        StrVec args { "--ignore-config", "--no-warnings", "--socket-timeout", "20",
+        StrVec args { "--ignore-config", "--no-warnings", "--encoding", "utf-8", "--socket-timeout", "20",
                       "--retries", "1", "-J" };
         args.push_back (flat ? "--flat-playlist" : "--no-playlist");
         args.push_back ("--");
         args.push_back (link);
         int code = -1;
         Str out;
-        if (! captureOut (args, out, &code) || code != 0 || out.empty())
+        DWORD spawnErr = 0;
+        if (! captureOut (args, out, &code, 120, &spawnErr) || code != 0 || out.empty())
         {
+            // Загрузчик вообще не стартовал — честно говорим об этом,
+            // а не маскируем под «запись удалена» (жалобы «не качает»
+            // обязаны диагностироваться, см. ERR-09 отчёта).
+            if (spawnErr != 0)
+            {
+                p.ok = false;
+                p.error = "Загрузчик не запущен системой (ошибка "
+                        + std::to_string (spawnErr)
+                        + ") — проверьте, не блокирует ли его антивирус";
+                return p;
+            }
             // DRM узнаём сразу при разборе, чтобы не доводить до плашки очереди.
             if (kd::contains (kd::lower (out), "drm"))
                 return probeDrm (link, service);
@@ -3066,7 +3203,7 @@ static Probe searchSoundcloudList (const Str& query, size_t cap)
     sc.service = Detector::Service::soundcloud;
 
     Str scOut;
-    StrVec scArgs { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
+    StrVec scArgs { "--ignore-config", "--no-warnings", "--encoding", "utf-8", "--flat-playlist", "-J",
                     "scsearch" + std::to_string (cap + 3) + ":" + query };
     int scCode = -1;
     if (! captureOut (scArgs, scOut, &scCode) || scCode != 0 || scOut.empty())
@@ -3100,7 +3237,7 @@ static Probe searchSoundcloudList (const Str& query, size_t cap)
         {
             Str out;
             int code = -1;
-            usable[i] = captureOut ({ "--ignore-config", "--no-warnings", "-J",
+            usable[i] = captureOut ({ "--ignore-config", "--no-warnings", "--encoding", "utf-8", "-J",
                                       candidates[i].url }, out, &code)
                         && code == 0 && ! out.empty();
         });
@@ -3199,7 +3336,7 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
         {
             int code = -1;
             Str out;
-            StrVec args { "--ignore-config", "--no-warnings", "--flat-playlist", "-J",
+            StrVec args { "--ignore-config", "--no-warnings", "--encoding", "utf-8", "--flat-playlist", "-J",
                           "ytsearch8:" + query };
             if (captureOut (args, out, &code) && code == 0 && ! out.empty())
             {
@@ -3362,6 +3499,10 @@ void ProbeRunner::run()
 {
     for (;;)
     {
+        // waitForever корректен: wake.signal() приходит на каждый новый
+        // запрос, а stop() выставляет quitFlag И сигналит. Периодический
+        // waitMs здесь нельзя — цикл переобрабатывает тот же pending и
+        // штормит событиями разбора каждые 300 мс (регрессия, FIX-11).
         wake.waitForever();
         if (quitFlag.load (std::memory_order_relaxed)) return;
 
@@ -3381,11 +3522,13 @@ void ProbeRunner::run()
         // Разбор занимает секунды; если за это время человек допечатал
         // (поколение сменилось) — результат выбрасываем.
         const auto probe = fn (text);
+        if (quitFlag.load (std::memory_order_relaxed)) return;
         {
             const std::lock_guard<std::mutex> sl (mutex);
             if (gen != generation) continue;
         }
         if (done)
             done (probe); // доставка на поток интерфейса — забота принимающей стороны
+        if (quitFlag.load (std::memory_order_relaxed)) return;
     }
 }

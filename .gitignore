@@ -32,3 +32,8 @@ app/*.pkg
 win/dist/
 # локальная папка рассылки (бинарники — через GitHub Releases)
 MAC OS/
+
+# Локальные артефакты win-этапа: инструменты, сборки, установщик
+core/tools-win/
+kdcore/build-win/
+dist/)

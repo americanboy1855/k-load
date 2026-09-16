@@ -19,8 +19,17 @@ inline Str folderName() { return "K LOAD"; }
 inline fs::path homeDir()
 {
 #ifdef _WIN32
-    if (const char* profile = ::getenv ("USERPROFILE"))
-        if (*profile != '\0') return kd::u8path (profile);
+    // getenv возвращает байты в ANSI: на машинах с кириллическим профилем
+    // u8path прочитала бы их как UTF-8, и путь мутировал (U+FFFD) —
+    // загрузки падали, журнал молча не писался. Только wide-API.
+    const DWORD need = ::GetEnvironmentVariableW (L"USERPROFILE", nullptr, 0);
+    if (need > 0 && need <= 4096)
+    {
+        std::wstring v (need, L'\0');
+        ::GetEnvironmentVariableW (L"USERPROFILE", v.data(), need);
+        v.resize (::wcslen (v.c_str()));
+        if (! v.empty()) return fs::path (v);
+    }
 #else
     if (const char* home = ::getenv ("HOME"))
         if (*home != '\0') return kd::u8path (home);

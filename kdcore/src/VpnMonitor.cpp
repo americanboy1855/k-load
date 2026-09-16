@@ -64,7 +64,25 @@ bool VpnMonitor::checkOnce()
                                        raw.data(), n, nullptr, nullptr);
                 name = kd::lower (Str (raw.data()));
             }
-            return kd::containsAny (name, { "tun", "tap", "wg", "vpn", "ppp", "ipsec" });
+            if (kd::containsAny (name, { "tun", "tap", "wg", "vpn", "ppp", "ipsec" }))
+                return true;
+        }
+
+        // Прокси-VPN (v2rayN, Clash и т.п.) не создаёт адаптер: трафик идёт
+        // через локальный прокси из настроек WinINET. Для пользователя такой
+        // VPN «включён» — иначе приложение зря ставило загрузки на паузу.
+        HKEY key = nullptr;
+        if (::RegOpenKeyExW (HKEY_CURRENT_USER,
+                L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+                0, KEY_READ, &key) == ERROR_SUCCESS)
+        {
+            DWORD enabled = 0, size = sizeof (enabled);
+            const bool proxyOn =
+                ::RegQueryValueExW (key, L"ProxyEnable", nullptr, nullptr,
+                    reinterpret_cast<LPBYTE> (&enabled), &size) == ERROR_SUCCESS
+                && enabled != 0;
+            ::RegCloseKey (key);
+            if (proxyOn) return true;
         }
         return false;
     }

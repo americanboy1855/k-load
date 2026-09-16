@@ -138,15 +138,27 @@ bool Win32Window::Create(const std::wstring& title,
   // Безрамочное окно (паритет с macOS): WS_THICKFRAME оставлен ради тени
   // DWM и анимации минимизации, WS_CAPTION нет — клиент занимает всё окно
   // (WM_NCCALCSIZE), ресайз и титул — вручную в WM_NCHITTEST.
+  // ВНИМАНИЕ: WS_SYSMENU/WS_MINIMIZEBOX не указываем — Windows 10 сам
+  // добавляет тогда WS_CAPTION и рисует заголовок поверх клиента.
   HWND window = CreateWindow(
       window_class, title.c_str(),
-      WS_OVERLAPPED | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX,
+      WS_OVERLAPPED | WS_THICKFRAME,
       Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
       Scale(size.width, scale_factor), Scale(size.height, scale_factor),
       nullptr, nullptr, GetModuleHandle(nullptr), this);
 
   if (!window) {
     return false;
+  }
+
+  // Гарантия против автозаголовка: срезаем WS_CAPTION, если он появился.
+  {
+    const LONG_PTR style = ::GetWindowLongPtrW (window, GWL_STYLE);
+    if (style & WS_CAPTION) {
+      ::SetWindowLongPtrW (window, GWL_STYLE, style & ~WS_CAPTION);
+      ::SetWindowPos (window, nullptr, 0, 0, 0, 0,
+                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    }
   }
 
   // Тень вокруг безрамочного окна.

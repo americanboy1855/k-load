@@ -1,4 +1,4 @@
-# Докачка инструментов для K LOAD (Windows): yt-dlp, ffmpeg/ffprobe, deno.
+﻿# Докачка инструментов для K LOAD (Windows): yt-dlp, ffmpeg/ffprobe, deno.
 # Использование:  pwsh win/fetch-tools-win.ps1
 # Скачивает в core/tools-win/ — ту же раскладку, что и мак (core/tools).
 
