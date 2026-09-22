@@ -10,6 +10,10 @@
 
 #include "win32_window.h"
 
+namespace kload {
+class DropTarget;
+}
+
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
  public:
@@ -56,6 +60,9 @@ class FlutterWindow : public Win32Window {
   // над клиентом — ресайз/титул не работают).
   HWND view_hwnd_ = nullptr;
   WNDPROC default_view_proc_ = nullptr;
+
+  // Приёмник перетаскивания (ссылки/текст/ярлыки) на HWND Flutter-view.
+  kload::DropTarget* drop_target_ = nullptr;
 
   // Кнопки окна в координатах канваса 560×670 (приходят из Dart).
   struct ChromeRect {

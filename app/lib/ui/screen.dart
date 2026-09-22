@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../kd/kd_bindings.dart';
+import '../update/update_service.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -325,6 +326,14 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
 
   // системный выбор папки + drag-out скачанных файлов
   static const _native = MethodChannel('kload/native');
+
+  // приём перетаскивания (натив → Dart: dropHover/dropPayload) и обновление
+  bool dropHover = false;       // над окном держат ссылку/файл — подсветить
+  final updates = UpdateService();
+  UpdateInfo? updateRel;        // на GitHub есть релиз новее — показать полоску
+  double updateProgress = 0;    // 0 — не качаем; 0..1 — ход скачивания
+  bool updateLaunching = false; // установщик уже запускается
+
   final _rowKeys = <int, GlobalKey>{}; // строки очереди для drag-зон
   final _canvasKey = GlobalKey();      // канвас 560×670 — начало координат зон
   String _lastZonesKey = '';           // подпись последних отосланных зон
@@ -359,6 +368,80 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     return t.contains('.') && t.contains('/');
   }
 
+  // ---- перетаскивание ссылок и файлов (натив → Dart) ----
+
+  static final _urlInText = RegExp(r'https?://[^\s]+');
+
+  Future<dynamic> _onNativeCall(MethodCall call) async {
+    switch (call.method) {
+      case 'dropHover':
+        final v = call.arguments == true;
+        if (dropHover != v) setState(() => dropHover = v);
+      case 'dropPayload':
+        final raw = (call.arguments as String?) ?? '';
+        if (raw.trim().isNotEmpty) _acceptDrop(raw);
+    }
+    return null;
+  }
+
+  /// Принять брошенное. Несколько ссылок в тексте — берём первую (ядро
+  /// умеет резать текст на ссылки; без ядра — простой regex). Ссылка
+  /// уходит в разбор, всё остальное — в поиск по названию: тот же путь,
+  /// что при обычном вводе (сброс состояния + немедленный разбор).
+  void _acceptDrop(String raw) {
+    final text = raw.trim();
+    final links = core?.splitLinks(text) ??
+        _urlInText.allMatches(text).map((m) => m.group(0)!).toList();
+    query.text = links.isNotEmpty ? links.first : text;
+    _onInputChanged(query.text);
+    debounce?.cancel();
+    _startSeek();
+  }
+
+  // ---- обновление через GitHub Releases ----
+
+  Future<void> _checkForUpdate() async {
+    String version = '';
+    try {
+      // Версия из pubspec (нативный слой: CFBundleShortVersionString /
+      // FLUTTER_VERSION) — единое место истины.
+      version = await _native.invokeMethod<String>('appVersion') ?? '';
+    } on Object {
+      return; // версию узнать не удалось — тихо живём без обновлений
+    }
+    final rel = await updates.check(version);
+    if (!mounted || rel == null || updateRel != null) return;
+    setState(() => updateRel = rel);
+  }
+
+  Future<void> _updateNow() async {
+    final rel = updateRel;
+    if (rel == null || updateProgress > 0 || updateLaunching) return;
+    setState(() => updateProgress = 0.0001); // полоска переходит в «КАЧАЮ»
+    try {
+      final file = await updates.download(rel, onProgress: (p) {
+        if (mounted) {
+          setState(() => updateProgress = p.clamp(0.0, 1.0).toDouble());
+        }
+      });
+      if (!mounted) return;
+      setState(() {
+        updateLaunching = true;
+        updateProgress = 1;
+      });
+      // Установщик поднялся — приложение закрывается, он обновит его поверх.
+      await UpdateService.install(file);
+    } on Object {
+      if (mounted) {
+        setState(() {
+          updateProgress = 0;
+          updateLaunching = false;
+        });
+        _showToast('ОБНОВЛЕНИЕ НЕ СКАЧАЛОСЬ — ПРОВЕРЬТЕ СЕТЬ ИЛИ VPN');
+      }
+    }
+  }
+
   /// Карточка открыта из текстового поиска — показываем [К РЕЗУЛЬТАТАМ].
   /// Прямым ссылкам кнопка не нужна.
   bool get _showBackToResults =>
@@ -368,6 +451,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   void initState() {
     super.initState();
     _boot();
+    _native.setMethodCallHandler(_onNativeCall);
+    // Проверка обновления — после включения телевизора; сама проверка
+    // тихая (UpdateService: не чаще раза в сутки, ошибки молча).
+    Future.delayed(const Duration(seconds: 3), _checkForUpdate);
     // reduced-motion: включение мгновенное, декоративные слои не запускаем.
     final reduce = WidgetsBinding
         .instance.platformDispatcher.accessibilityFeatures.disableAnimations;
@@ -1619,6 +1706,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             ],
             if (dupeNotice != null) _dupePlate(dupeNotice!),
             if (toastText != null) _toast(),
+            if (dropHover) _dropHint(),
             if (!booted) _bootOverlay(),
           ]),
         ),
@@ -1647,6 +1735,10 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _searchRow(),
+            if (updateRel != null || updateProgress > 0) ...[
+              const SizedBox(height: 8),
+              _updateStrip(),
+            ],
             if (phase == Phase.seeking) ...[
               const SizedBox(height: 14),
               _seekBlock(),
@@ -1681,6 +1773,73 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           ],
         ),
       ),
+    );
+  }
+
+  // ---- drop и обновление ----
+
+  /// Подсветка зоны приёма: пока над окном держат ссылку/файл, видно,
+  /// что бросать можно. IgnorePointer — слой не мешает ни курсору,
+  /// ни самому отпусканию.
+  Widget _dropHint() {
+    return IgnorePointer(
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: DashedBox(
+          color: Pal.amber,
+          padding: const EdgeInsets.all(8),
+          child: Container(
+            color: Pal.amber.withValues(alpha: .06),
+            alignment: Alignment.center,
+            child: Text('БРОСЬТЕ ССЫЛКУ', style: T.ps(12, c: Pal.amber)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Полоска обновления: появляется, только когда на GitHub есть релиз
+  /// новее текущей версии, и исчезает после установки (приложение закроется
+  /// и обновится установщиком). Постоянной кнопки проверки нет.
+  Widget _updateStrip() {
+    final rel = updateRel;
+    return DashedBox(
+      color: Pal.amberFaint,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      child: Row(children: [
+        if (updateLaunching)
+          const Expanded(
+            child: Text('ЗАПУСКАЮ УСТАНОВЩИК…',
+                style: TextStyle(
+                    fontFamily: 'Press Start 2P',
+                    fontSize: 8,
+                    color: Pal.soft)),
+          )
+        else if (updateProgress > 0) ...[
+          Expanded(
+            child: Text(
+                'КАЧАЮ ОБНОВЛЕНИЕ · ${(updateProgress * 100).round()}%',
+                style: T.ps(8)),
+          ),
+          SizedBox(
+            width: 120,
+            child: LedRow(
+                count: 12,
+                filled: (updateProgress * 12).round(),
+                cellHeight: 10,
+                gap: 3),
+          ),
+        ] else if (rel != null) ...[
+          Expanded(
+            child: Text('ЕСТЬ ОБНОВЛЕНИЕ ${rel.version}', style: T.ps(8)),
+          ),
+          _TextLink(
+            label: 'ОБНОВИТЬ',
+            onTap: _updateNow,
+            style: T.ps(8, c: Pal.amber),
+          ),
+        ],
+      ]),
     );
   }
 

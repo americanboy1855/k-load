@@ -3,6 +3,8 @@ import FlutterMacOS
 
 class MainFlutterWindow: NSWindow {
   var dragContentView: NSView?
+  // Канал нужен и натив→Dart: события drop (hover/payload) уходят на экран.
+  var nativeChannel: FlutterMethodChannel?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -32,10 +34,11 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 
-    // Мост для системных диалогов и drag-out скачанных файлов.
+    // Мост для системных диалогов, drag-out скачанных файлов и приёма drop-ов.
     let channel = FlutterMethodChannel(
         name: "kload/native",
         binaryMessenger: flutterViewController.engine.binaryMessenger)
+    nativeChannel = channel
     let dragHelper = DragOutHelper(contentView: contentView!)
     dragContentView = contentView
     channel.setMethodCallHandler { call, result in
@@ -55,6 +58,10 @@ class MainFlutterWindow: NSWindow {
                     result(nil) // отменено
                 }
             }
+        case "appVersion":
+            // Версия из pubspec (flutter подставляет её в CFBundleShortVersionString).
+            result(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+                    as? String ?? "")
         case "setZones":
             // Зоны приходят в дизайн-координатах (канвас 560×670, оси сверху-
             // слева); переводим в координаты contentView (снизу-слева) с учётом
@@ -85,8 +92,89 @@ class MainFlutterWindow: NSWindow {
         }
     }
 
+    // Приём перетаскивания (ссылки из браузеров/Telegram, выделенный текст,
+    // ярлыки .webloc из Finder). Catcher ставится УРОВНЕМ НИЖЕ FlutterView:
+    // клики всегда достаются Flutter (он выше и ловит hit-test), а drag-
+    // сессия — FlutterView умолчанием NSView не принимает drag — поднимается
+    // по иерархии до catcher с зарегистрированными типами.
+    if let fv = contentView, let host = fv.superview {
+        let catcher = DropCatcherView(frame: fv.frame)
+        catcher.autoresizingMask = [.width, .height]
+        catcher.onHover = { [weak self] hover in
+            self?.nativeChannel?.invokeMethod("dropHover", arguments: hover)
+        }
+        catcher.onPayload = { [weak self] payload in
+            self?.nativeChannel?.invokeMethod("dropPayload", arguments: payload)
+        }
+        host.addSubview(catcher, positioned: .below, relativeTo: fv)
+        catcher.registerForDraggedTypes([.URL, .fileURL, .string])
+    }
+
     super.awakeFromNib()
   }
+}
+
+
+// Приёмник drop-ов: невидим, лежит под FlutterView, поэтому мышь во Flutter
+// не попадает; участвует только в drag-сессиях. NSView уже NSDraggingDestination.
+final class DropCatcherView: NSView {
+    var onHover: ((Bool) -> Void)?
+    var onPayload: ((String) -> Void)?
+
+    override func draw(_ dirtyRect: NSRect) {} // невидим
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        onHover?(true)
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        onHover?(false)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        true
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        onHover?(false)
+        if let payload = Self.extractPayload(sender.draggingPasteboard) {
+            onPayload?(payload)
+        }
+        return true
+    }
+
+    /// Приоритет данных в пейпборде: веб-адрес (public.url — адресная строка
+    /// и ссылки из браузеров/Telegram) → ярлык .webloc (Finder; URL внутри
+    /// plist) → простой текст (ссылка или название трека — решит приложение).
+    /// Прочие файлы (не .webloc) молча игнорируются.
+    static func extractPayload(_ pb: NSPasteboard) -> String? {
+        let objects = (pb.readObjects(forClasses: [NSURL.self], options: nil)
+            as? [NSURL]) ?? []
+        for o in objects {
+            guard let scheme = o.scheme, !scheme.isEmpty,
+                  scheme.lowercased() != "file",
+                  let s = o.absoluteString, !s.isEmpty else { continue }
+            return s // веб-адрес из браузера или Telegram
+        }
+        for o in objects {
+            guard let scheme = o.scheme, scheme.lowercased() == "file",
+                  o.pathExtension?.lowercased() == "webloc",
+                  let data = try? Data(contentsOf: o as URL),
+                  let plist = try? PropertyListSerialization.propertyList(
+                      from: data, format: nil) as? [String: Any],
+                  let s = plist["URL"] as? String, !s.isEmpty else { continue }
+            return s // URL из ярлыка .webloc
+        }
+        if let s = pb.string(forType: .string), !s.isEmpty {
+            return s // простой текст: ссылка или название трека
+        }
+        return nil
+    }
 }
 
 
