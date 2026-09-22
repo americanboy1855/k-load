@@ -26,7 +26,9 @@ class UpdateService {
       : repo = repo ??
             Platform.environment['K_LOAD_UPDATE_REPO'] ??
             'americanboy1855/k-load',
-        apiBase = apiBase ?? 'https://api.github.com';
+        apiBase = apiBase ??
+            Platform.environment['K_LOAD_UPDATE_API'] ??
+            'https://api.github.com';
 
   /// Владелец/репозиторий. Env-переопределение — тестовый шов и запас
   /// на случай переезда релизов (прецедент: K_LOAD_TOOLS, K_LOAD_DYLIB).

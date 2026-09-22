@@ -379,6 +379,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         if (dropHover != v) setState(() => dropHover = v);
       case 'dropPayload':
         final raw = (call.arguments as String?) ?? '';
+        debugPrint('DROP: dart got payload: $raw');
         if (raw.trim().isNotEmpty) _acceptDrop(raw);
     }
     return null;

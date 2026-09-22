@@ -137,7 +137,7 @@ final class DropCatcherView: NSView {
     }
 
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        true
+        return true
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
