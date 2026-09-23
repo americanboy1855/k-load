@@ -1,5 +1,5 @@
 #!/bin/bash
-# Сборка дистрибутивного установщика K LOAD V1.0 (.pkg) — macOS.
+# Сборка дистрибутивного установщика K LOAD (.pkg) — macOS. Версия — из pubspec.
 # Запуск: mac/build-pkg.sh  (скрипт сам встаёт в корень репо)
 # Требует: собранный Release-бандл (cd app && flutter build macos --release —
 # падение codesign в дереве с iCloud не мешает: подпись делается здесь),
@@ -7,6 +7,9 @@
 
 set -e
 cd "$(dirname "$0")/.."
+
+# Версия — из pubspec (одно место истины): 1.1.0+2 → 1.1.0.
+VERSION=$(grep '^version:' app/pubspec.yaml | sed 's/version: *//; s/+.*//')
 
 APP="app/build/macos/Build/Products/Release/K LOAD.app"
 [ -d "$APP" ] || { echo "нет $APP — сначала: cd app && flutter build macos --release"; exit 1; }
@@ -44,12 +47,12 @@ done
 echo "Все бинарники universal (x86_64 + arm64)"
 
 mkdir -p mac/dist
-pkgbuild --root "$STAGE" --identifier ru.kvartal.kload --version 1.0.0 \
+pkgbuild --root "$STAGE" --identifier ru.kvartal.kload --version "$VERSION" \
   --install-location /Applications --scripts mac/pkg/scripts \
   mac/dist/kload-component.pkg
 
 productbuild --distribution mac/pkg/Distribution.xml \
   --package-path mac/dist --resource mac/pkg \
-  "mac/dist/K-LOAD-V1.0-setup.pkg"
+  "mac/dist/K-LOAD-V$VERSION-setup.pkg"
 
-echo "Готово: mac/dist/K-LOAD-V1.0-setup.pkg"
+echo "Готово: mac/dist/K-LOAD-V$VERSION-setup.pkg"

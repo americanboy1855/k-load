@@ -25,13 +25,14 @@ class UpdateService {
   UpdateService({String? repo, String? apiBase, this.stampDir})
       : repo = repo ??
             Platform.environment['K_LOAD_UPDATE_REPO'] ??
-            'americanboy1855/k-load',
+            'americanboy1855/k-load-releases',
         apiBase = apiBase ??
             Platform.environment['K_LOAD_UPDATE_API'] ??
             'https://api.github.com';
 
-  /// Владелец/репозиторий. Env-переопределение — тестовый шов и запас
-  /// на случай переезда релизов (прецедент: K_LOAD_TOOLS, K_LOAD_DYLIB).
+  /// Владелец/репозиторий ПУБЛИЧНОГО архива релизов: GitHub скрывает
+  /// релизы закрытого репо от анонимной проверки приложения.
+  /// Env-переопределение — тестовый шов (прецедент: K_LOAD_TOOLS).
   final String repo;
   final String apiBase;   // база API (в тестах — локальный сервер)
   final String? stampDir; // куда класть метку проверки (в тестах — tmp)
