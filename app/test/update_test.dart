@@ -87,8 +87,10 @@ void main() {
       final info = await service().check('1.0.0+1');
       expect(info, isNotNull);
       expect(info!.version, '1.2.0');
-      expect(info.assetName, endsWith('.pkg')); // тесты идут на macOS
-      expect(info.assetUrl, endsWith('/fake.pkg'));
+      // На macOS CI ждём .pkg, на Windows CI — .exe.
+      final suffix = Platform.isMacOS ? '.pkg' : '.exe';
+      expect(info.assetName, endsWith(suffix));
+      expect(info.assetUrl, endsWith('/fake$suffix'));
     });
 
     test('та же версия → null, тихо', () async {
