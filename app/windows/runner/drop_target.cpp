@@ -120,11 +120,12 @@ IFACEMETHODIMP DropTarget::QueryInterface(REFIID riid, void** out) {
   return E_NOINTERFACE;
 }
 
-IFACEMETHOD_(ULONG, DropTarget::AddRef)() {
+// Вне класса virtual в определении не повторяют — STDMETHODIMP_ без него.
+STDMETHODIMP_(ULONG) DropTarget::AddRef() {
   return ::InterlockedIncrement(&ref_);
 }
 
-IFACEMETHOD_(ULONG, DropTarget::Release)() {
+STDMETHODIMP_(ULONG) DropTarget::Release() {
   const ULONG n = ::InterlockedDecrement(&ref_);
   if (n == 0) delete this;
   return n;
