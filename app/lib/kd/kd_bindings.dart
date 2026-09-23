@@ -64,9 +64,6 @@ class KdBindings {
     _create = lib
         .lookup<NativeFunction<_CreateNative>>('kd_engine_create')
         .asFunction();
-    _destroy = lib
-        .lookup<NativeFunction<_VoidEngineNative>>('kd_engine_destroy')
-        .asFunction();
     _setPort = lib
         .lookup<NativeFunction<_SetPortNative>>('kd_set_event_port')
         .asFunction();
@@ -168,7 +165,6 @@ class KdBindings {
 
   late final _AttachDart _attach;
   late final _Create _create;
-  late final _VoidEngineDart _destroy;
   late final _SetPort _setPort;
   late final _StringEngine _snapshot;
   late final _StringString _splitLinks;

@@ -327,8 +327,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   // системный выбор папки + drag-out скачанных файлов
   static const _native = MethodChannel('kload/native');
 
-  // приём перетаскивания (натив → Dart: dropHover/dropPayload) и обновление
-  bool dropHover = false;       // над окном держат ссылку/файл — подсветить
+  // обновление через GitHub Releases
   final updates = UpdateService();
   UpdateInfo? updateRel;        // на GitHub есть релиз новее — показать полоску
   double updateProgress = 0;    // 0 — не качаем; 0..1 — ход скачивания
@@ -361,43 +360,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       probe == null &&
       rawText.isNotEmpty &&
       resultError != null;
-
-  /// Похож ли текст на ссылку (зеркало Detector::looksLikeLink).
-  bool _looksLikeLink(String s) {
-    final t = s.trim();
-    return t.contains('.') && t.contains('/');
-  }
-
-  // ---- перетаскивание ссылок и файлов (натив → Dart) ----
-
-  static final _urlInText = RegExp(r'https?://[^\s]+');
-
-  Future<dynamic> _onNativeCall(MethodCall call) async {
-    switch (call.method) {
-      case 'dropHover':
-        final v = call.arguments == true;
-        if (dropHover != v) setState(() => dropHover = v);
-      case 'dropPayload':
-        final raw = (call.arguments as String?) ?? '';
-        debugPrint('DROP: dart got payload: $raw');
-        if (raw.trim().isNotEmpty) _acceptDrop(raw);
-    }
-    return null;
-  }
-
-  /// Принять брошенное. Несколько ссылок в тексте — берём первую (ядро
-  /// умеет резать текст на ссылки; без ядра — простой regex). Ссылка
-  /// уходит в разбор, всё остальное — в поиск по названию: тот же путь,
-  /// что при обычном вводе (сброс состояния + немедленный разбор).
-  void _acceptDrop(String raw) {
-    final text = raw.trim();
-    final links = core?.splitLinks(text) ??
-        _urlInText.allMatches(text).map((m) => m.group(0)!).toList();
-    query.text = links.isNotEmpty ? links.first : text;
-    _onInputChanged(query.text);
-    debounce?.cancel();
-    _startSeek();
-  }
 
   // ---- обновление через GitHub Releases ----
 
@@ -456,7 +418,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   void initState() {
     super.initState();
     _boot();
-    _native.setMethodCallHandler(_onNativeCall);
     // Проверка обновления — после включения телевизора; сама проверка
     // тихая (UpdateService: не чаще раза в сутки, ошибки молча).
     Future.delayed(const Duration(seconds: 3), _checkForUpdate);
@@ -1711,7 +1672,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             ],
             if (dupeNotice != null) _dupePlate(dupeNotice!),
             if (toastText != null) _toast(),
-            if (dropHover) _dropHint(),
             if (!booted) _bootOverlay(),
           ]),
         ),
@@ -1781,27 +1741,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     );
   }
 
-  // ---- drop и обновление ----
-
-  /// Подсветка зоны приёма: пока над окном держат ссылку/файл, видно,
-  /// что бросать можно. IgnorePointer — слой не мешает ни курсору,
-  /// ни самому отпусканию.
-  Widget _dropHint() {
-    return IgnorePointer(
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: DashedBox(
-          color: Pal.amber,
-          padding: const EdgeInsets.all(8),
-          child: Container(
-            color: Pal.amber.withValues(alpha: .06),
-            alignment: Alignment.center,
-            child: Text('БРОСЬТЕ ССЫЛКУ', style: T.ps(12, c: Pal.amber)),
-          ),
-        ),
-      ),
-    );
-  }
+  // ---- обновление ----
 
   /// Полоска обновления: появляется, только когда на GitHub есть релиз
   /// новее текущей версии, и исчезает после установки (приложение закроется
@@ -2616,29 +2556,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     return out.isEmpty ? 'Плейлист' : out.substring(0, out.length.clamp(0, 80));
   }
 
-  /// Аккуратный канонический вид ссылки: без схемы, www и tracking-хвоста.
-  String _canonicalShort(String url) {
-    var u = url.trim();
-    u = u.replaceFirst(RegExp(r'^https?://', caseSensitive: false), '');
-    u = u.replaceFirst(RegExp(r'^www\.', caseSensitive: false), '');
-    // YouTube: watch?v=ID и shorts/ID → короткая форма с ID.
-    final yt = RegExp(r'youtube\.com/(?:watch\?v=|shorts/)([\w-]{6,})')
-        .firstMatch(u);
-    if (yt != null) return 'youtu.be/${yt.group(1)}';
-    final q = u.indexOf('?');
-    if (q > 0) u = u.substring(0, q);
-    while (u.endsWith('/')) {
-      u = u.substring(0, u.length - 1);
-    }
-    const max = 34;
-    if (u.length <= max) return u;
-    final hostEnd = u.indexOf('/');
-    if (hostEnd > 0 && u.length - hostEnd > 6) {
-      final tail = u.substring(u.length - 18);
-      return '${u.substring(0, hostEnd)}/…/$tail';
-    }
-    return '${u.substring(0, max)}…';
-  }
 
   /// Кнопки-действия карточки ошибки по типу действия.
   List<(String, String)> _errorActions(UserMessage msg) {
@@ -3209,14 +3126,9 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             onTap: () => core?.cancel(it.id),
           )
         else if (done) ...[
-          _ActButton(
-            icon: (_) => const Icon(Icons.close, size: 13, color: Pal.soft),
-            // «Передумал» работает и на только что готовом: короткий ролик
-            // успевает скачаться быстрее, чем человек жмёт × (репорт
-            // FIX-20) — крестик готовой строки убирает файл и строку.
-            onTap: () => _trashRow(it),
-          ),
-          const SizedBox(width: 6),
+          // У готовой строки два действия: открыть папку и удалить.
+          // Крестик убран (репорт пользователя): он дублировал корзину —
+          // обе кнопки вызывали _trashRow.
           _ActButton(
             icon: (hover) => FolderIcon(
                 size: 14,

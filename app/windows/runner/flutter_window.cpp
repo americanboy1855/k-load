@@ -11,7 +11,6 @@
 
 #include "flutter/generated_plugin_registrant.h"
 #include "drag_out.h"
-#include "drop_target.h"
 
 FlutterWindow* FlutterWindow::active_window_ = nullptr;
 
@@ -84,21 +83,6 @@ bool FlutterWindow::OnCreate() {
         HandleMethodCall(call, std::move(result));
       });
 
-  // Приём перетаскивания (ссылки из браузеров, текст, ярлыки .url/.webloc):
-  // OLE drop target на HWND Flutter-view; события — в Dart через канал.
-  if (view_hwnd_ != nullptr) {
-    drop_target_ = new kload::DropTarget(
-        [this](bool hover) {
-          channel_->InvokeMethod(
-              "dropHover", std::make_unique<flutter::EncodableValue>(hover));
-        },
-        [this](const std::string& payload) {
-          channel_->InvokeMethod(
-              "dropPayload", std::make_unique<flutter::EncodableValue>(payload));
-        });
-    ::RegisterDragDrop(view_hwnd_, drop_target_);
-  }
-
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
   });
@@ -112,12 +96,6 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
-  // Drop target отвязываем, пока окно и канал живы.
-  if (view_hwnd_ != nullptr && drop_target_ != nullptr) {
-    ::RevokeDragDrop(view_hwnd_);
-    drop_target_->Release();
-    drop_target_ = nullptr;
-  }
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
