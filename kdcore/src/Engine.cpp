@@ -3236,8 +3236,10 @@ static Probe searchSoundcloudList (const Str& query, size_t cap)
         {
             Str out;
             int code = -1;
+            // 15 с на кандидата: зависший -J не должен растягивать поиск
+            // (раньше потолок был 120 с — выдача «думала» минуту-полторы).
             usable[i] = captureOut ({ "--ignore-config", "--no-warnings", "--encoding", "utf-8", "-J",
-                                      candidates[i].url }, out, &code)
+                                      candidates[i].url }, out, &code, 15)
                         && code == 0 && ! out.empty();
         });
     for (auto& t : checks) t.join();
@@ -3260,6 +3262,20 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
     Probe p;
     p.link = query;
     p.isSearch = true;
+
+    // Замер длительности в engine.log — видно, сколько «думает» выдача.
+    struct Timing
+    {
+        std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        Str query;
+        ~Timing()
+        {
+            engineLog ("поиск «" + query + "»: "
+                + std::to_string (std::chrono::duration_cast<std::chrono::milliseconds> (
+                    std::chrono::steady_clock::now() - t0).count()) + " мс");
+        }
+    } timing;
+    timing.query = query;
 
     const auto wantYoutube = site.empty() || site == "youtube";
     const auto wantSoundcloud = site.empty() || site == "soundcloud";
@@ -3406,26 +3422,29 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
             }
         };
 
+        // Каталоги ищем ОДНОВРЕМЕННО: итоговая скорость поиска равна самому
+        // медленному источнику, а не сумме. Кто ошибся/не успел — просто
+        // без своих строк, поиск не разваливается.
+        Probe sc, am, sp;
+        std::thread scThread, amThread, spThread;
+        if (wantSoundcloud)
+            scThread = std::thread ([&] { sc = searchSoundcloudList (query, 5); });
+        amThread = std::thread ([&] { am = searchAppleMusicList (query); });
+        spThread = std::thread ([&] { sp = searchSpotifyList (query); });
+        for (auto* t : { &scThread, &amThread, &spThread })
+            if (t->joinable()) t->join();
+
         if (yt.ok) append (yt, 8);
 
         // SoundCloud: только проверенные на скачиваемость треки (DRM и
         // недоступные отсеиваются до показа строки).
-        if (wantSoundcloud)
-        {
-            const auto sc = searchSoundcloudList (query, 5);
-            if (! sc.results.empty()) append (sc, 5);
-        }
+        if (! sc.results.empty()) append (sc, 5);
 
         // Apple Music: официальный публичный iTunes Search API.
-        {
-            const auto am = searchAppleMusicList (query);
-            if (am.ok) append (am, 4);
-        }
+        if (am.ok) append (am, 4);
+
         // Spotify: анонимный токен веб-плеера; из сети без доступа — без строк.
-        {
-            const auto sp = searchSpotifyList (query);
-            if (sp.ok) append (sp, 4);
-        }
+        if (sp.ok) append (sp, 4);
 
         if (p.results.empty())
         {
