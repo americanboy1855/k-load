@@ -25,13 +25,12 @@ class UpdateService {
   UpdateService({String? repo, String? apiBase, this.stampDir})
       : repo = repo ??
             Platform.environment['K_LOAD_UPDATE_REPO'] ??
-            'americanboy1855/k-load-releases',
+            'americanboy1855/k-load',
         apiBase = apiBase ??
             Platform.environment['K_LOAD_UPDATE_API'] ??
             'https://api.github.com';
 
-  /// Владелец/репозиторий ПУБЛИЧНОГО архива релизов: GitHub скрывает
-  /// релизы закрытого репо от анонимной проверки приложения.
+  /// Владелец/репозиторий — публичный (репо открыт: код + релизы вместе).
   /// Env-переопределение — тестовый шов (прецедент: K_LOAD_TOOLS).
   final String repo;
   final String apiBase;   // база API (в тестах — локальный сервер)
