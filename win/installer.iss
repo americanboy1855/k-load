@@ -1,10 +1,14 @@
-; K LOAD V1.0 — установщик Windows (Inno Setup).
+; K LOAD — установщик Windows (Inno Setup). Версия приходит из pubspec
+; через /DVERSION в ISCC (см. win-build.yml), без неё — дефолт.
 ; Сборка: iscc win/installer.iss   (из корня репо; нужен готовый
 ; портативный состав в dist/K LOAD — его собирает win/build.ps1 или CI).
 ; Per-user установка без прав администратора, русский интерфейс.
 
 #define AppName "K LOAD"
-#define AppVersion "1.0.0"
+#ifndef VERSION
+#define VERSION "1.0.0"
+#endif
+#define AppVersion VERSION
 #define AppPublisher "kvartal records"
 #define AppExe "kload.exe"
 
@@ -18,7 +22,7 @@ PrivilegesRequired=lowest
 DisableDirPage=no
 DisableProgramGroupPage=yes
 OutputDir=..\dist
-OutputBaseFilename=K-LOAD-V1.0-Setup
+OutputBaseFilename=K-LOAD-V{#VERSION}-Setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern

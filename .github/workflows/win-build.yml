@@ -83,16 +83,22 @@ jobs:
           Copy-Item "kdcore/build-win/Release/kdcore.dll" $out -Force
           Copy-Item "core/tools-win/*" "$out/tools/" -Recurse -Force
 
+      - name: Версия из pubspec
+        shell: pwsh
+        run: |
+          $v = (Get-Content app/pubspec.yaml | Select-String '^version:').Line -replace 'version:\s*','' -replace '\+.*',''
+          "KLOAD_VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Установка Inno Setup
         run: choco install innosetup -y --no-progress
 
       - name: Сборка установщика
-        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" win/installer.iss'
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DVERSION=$env:KLOAD_VERSION win/installer.iss'
 
       - uses: actions/upload-artifact@v4
         with:
-          name: K-LOAD-V1.0-Setup
-          path: dist/K-LOAD-V1.0-Setup.exe
+          name: K-LOAD-Setup
+          path: dist/K-LOAD-*-Setup.exe
 
       - uses: actions/upload-artifact@v4
         with:
