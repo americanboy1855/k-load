@@ -15,15 +15,6 @@ import 'widgets.dart';
 
 const tvW = 560.0, tvH = 670.0;
 
-// ВРЕМЕННАЯ отладка кликов (убрать после разбора).
-void dbgTap(String s) {
-  try {
-    File('C:\\Temp\\kload-taps.log').writeAsStringSync(
-        '${DateTime.now().toIso8601String()} $s\n',
-        mode: FileMode.append);
-  } catch (_) {}
-}
-
 
 // Классификатор сервисов — зеркально design/main-screen.html.
 class ServiceInfo {
@@ -463,8 +454,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     if (autoUrl != null && autoUrl.isNotEmpty) {
       Future.delayed(const Duration(seconds: 4), () {
         if (!mounted) return;
-        dbgTap('autotest: inject url=$autoUrl go='
-            '${Platform.environment['KLOAD_AUTOTEST_GO']}');
         query.text = autoUrl;
         _onInputChanged(autoUrl);
         autotestGo = Platform.environment['KLOAD_AUTOTEST_GO'] == '1';
@@ -478,7 +467,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     final c = core;
     if (c == null) return;
     if (e is KdVpnEvent) {
-      dbgTap('vpn event: on=${e.on} (was ${vpnState})');
       final wasOff = vpnState == 2;
       // VPN пропал: активные загрузки корректно ставим на паузу (yt-dlp
       // сохраняет .part), чтобы они не падали сетевыми ошибками. После
@@ -859,7 +847,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   }
 
   void _onProbe(KdProbeEvent p) {
-    dbgTap('onProbe arrive: ok=${p.ok} link=${p.link.isEmpty ? '-' : p.link}');
     if (!mounted || rawText.isEmpty) return;
     _probeWatchdog?.cancel();
 
@@ -961,7 +948,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         setState(() => playlistLimit = autotestCount);
         autotestCount = 0;
       }
-      dbgTap('autotest: GO -> _download()');
       Future.delayed(const Duration(milliseconds: 400), () {
         if (mounted) _download();
       });
@@ -1684,7 +1670,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       // Клик вне панелей закрывает их (дети перехватывают свои тапы).
       behavior: HitTestBehavior.translucent,
       onTap: () {
-        dbgTap('_ui outer tap (panel-close)');
         if (openPanel.isNotEmpty || chronOpen || showResultList) {
           setState(() {
             openPanel = '';
@@ -2683,7 +2668,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
             locked: false,
             hidden: photo,
             onTap: () {
-              dbgTap('chip MUSICA tapped');
               setState(() => mode = 'music');
             }),
         if (!playlist)
@@ -3041,7 +3025,6 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   /// удаляются и в корзину не перемещаются. Пауза при этом сбрасывается:
   /// следующее «СКАЧАТЬ» запускает загрузку сразу, без отдельного ▶.
   void _clearQueueHistory() {
-    dbgTap('CLEAR tapped');
     core?.setPaused(false);
     core?.clearFinished();
     setState(() {
@@ -3504,7 +3487,7 @@ class _ModeChipState extends State<_ModeChip> {
           cursor: widget.locked
               ? SystemMouseCursors.forbidden
               : SystemMouseCursors.click,
-          onEnter: (_) { dbgTap('chip hover: ${widget.label}'); setState(() => hover = true); },
+          onEnter: (_) => setState(() => hover = true),
           onExit: (_) => setState(() => hover = false),
           child: AnimatedOpacity(
             opacity: widget.locked ? .3 : 1,
@@ -3639,13 +3622,12 @@ class _TextLinkState extends State<_TextLink> {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () {
-        dbgTap('TextLink tapped: ${widget.label}');
         _setHover(false);
         widget.onTap();
       },
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
-        onEnter: (_) { dbgTap('TextLink hover: ${widget.label}'); _setHover(true); },
+        onEnter: (_) => _setHover(true),
         onExit: (_) => _setHover(false),
         onHover: (_) => _setHover(true),
         child: TweenAnimationBuilder<double>(
@@ -3726,7 +3708,6 @@ class _GoButtonState extends State<_GoButton> {
   }
 
   void _onTap() {
-    dbgTap('GO button tapped, enabled=${widget.enabled}');
     context
         .findAncestorStateOfType<_KLoadScreenState>()
         ?._download();
