@@ -408,15 +408,18 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       // FLUTTER_VERSION) — единое место истины.
       version = await _native.invokeMethod<String>('appVersion') ?? '';
     } on Object {
+      debugPrint('UPDATE: appVersion недоступен');
       return; // версию узнать не удалось — тихо живём без обновлений
     }
     final rel = await updates.check(version);
+    debugPrint('UPDATE: проверка «$version» → ${rel == null ? "обновления нет" : "релиз ${rel.version}"}');
     if (!mounted || rel == null || updateRel != null) return;
     setState(() => updateRel = rel);
   }
 
   Future<void> _updateNow() async {
     final rel = updateRel;
+    debugPrint('UPDATE: кнопка нажата, rel=${rel?.version}');
     if (rel == null || updateProgress > 0 || updateLaunching) return;
     setState(() => updateProgress = 0.0001); // полоска переходит в «КАЧАЮ»
     try {
@@ -425,6 +428,7 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           setState(() => updateProgress = p.clamp(0.0, 1.0).toDouble());
         }
       });
+      debugPrint('UPDATE: скачано ${file.path}');
       if (!mounted) return;
       setState(() {
         updateLaunching = true;

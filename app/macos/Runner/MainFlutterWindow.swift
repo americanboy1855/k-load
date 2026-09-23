@@ -115,13 +115,24 @@ class MainFlutterWindow: NSWindow {
 }
 
 
-// Приёмник drop-ов: невидим, лежит под FlutterView, поэтому мышь во Flutter
-// не попадает; участвует только в drag-сессиях. NSView уже NSDraggingDestination.
+// Приёмник drop-ов: лежит под FlutterView и в drag-сессии поднимается
+// из него по иерархии. МЫШЬ ПРОПУСКАЕТ ВСЕГДА: вне drag-сессии hitTest
+// отдаёт nil — клик не может на нём застрять и всегда доходит до Flutter.
+// (Урок v1.1: без этого клики в приложении глохли намертво.)
 final class DropCatcherView: NSView {
     var onHover: ((Bool) -> Void)?
     var onPayload: ((String) -> Void)?
 
     override func draw(_ dirtyRect: NSRect) {} // невидим
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // В drag-сессии текущее событие — leftMouseDragged: только тогда
+        // окно приёма участвует в hit-test.
+        if let e = NSApp.currentEvent, e.type == .leftMouseDragged {
+            return super.hitTest(point)
+        }
+        return nil
+    }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         onHover?(true)
