@@ -287,6 +287,10 @@ class ChildProcess
 public:
     ChildProcess() = default;
 
+    // Код системной ошибки запуска (errno); 0 — процесс стартовал.
+    // (Пара к DWORD spawnError в Windows-классе — тот же unsigned long.)
+    unsigned long spawnError = 0;
+
     ~ChildProcess()
     {
         if (pid > 0)
@@ -307,7 +311,7 @@ public:
         if (args.empty()) return false;
 
         int fds[2];
-        if (::pipe (fds) != 0) return false;
+        if (::pipe (fds) != 0) { spawnError = (unsigned long) errno; return false; }
 
         std::vector<char*> argv;
         argv.reserve (args.size() + 1);
@@ -318,6 +322,7 @@ public:
         const pid_t newPid = ::fork();
         if (newPid < 0)
         {
+            spawnError = (unsigned long) errno;
             ::close (fds[0]);
             ::close (fds[1]);
             return false;

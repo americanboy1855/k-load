@@ -43,6 +43,9 @@ static Str systemProxy ()
     if (! read)
     {
         read = true;
+#ifdef _WIN32
+        // WinINET-реестр есть только на Windows; на macOS libcurl берёт
+        // прокси из окружения сам, дополнительно читать нечего.
         HKEY key = nullptr;
         if (::RegOpenKeyExW (HKEY_CURRENT_USER,
                 L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
@@ -94,6 +97,7 @@ static Str systemProxy ()
             }
             ::RegCloseKey (key);
         }
+#endif // _WIN32
     }
     return cached;
 }

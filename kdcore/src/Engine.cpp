@@ -868,11 +868,10 @@ static Str childPath (const fs::path& tools)
 }
 
 // Тихий запуск yt-dlp: весь stdout одним куском (для -J разбора).
-// Тихий запуск yt-dlp: весь stdout одним куском (для -J разбора).
 // maxSeconds — жёсткий потолок: зависший процесс глохнет, разбор возвращает
 // неудачу (аудит KL-010: зависший -J блокировал все разборы навсегда).
 static bool captureOut (const StrVec& args, Str& out, int* code = nullptr,
-                        int maxSeconds = 120, DWORD* spawnError = nullptr)
+                        int maxSeconds = 120, unsigned long* spawnError = nullptr)
 {
     const auto tools = Engine::findToolsDir();
     if (tools.empty())
@@ -956,7 +955,7 @@ bool Engine::runYtDlp (const QueueItemPtr& item, const StrVec& args,
         {
             engineLog ("ошибка: процесс не запустился (GetLastError="
                        + std::to_string (rs.current->spawnError) + ")");
-            const DWORD err = rs.current->spawnError;
+            const unsigned long err = rs.current->spawnError;
             rs.current = nullptr;
             finish (item, QueueItem::State::failed,
                     err != 0
@@ -2872,7 +2871,7 @@ Probe Engine::buildAndCache (const Str& text, const Str& searchSite) const
         args.push_back (link);
         int code = -1;
         Str out;
-        DWORD spawnErr = 0;
+        unsigned long spawnErr = 0;
         if (! captureOut (args, out, &code, 120, &spawnErr) || code != 0 || out.empty())
         {
             // Загрузчик вообще не стартовал — честно говорим об этом,
