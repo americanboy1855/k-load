@@ -135,14 +135,16 @@ bool Win32Window::Create(const std::wstring& title,
   UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
   double scale_factor = dpi / 96.0;
 
-  // Безрамочное окно (паритет с macOS): WS_THICKFRAME оставлен ради тени
-  // DWM и анимации минимизации, WS_CAPTION нет — клиент занимает всё окно
-  // (WM_NCCALCSIZE), ресайз и титул — вручную в WM_NCHITTEST.
-  // ВНИМАНИЕ: WS_SYSMENU/WS_MINIMIZEBOX не указываем — Windows 10 сам
-  // добавляет тогда WS_CAPTION и рисует заголовок поверх клиента.
+  // Безрамочное окно (паритет с macOS): WS_THICKFRAME — тень DWM и ресайз,
+  // WS_CAPTION нет — клиент занимает всё окно (WM_NCCALCSIZE), ресайз и
+  // перетаскивание за верхнюю полосу — вручную в WM_NCHITTEST.
+  // WS_SYSMENU|WS_MINIMIZEBOX обязательны: без системного меню Windows не
+  // стартует цикл перетаскивания окна за HTCAPTION (репорт «окно не
+  // двигается», v1.1.x). Автозаголовок, который Win10 добавляет вместе с
+  // WS_SYSMENU, срезается сразу после Create (блок ниже).
   HWND window = CreateWindow(
       window_class, title.c_str(),
-      WS_OVERLAPPED | WS_THICKFRAME,
+      WS_OVERLAPPED | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX,
       Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
       Scale(size.width, scale_factor), Scale(size.height, scale_factor),
       nullptr, nullptr, GetModuleHandle(nullptr), this);
