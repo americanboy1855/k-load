@@ -114,6 +114,19 @@ LRESULT CALLBACK FlutterWindow::ViewProcThunk(HWND hwnd, UINT message,
     if (message == WM_NCHITTEST) {
       return self->ViewHitTest(hwnd, lparam);
     }
+    if (message == WM_NCLBUTTONDOWN && self->GetHandle() != nullptr) {
+      // HTCAPTION/края от дочернего (WS_CHILD) HWND Windows доставляет
+      // сюда же, но DefWindowProc ребенка не запускает move/size-loop —
+      // окно «не двигается». Переправляем NC-нажатие родителю: lparam
+      // NC-сообщений уже в экранных координатах, общих для обоих окон.
+      const bool ncZone = wparam == HTCAPTION
+          || (wparam >= HTLEFT && wparam <= HTBOTTOMRIGHT);
+      if (ncZone) {
+        ::ReleaseCapture();
+        ::SendMessage(self->GetHandle(), WM_NCLBUTTONDOWN, wparam, lparam);
+        return 0;
+      }
+    }
     if (message == WM_NCLBUTTONDBLCLK) {
       // Двойной клик по титулу не разворачивает окно (паритет с macOS).
       return 0;
