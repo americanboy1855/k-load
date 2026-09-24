@@ -98,7 +98,9 @@ const wchar_t* WindowClassRegistrar::GetWindowClass() {
     window_class.hInstance = GetModuleHandle(nullptr);
     window_class.hIcon =
         LoadIcon(window_class.hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
-    window_class.hbrBackground = 0;
+    window_class.hbrBackground = CreateSolidBrush(RGB(0x16, 0x14, 0x13));
+    // Кисть цвета пластика корпуса (#161413): даже если системе понадобится
+    // залить фон до первого кадра Flutter, вспышка будет тёмной, не белой.
     window_class.lpszMenuName = nullptr;
     window_class.lpfnWndProc = Win32Window::WndProc;
     RegisterClass(&window_class);
@@ -209,6 +211,19 @@ Win32Window::MessageHandler(HWND hwnd,
         PostQuitMessage(0);
       }
       return 0;
+
+    case WM_ERASEBKGND:
+      // Фон рисует сам Flutter (первый кадр готов до Show). Запрет
+      // стирания убирает белую вспышку при активации из панели задач,
+      // Alt+Tab и восстановлении из свёрнутого.
+      return 1;
+
+    case WM_NCACTIVATE:
+      // Активация borderless с WS_SYSMENU перерисовывает «шапку»
+      // стандартной рамкой — видна белая полоса на кадр. Приём против
+      // мигания: lParam = -1 просит систему не перерисовывать
+      // неклиентскую область при смене активности.
+      return DefWindowProc(hwnd, message, wparam, static_cast<LPARAM>(-1));
 
     case WM_NCCALCSIZE:
       // Безрамочное окно: клиентская область = всё окно. Края ресайза
