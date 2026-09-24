@@ -318,6 +318,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   // системный выбор папки + drag-out скачанных файлов
   static const _native = MethodChannel('kload/native');
 
+  // Живой ресайз окна (Windows): view на время жеста держит максимальный
+  // размер, а фактический приходит сюда каналом — контент масштабируется
+  // каждый кадр без пересоздания свап-чейна. null — жеста нет.
+  Size? _liveSize;
+
   // обновление через GitHub Releases
   final updates = UpdateService();
   UpdateInfo? updateRel;        // на GitHub есть релиз новее — показать полоску
@@ -409,6 +414,21 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   void initState() {
     super.initState();
     _boot();
+    // Живой ресайз: раннер присылает фактический размер окна (логические
+    // px), null — жест закончился.
+    _native.setMethodCallHandler((call) async {
+      if (call.method == 'liveSize') {
+        final args = call.arguments;
+        final Size? size;
+        if (args is List && args.length == 2) {
+          size = Size((args[0] as num).toDouble(), (args[1] as num).toDouble());
+        } else {
+          size = null;
+        }
+        if (mounted) setState(() => _liveSize = size);
+      }
+      return null;
+    });
     // Проверка обновления — после включения телевизора; сама проверка
     // тихая (UpdateService: не чаще раза в сутки, ошибки молча).
     Future.delayed(const Duration(seconds: 3), _checkForUpdate);
@@ -1542,10 +1562,16 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     return Scaffold(
       backgroundColor: const Color(0xFF161413),
       body: LayoutBuilder(builder: (context, box) {
-        final scale = (box.maxWidth / tvW) > (box.maxHeight / tvH)
-            ? box.maxWidth / tvW
-            : box.maxHeight / tvH;
+        // Во время живого ресайза view держит максимальный размер — берём
+        // фактический из канала. Пропорция окна всегда 560:670, поэтому
+        // topLeft совпадает с центром и в обычном режиме.
+        final double availW = _liveSize?.width ?? box.maxWidth;
+        final double availH = _liveSize?.height ?? box.maxHeight;
+        final scale = (availW / tvW) > (availH / tvH)
+            ? availW / tvW
+            : availH / tvH;
         return OverflowBox(
+          alignment: Alignment.topLeft,
           maxWidth: tvW * scale,
           maxHeight: tvH * scale,
           child: SizedBox(

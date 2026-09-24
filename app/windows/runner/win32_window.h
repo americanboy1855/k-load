@@ -55,6 +55,13 @@ class Win32Window {
   // Return a RECT representing the bounds of the current client area.
   RECT GetClientArea();
 
+  // Живой ресайз (RunSizeLoop): окно тянется своим циклом, Flutter-view
+  // держится максимального размера, а реальный размер окна приходит сюда
+  // в логических пикселях — так контент масштабируется каждый кадр без
+  // пересоздания свап-чейна. Конец жеста — OnLiveSizeEnd.
+  virtual void OnLiveSize(double logical_w, double logical_h) {}
+  virtual void OnLiveSizeEnd() {}
+
  protected:
   // Processes and route salient window messages for mouse handling,
   // size change and DPI. Delegates handling of these to member overloads that

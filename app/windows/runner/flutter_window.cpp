@@ -107,6 +107,24 @@ void FlutterWindow::OnDestroy() {
   Win32Window::OnDestroy();
 }
 
+void FlutterWindow::OnLiveSize(double logical_w, double logical_h) {
+  if (!channel_) {
+    return;
+  }
+  flutter::EncodableList args;
+  args.emplace_back(logical_w);
+  args.emplace_back(logical_h);
+  channel_->InvokeMethod(
+      "liveSize", std::make_unique<flutter::EncodableValue>(args));
+}
+
+void FlutterWindow::OnLiveSizeEnd() {
+  if (!channel_) {
+    return;
+  }
+  channel_->InvokeMethod("liveSize", nullptr);
+}
+
 LRESULT CALLBACK FlutterWindow::ViewProcThunk(HWND hwnd, UINT message,
                                               WPARAM wparam, LPARAM lparam) {
   auto* self = active_window_;

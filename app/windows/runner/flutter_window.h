@@ -24,6 +24,11 @@ class FlutterWindow : public Win32Window {
   LRESULT MessageHandler(HWND window, UINT const message, WPARAM const wparam,
                          LPARAM const lparam) noexcept override;
 
+  // Живой ресайз (RunSizeLoop): фактический размер окна → Dart, чтобы
+  // контент масштабировался каждый кадр без пересоздания свап-чейна.
+  void OnLiveSize(double logical_w, double logical_h) override;
+  void OnLiveSizeEnd() override;
+
  private:
   // Обработчик канала kload/native: chooseFolder, setZones, beginDrag,
   // chromeRects, minimize, close (Windows-реализация macOS-канала).

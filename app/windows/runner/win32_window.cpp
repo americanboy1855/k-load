@@ -91,8 +91,9 @@ void ApplySizeConstraints(RECT* rc, UINT edge, UINT dpi) {
   }
 }
 
-// Цикл ресайза активен: размером Flutter-view управляет RunSizeLoop,
-// WM_SIZE в это время ребёнка не трогает (иначе двойной ресайз).
+// Цикл ресайза активен: Flutter-view держит максимальный размер (784×938),
+// WM_SIZE в это время ребёнка не трогает — реальный размер уходит в Dart
+// каналом liveSize.
 bool g_in_size_loop = false;
 
 void ResizeViewToClient(HWND hwnd) {
@@ -109,18 +110,64 @@ void ResizeViewToClient(HWND hwnd) {
 // WM_NCLBUTTONDOWN запускает модальный SC_SIZE-цикл, который менял размер
 // ступенями ~16 Гц и терял до половины движений мыши — растягивание выглядело
 // рваным). Здесь рамка окна следует за курсором на каждое движение мыши
-// (SetWindowPos стоит ~1 мс — плавность ограничена только мышью). Flutter-view
-// синхронно пересоздаёт свап-чейн (~27 мс), поэтому его ресайз отложен до
-// конца жеста: один точный ResizeViewToClient по отпусканию кнопки; всё время
-// жеста view не трогаем и в WM_SIZE (g_in_size_loop), прирост заливается
-// тёмной кистью корпуса. Обычный насос сообщений держит Flutter живым,
-// Escape отменяет.
-void RunSizeLoop(HWND hwnd, UINT edge) {
+// (SetWindowPos стоит ~1 мс). Секрет плавности контента: Flutter-view на всё
+// время жеста растягивается до максимума (784×938) и НЕ пересоздаёт свап-чейн
+// (~27 мс за каждый ресайз — это и резало кадры), а реальный размер окна
+// уходит в Dart каналом (OnLiveSize): контент перерисовывается каждый кадр
+// под фактическую рамку. По отпусканию кнопки один точный ресайз view —
+// без скачка: размеры совпадают. Обычный насос сообщений держит Flutter
+// живым, Escape отменяет.
+void RunSizeLoop(HWND hwnd, UINT edge, Win32Window* self) {
+  // Один цикл за раз: вложенный (клик по другому краю при живом жесте)
+  // ломал бы захват и размеры.
+  if (g_in_size_loop) {
+    return;
+  }
   RECT start{};
   ::GetWindowRect(hwnd, &start);
   POINT press{};
   ::GetCursorPos(&press);
   const UINT dpi = ::GetDpiForWindow(hwnd);
+
+  const wchar_t* cursor_id = IDC_ARROW;
+  switch (edge) {
+    case HTLEFT:
+    case HTRIGHT:
+      cursor_id = IDC_SIZEWE;
+      break;
+    case HTTOP:
+    case HTBOTTOM:
+      cursor_id = IDC_SIZENS;
+      break;
+    case HTTOPLEFT:
+    case HTBOTTOMRIGHT:
+      cursor_id = IDC_SIZENWSE;
+      break;
+    case HTTOPRIGHT:
+    case HTBOTTOMLEFT:
+      cursor_id = IDC_SIZENESW;
+      break;
+  }
+  const HCURSOR size_cursor = ::LoadCursor(nullptr, cursor_id);
+
+  auto send_live_size = [&]() {
+    if (self == nullptr) {
+      return;
+    }
+    RECT cr{};
+    ::GetClientRect(hwnd, &cr);
+    self->OnLiveSize((cr.right - cr.left) * 96.0 / dpi,
+                     (cr.bottom - cr.top) * 96.0 / dpi);
+  };
+
+  // Вид — на максимум до начала жеста: Dart получает live-размер раньше
+  // смены метрик, первый кадр жеста сразу правильный.
+  send_live_size();
+  if (const HWND view = ::GetWindow(hwnd, GW_CHILD); view != nullptr) {
+    ::MoveWindow(view, 0, 0, MulDiv(784, static_cast<int>(dpi), 96),
+                 MulDiv(938, static_cast<int>(dpi), 96), TRUE);
+  }
+
   g_in_size_loop = true;
   ::SetCapture(hwnd);
   bool done = false;
@@ -158,6 +205,7 @@ void RunSizeLoop(HWND hwnd, UINT edge) {
         ::SetWindowPos(hwnd, nullptr, rc.left, rc.top,
                        rc.right - rc.left, rc.bottom - rc.top,
                        SWP_NOACTIVATE | SWP_NOZORDER);
+        send_live_size();
         break;
       }
       case WM_LBUTTONUP:
@@ -172,6 +220,11 @@ void RunSizeLoop(HWND hwnd, UINT edge) {
       case WM_CANCELMODE:
       case WM_CAPTURECHANGED:
         done = true;
+        break;
+      case WM_SETCURSOR:
+        // Курсор — размерный на весь жест: hit-test по увеличенному view
+        // давал бы обычную стрелку.
+        ::SetCursor(size_cursor);
         break;
       default:
         ::TranslateMessage(&msg);
@@ -188,7 +241,12 @@ void RunSizeLoop(HWND hwnd, UINT edge) {
                    start.right - start.left, start.bottom - start.top,
                    SWP_NOACTIVATE | SWP_NOZORDER);
   }
+  // Сначала точный ресайз view (метрики и live-размер совпадают — кадра
+  // со скачком нет), потом снимаем live-режим в Dart.
   ResizeViewToClient(hwnd);
+  if (self != nullptr) {
+    self->OnLiveSizeEnd();
+  }
 }
 
 }  // namespace
@@ -418,7 +476,7 @@ Win32Window::MessageHandler(HWND hwnd,
       // совпадают с WMSZ_*.
       const UINT edge = static_cast<UINT>(wparam);
       if (edge >= HTSIZEFIRST && edge <= HTSIZELAST) {
-        RunSizeLoop(hwnd, edge);
+        RunSizeLoop(hwnd, edge, this);
         return 0;
       }
       break;
