@@ -54,6 +54,143 @@ void EnableFullDpiSupportIfAvailable(HWND hwnd) {
   FreeLibrary(user32_module);
 }
 
+// Пропорция 560:670 и лимиты 0.8×–1.4×, применённые к тянущемуся краю
+// (edge — HTLEFT..HTBOTTOMRIGHT, значения совпадают с WMSZ_*). Сторона, за
+// которую тянут, неподвижна, противоположная подгоняется.
+void ApplySizeConstraints(RECT* rc, UINT edge, UINT dpi) {
+  const double aspect = 560.0 / 670.0;
+  const LONG min_h = MulDiv(536, static_cast<int>(dpi), 96);
+  const LONG max_h = MulDiv(938, static_cast<int>(dpi), 96);
+  LONG w = rc->right - rc->left;
+  LONG h = rc->bottom - rc->top;
+  if (edge == WMSZ_TOP || edge == WMSZ_BOTTOM) {
+    w = static_cast<LONG>(h * aspect + 0.5);
+  } else {
+    h = static_cast<LONG>(w / aspect + 0.5);
+  }
+  if (h < min_h) {
+    h = min_h;
+    w = static_cast<LONG>(h * aspect + 0.5);
+  } else if (h > max_h) {
+    h = max_h;
+    w = static_cast<LONG>(h * aspect + 0.5);
+  }
+  const bool hold_left = edge == WMSZ_LEFT || edge == WMSZ_TOPLEFT ||
+                         edge == WMSZ_BOTTOMLEFT;
+  const bool hold_top =
+      edge == WMSZ_TOP || edge == WMSZ_TOPLEFT || edge == WMSZ_TOPRIGHT;
+  if (hold_left) {
+    rc->right = rc->left + w;
+  } else {
+    rc->left = rc->right - w;
+  }
+  if (hold_top) {
+    rc->bottom = rc->top + h;
+  } else {
+    rc->top = rc->bottom - h;
+  }
+}
+
+// Цикл ресайза активен: размером Flutter-view управляет RunSizeLoop,
+// WM_SIZE в это время ребёнка не трогает (иначе двойной ресайз).
+bool g_in_size_loop = false;
+
+void ResizeViewToClient(HWND hwnd) {
+  const HWND view = ::GetWindow(hwnd, GW_CHILD);
+  if (view == nullptr) {
+    return;
+  }
+  RECT cr{};
+  ::GetClientRect(hwnd, &cr);
+  ::MoveWindow(view, 0, 0, cr.right, cr.bottom, TRUE);
+}
+
+// Собственный цикл ресайза вместо системного (DefWindowProc на
+// WM_NCLBUTTONDOWN запускает модальный SC_SIZE-цикл, который менял размер
+// ступенями ~16 Гц и терял до половины движений мыши — растягивание выглядело
+// рваным). Здесь рамка окна следует за курсором на каждое движение мыши
+// (SetWindowPos стоит ~1 мс — плавность ограничена только мышью). Flutter-view
+// синхронно пересоздаёт свап-чейн (~27 мс), поэтому его ресайз отложен до
+// конца жеста: один точный ResizeViewToClient по отпусканию кнопки; всё время
+// жеста view не трогаем и в WM_SIZE (g_in_size_loop), прирост заливается
+// тёмной кистью корпуса. Обычный насос сообщений держит Flutter живым,
+// Escape отменяет.
+void RunSizeLoop(HWND hwnd, UINT edge) {
+  RECT start{};
+  ::GetWindowRect(hwnd, &start);
+  POINT press{};
+  ::GetCursorPos(&press);
+  const UINT dpi = ::GetDpiForWindow(hwnd);
+  g_in_size_loop = true;
+  ::SetCapture(hwnd);
+  bool done = false;
+  bool cancelled = false;
+  while (!done && ::IsWindow(hwnd)) {
+    MSG msg;
+    const BOOL got = ::GetMessage(&msg, nullptr, 0, 0);
+    if (got <= 0) {
+      if (got == 0) {
+        ::PostQuitMessage(static_cast<int>(msg.wParam));
+      }
+      break;
+    }
+    switch (msg.message) {
+      case WM_MOUSEMOVE: {
+        POINT cur{};
+        ::GetCursorPos(&cur);
+        RECT rc = start;
+        const LONG dx = cur.x - press.x;
+        const LONG dy = cur.y - press.y;
+        if (edge == HTLEFT || edge == HTTOPLEFT || edge == HTBOTTOMLEFT) {
+          rc.left += dx;
+        }
+        if (edge == HTRIGHT || edge == HTTOPRIGHT || edge == HTBOTTOMRIGHT) {
+          rc.right += dx;
+        }
+        if (edge == HTTOP || edge == HTTOPLEFT || edge == HTTOPRIGHT) {
+          rc.top += dy;
+        }
+        if (edge == HTBOTTOM || edge == HTBOTTOMLEFT ||
+            edge == HTBOTTOMRIGHT) {
+          rc.bottom += dy;
+        }
+        ApplySizeConstraints(&rc, edge, dpi);
+        ::SetWindowPos(hwnd, nullptr, rc.left, rc.top,
+                       rc.right - rc.left, rc.bottom - rc.top,
+                       SWP_NOACTIVATE | SWP_NOZORDER);
+        break;
+      }
+      case WM_LBUTTONUP:
+        done = true;
+        break;
+      case WM_KEYDOWN:
+        if (msg.wParam == VK_ESCAPE) {
+          cancelled = true;
+          done = true;
+        }
+        break;
+      case WM_CANCELMODE:
+      case WM_CAPTURECHANGED:
+        done = true;
+        break;
+      default:
+        ::TranslateMessage(&msg);
+        ::DispatchMessage(&msg);
+    }
+  }
+  g_in_size_loop = false;
+  ::ReleaseCapture();
+  if (!::IsWindow(hwnd)) {
+    return;
+  }
+  if (cancelled) {
+    ::SetWindowPos(hwnd, nullptr, start.left, start.top,
+                   start.right - start.left, start.bottom - start.top,
+                   SWP_NOACTIVATE | SWP_NOZORDER);
+  }
+  ResizeViewToClient(hwnd);
+}
+
 }  // namespace
 
 // Manages the Win32Window's window class registration.
@@ -92,7 +229,9 @@ const wchar_t* WindowClassRegistrar::GetWindowClass() {
     WNDCLASS window_class{};
     window_class.hCursor = LoadCursor(nullptr, IDC_ARROW);
     window_class.lpszClassName = kWindowClassName;
-    window_class.style = CS_HREDRAW | CS_VREDRAW;
+    // Без CS_HREDRAW|CS_VREDRAW: полная перерисовка на каждый шаг ресайза
+    // усугубляла «рваное» растягивание окна.
+    window_class.style = 0;
     window_class.cbClsExtra = 0;
     window_class.cbWndExtra = 0;
     window_class.hInstance = GetModuleHandle(nullptr);
@@ -153,16 +292,6 @@ bool Win32Window::Create(const std::wstring& title,
 
   if (!window) {
     return false;
-  }
-
-  // Гарантия против автозаголовка: срезаем WS_CAPTION, если он появился.
-  {
-    const LONG_PTR style = ::GetWindowLongPtrW (window, GWL_STYLE);
-    if (style & WS_CAPTION) {
-      ::SetWindowLongPtrW (window, GWL_STYLE, style & ~WS_CAPTION);
-      ::SetWindowPos (window, nullptr, 0, 0, 0, 0,
-                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-    }
   }
 
   // Тень вокруг безрамочного окна.
@@ -283,49 +412,34 @@ Win32Window::MessageHandler(HWND hwnd,
 
       return 0;
     }
+    case WM_NCLBUTTONDOWN: {
+      // Ресайз за края — своим циклом (RunSizeLoop): системный SC_SIZE-цикл
+      // менял размер рваными ступенями. Значения HTLEFT..HTBOTTOMRIGHT
+      // совпадают с WMSZ_*.
+      const UINT edge = static_cast<UINT>(wparam);
+      if (edge >= HTSIZEFIRST && edge <= HTSIZELAST) {
+        RunSizeLoop(hwnd, edge);
+        return 0;
+      }
+      break;
+    }
+
     case WM_SIZING: {
-      // Паритет с macOS (contentAspectRatio): окно всегда 560:670 — иначе
-      // cover-масштаб канваса срезает шапку или нижнюю панель (репорт
-      // «при растягивании теряет вид»). Высоту подгоняем к ширине; за
-      // вертикальные края — наоборот. Лимиты 0.8×–1.4× пропорциональны,
-      // поэтому клампа по высоте достаточно.
-      auto* rc = reinterpret_cast<RECT*>(lparam);
-      const UINT dpi = ::GetDpiForWindow(hwnd);
-      const double aspect = 560.0 / 670.0;
-      const LONG minH = MulDiv(536, static_cast<int>(dpi), 96);
-      const LONG maxH = MulDiv(938, static_cast<int>(dpi), 96);
-      LONG w = rc->right - rc->left;
-      LONG h = rc->bottom - rc->top;
-      if (wparam == WMSZ_TOP || wparam == WMSZ_BOTTOM) {
-        w = static_cast<LONG>(h * aspect + 0.5);
-      } else {
-        h = static_cast<LONG>(w / aspect + 0.5);
-      }
-      if (h < minH) {
-        h = minH;
-        w = static_cast<LONG>(h * aspect + 0.5);
-      } else if (h > maxH) {
-        h = maxH;
-        w = static_cast<LONG>(h * aspect + 0.5);
-      }
-      const bool holdLeft =
-          wparam == WMSZ_LEFT || wparam == WMSZ_TOPLEFT || wparam == WMSZ_BOTTOMLEFT;
-      const bool holdTop =
-          wparam == WMSZ_TOP || wparam == WMSZ_TOPLEFT || wparam == WMSZ_TOPRIGHT;
-      if (holdLeft) {
-        rc->right = rc->left + w;
-      } else {
-        rc->left = rc->right - w;
-      }
-      if (holdTop) {
-        rc->bottom = rc->top + h;
-      } else {
-        rc->top = rc->bottom - h;
-      }
+      // Fallback (программный ресайз снаружи): пропорция 560:670, лимиты
+      // 0.8×–1.4× — см. ApplySizeConstraints.
+      ApplySizeConstraints(reinterpret_cast<RECT*>(lparam),
+                           static_cast<UINT>(wparam),
+                           ::GetDpiForWindow(hwnd));
       return TRUE;
     }
 
     case WM_SIZE: {
+      if (g_in_size_loop) {
+        // Размером Flutter-view в это время управляет RunSizeLoop
+        // (throttled-синхронизация): иначе каждый шаг ждал пересоздания
+        // свап-чейна и рамка отставала от мыши.
+        return 0;
+      }
       RECT rect = GetClientArea();
       if (child_content_ != nullptr) {
         // Size and position the child window.
