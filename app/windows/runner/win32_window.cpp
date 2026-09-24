@@ -283,6 +283,48 @@ Win32Window::MessageHandler(HWND hwnd,
 
       return 0;
     }
+    case WM_SIZING: {
+      // Паритет с macOS (contentAspectRatio): окно всегда 560:670 — иначе
+      // cover-масштаб канваса срезает шапку или нижнюю панель (репорт
+      // «при растягивании теряет вид»). Высоту подгоняем к ширине; за
+      // вертикальные края — наоборот. Лимиты 0.8×–1.4× пропорциональны,
+      // поэтому клампа по высоте достаточно.
+      auto* rc = reinterpret_cast<RECT*>(lparam);
+      const UINT dpi = ::GetDpiForWindow(hwnd);
+      const double aspect = 560.0 / 670.0;
+      const LONG minH = MulDiv(536, static_cast<int>(dpi), 96);
+      const LONG maxH = MulDiv(938, static_cast<int>(dpi), 96);
+      LONG w = rc->right - rc->left;
+      LONG h = rc->bottom - rc->top;
+      if (wparam == WMSZ_TOP || wparam == WMSZ_BOTTOM) {
+        w = static_cast<LONG>(h * aspect + 0.5);
+      } else {
+        h = static_cast<LONG>(w / aspect + 0.5);
+      }
+      if (h < minH) {
+        h = minH;
+        w = static_cast<LONG>(h * aspect + 0.5);
+      } else if (h > maxH) {
+        h = maxH;
+        w = static_cast<LONG>(h * aspect + 0.5);
+      }
+      const bool holdLeft =
+          wparam == WMSZ_LEFT || wparam == WMSZ_TOPLEFT || wparam == WMSZ_BOTTOMLEFT;
+      const bool holdTop =
+          wparam == WMSZ_TOP || wparam == WMSZ_TOPLEFT || wparam == WMSZ_TOPRIGHT;
+      if (holdLeft) {
+        rc->right = rc->left + w;
+      } else {
+        rc->left = rc->right - w;
+      }
+      if (holdTop) {
+        rc->bottom = rc->top + h;
+      } else {
+        rc->top = rc->bottom - h;
+      }
+      return TRUE;
+    }
+
     case WM_SIZE: {
       RECT rect = GetClientArea();
       if (child_content_ != nullptr) {
