@@ -57,9 +57,10 @@ class Win32Window {
 
   // Живой ресайз (RunSizeLoop): окно тянется своим циклом, Flutter-view
   // держится максимального размера, а реальный размер окна приходит сюда
-  // в логических пикселях — так контент масштабируется каждый кадр без
-  // пересоздания свап-чейна. Конец жеста — OnLiveSizeEnd.
-  virtual void OnLiveSize(double logical_w, double logical_h) {}
+  // в логических пикселях вместе с ЯКОРЕМ — противоположным от тянущегося
+  // края углом (0 topLeft … 3 bottomRight): контент масштабируется каждый
+  // кадр, прижатый к неподвижному краю, и не «прыгает». Конец — OnLiveSizeEnd.
+  virtual void OnLiveSize(double logical_w, double logical_h, int anchor) {}
   virtual void OnLiveSizeEnd() {}
 
  protected:

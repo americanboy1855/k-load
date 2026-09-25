@@ -141,6 +141,41 @@ void ResizeViewToClient(HWND hwnd) {
   ::MoveWindow(view, 0, 0, cr.right, cr.bottom, TRUE);
 }
 
+// Якорь — противоположный от тянущегося края угол (0 topLeft … 3
+// bottomRight): контент в Dart прижимается к НЕподвижному краю окна, и
+// при ресайзе «не прыгает».
+int AnchorForEdge(UINT edge) {
+  switch (edge) {
+    case HTLEFT:      return 1;  // topRight
+    case HTRIGHT:     return 0;  // topLeft
+    case HTTOP:       return 2;  // bottomLeft
+    case HTBOTTOM:    return 0;  // topLeft
+    case HTTOPLEFT:   return 3;  // bottomRight
+    case HTTOPRIGHT:  return 2;  // bottomLeft
+    case HTBOTTOMLEFT: return 1; // topRight
+    case HTBOTTOMRIGHT: return 0;// topLeft
+  }
+  return 0;
+}
+
+// На время жеста view прижат к якорному углу клиента (его размер
+// максимальный), чтобы видимая часть поверхности совпадала с тем, что
+// Dart рисует прижатым к тому же углу.
+void PinViewToAnchor(HWND hwnd, UINT edge, UINT dpi) {
+  const HWND view = ::GetWindow(hwnd, GW_CHILD);
+  if (view == nullptr) {
+    return;
+  }
+  RECT cr{};
+  ::GetClientRect(hwnd, &cr);
+  const LONG vw = MulDiv(784, static_cast<int>(dpi), 96);
+  const LONG vh = MulDiv(938, static_cast<int>(dpi), 96);
+  const int anchor = AnchorForEdge(edge);
+  const LONG x = (anchor == 1 || anchor == 3) ? (cr.right - vw) : 0;
+  const LONG y = (anchor == 2 || anchor == 3) ? (cr.bottom - vh) : 0;
+  ::MoveWindow(view, x, y, vw, vh, FALSE);
+}
+
 // Собственный цикл ресайза вместо системного (DefWindowProc на
 // WM_NCLBUTTONDOWN запускает модальный SC_SIZE-цикл, который менял размер
 // ступенями ~16 Гц и терял до половины движений мыши — растягивание выглядело
@@ -185,6 +220,9 @@ void RunSizeLoop(HWND hwnd, UINT edge, Win32Window* self) {
   }
   const HCURSOR size_cursor = ::LoadCursor(nullptr, cursor_id);
 
+  const UINT norm_edge = (edge >= WMSZ_LEFT && edge <= WMSZ_BOTTOMRIGHT)
+                             ? edge + (HTSIZEFIRST - WMSZ_LEFT)
+                             : edge;
   auto send_live_size = [&]() {
     if (self == nullptr) {
       return;
@@ -192,16 +230,14 @@ void RunSizeLoop(HWND hwnd, UINT edge, Win32Window* self) {
     RECT cr{};
     ::GetClientRect(hwnd, &cr);
     self->OnLiveSize((cr.right - cr.left) * 96.0 / dpi,
-                     (cr.bottom - cr.top) * 96.0 / dpi);
+                     (cr.bottom - cr.top) * 96.0 / dpi,
+                     AnchorForEdge(norm_edge));
   };
 
-  // Вид — на максимум до начала жеста: Dart получает live-размер раньше
-  // смены метрик, первый кадр жеста сразу правильный.
+  // Вид — на максимум и прижат к якорю до начала жеста: Dart получает
+  // live-размер раньше смены метрик, первый кадр жеста сразу правильный.
   send_live_size();
-  if (const HWND view = ::GetWindow(hwnd, GW_CHILD); view != nullptr) {
-    ::MoveWindow(view, 0, 0, MulDiv(784, static_cast<int>(dpi), 96),
-                 MulDiv(938, static_cast<int>(dpi), 96), TRUE);
-  }
+  PinViewToAnchor(hwnd, norm_edge, dpi);
 
   g_in_size_loop = true;
   ::SetCapture(hwnd);
@@ -240,6 +276,7 @@ void RunSizeLoop(HWND hwnd, UINT edge, Win32Window* self) {
         ::SetWindowPos(hwnd, nullptr, rc.left, rc.top,
                        rc.right - rc.left, rc.bottom - rc.top,
                        SWP_NOACTIVATE | SWP_NOZORDER);
+        PinViewToAnchor(hwnd, norm_edge, dpi);
         send_live_size();
         break;
       }

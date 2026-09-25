@@ -111,13 +111,15 @@ void FlutterWindow::OnDestroy() {
   Win32Window::OnDestroy();
 }
 
-void FlutterWindow::OnLiveSize(double logical_w, double logical_h) {
+void FlutterWindow::OnLiveSize(double logical_w, double logical_h,
+                               int anchor) {
   if (!channel_) {
     return;
   }
   flutter::EncodableList args;
   args.emplace_back(logical_w);
   args.emplace_back(logical_h);
+  args.emplace_back(anchor);
   channel_->InvokeMethod(
       "liveSize", std::make_unique<flutter::EncodableValue>(args));
 }
@@ -129,12 +131,108 @@ void FlutterWindow::OnLiveSizeEnd() {
   channel_->InvokeMethod("liveSize", nullptr);
 }
 
+// Точка экрана → координаты канваса 560×670 (cover-масштаб клиента окна).
+void FlutterWindow::WindowToCanvas(POINT screen, double& cx, double& cy) const {
+  POINT client = screen;
+  const HWND view = ::GetWindow(const_cast<FlutterWindow*>(this)->GetHandle(),
+                                GW_CHILD);
+  const HWND parent = const_cast<FlutterWindow*>(this)->GetHandle();
+  if (view != nullptr) {
+    ::ScreenToClient(view, &client);
+  } else {
+    ::ScreenToClient(parent, &client);
+  }
+  RECT rc{};
+  if (view != nullptr) {
+    ::GetClientRect(view, &rc);
+  } else {
+    ::GetClientRect(parent, &rc);
+  }
+  const double scale = (rc.right > 0 && rc.bottom > 0)
+                           ? (rc.right / 560.0 > rc.bottom / 670.0
+                                  ? rc.right / 560.0
+                                  : rc.bottom / 670.0)
+                           : 1.0;
+  const double off_x = (rc.right - 560.0 * scale) / 2.0;
+  const double off_y = (rc.bottom - 670.0 * scale) / 2.0;
+  cx = (client.x - off_x) / scale;
+  cy = (client.y - off_y) / scale;
+}
+
 LRESULT CALLBACK FlutterWindow::ViewProcThunk(HWND hwnd, UINT message,
                                               WPARAM wparam, LPARAM lparam) {
   auto* self = active_window_;
   if (self != nullptr) {
     if (message == WM_NCHITTEST) {
       return self->ViewHitTest(hwnd, lparam);
+    }
+    // ---- Нативный drag-out (паритет с macOS-зонами) ----
+    // Курсор-рука над зоной ГОТОВОЙ строки и старт DoDragDrop уверенным
+    // жестом — независимо от Flutter hit-test (репорт «рука не появляется,
+    // файл не перетаскивается»). Клик БЕЗ движения прокидывается во
+    // Flutter — кнопки строки остаются кликабельными.
+    if (message == WM_MOUSEMOVE && !self->drag_zones_.empty()) {
+      POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+      double cx = 0, cy = 0;
+      self->WindowToCanvas(pt, cx, cy);
+      const LRESULT handled =
+          ::CallWindowProc(self->default_view_proc_, hwnd, message, wparam,
+                           lparam);
+      for (const auto& z : self->drag_zones_) {
+        if (cx >= z.x && cy >= z.y && cx <= z.x + z.w && cy <= z.y + z.h) {
+          const bool pressed = wparam & MK_LBUTTON;
+          ::SetCursor(::LoadCursor(
+              nullptr, pressed ? IDC_APPSTARTING : IDC_HAND));
+          break;
+        }
+      }
+      return handled;
+    }
+    if (message == WM_LBUTTONDOWN && !self->drag_zones_.empty()) {
+      POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+      double cx = 0, cy = 0;
+      self->WindowToCanvas(pt, cx, cy);
+      for (size_t i = 0; i < self->drag_zones_.size(); ++i) {
+        const auto& z = self->drag_zones_[i];
+        if (cx >= z.x && cy >= z.y && cx <= z.x + z.w && cy <= z.y + z.h) {
+          // Захват на окне: движения пойдут сюда, Flutter их не увидит —
+          // так жест не конфликтует с прокруткой очереди.
+          ::SetCapture(hwnd);
+          self->drag_press_valid_ = true;
+          self->drag_press_ = pt;
+          self->drag_press_zone_ = static_cast<int>(i);
+          ::SetCursor(::LoadCursor(nullptr, IDC_APPSTARTING));
+          return 0;
+        }
+      }
+    }
+    if (message == WM_MOUSEMOVE && self->drag_press_valid_) {
+      POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+      const LONG dx = pt.x - self->drag_press_.x;
+      const LONG dy = pt.y - self->drag_press_.y;
+      if (std::abs(dx) >= 10 && std::abs(dx) > std::abs(dy)) {
+        const std::wstring path =
+            self->drag_zones_[self->drag_press_zone_].path;
+        self->drag_press_valid_ = false;
+        if (::GetCapture() == hwnd) ::ReleaseCapture();
+        // Модальный системный перенос; курсор и образ файла рисует ОС.
+        kload::DragOutFile(path);
+        return 0;
+      }
+      return 0;
+    }
+    if (message == WM_LBUTTONUP && self->drag_press_valid_) {
+      // Клик без движения: честно отдаём во Flutter (кнопки строки).
+      self->drag_press_valid_ = false;
+      if (::GetCapture() == hwnd) ::ReleaseCapture();
+      const LPARAM lp = lparam;
+      ::CallWindowProc(self->default_view_proc_, hwnd, WM_LBUTTONDOWN,
+                       MK_LBUTTON, lp);
+      ::CallWindowProc(self->default_view_proc_, hwnd, WM_LBUTTONUP, 0, lp);
+      return 0;
+    }
+    if (message == WM_CAPTURECHANGED) {
+      self->drag_press_valid_ = false;
     }
     if (message == WM_NCLBUTTONDOWN && self->GetHandle() != nullptr) {
       // HTCAPTION/края от дочернего (WS_CHILD) HWND Windows доставляет
@@ -229,7 +327,37 @@ void FlutterWindow::HandleMethodCall(
   }
 
   if (method == "setZones") {
-    // На Windows зоны не нужны: drag стартует из Dart-жестов (beginDrag).
+    // Зоны drag-out: прямоугольники ГОТОВЫХ строк диспетчера в координатах
+    // канваса 560×670 + путь файла (та же структура, что на macOS).
+    drag_zones_.clear();
+    drag_press_valid_ = false;
+    drag_press_zone_ = -1;
+    if (const auto* list = std::get_if<flutter::EncodableList>(call.arguments())) {
+      for (const auto& entry : *list) {
+        const auto* map = std::get_if<flutter::EncodableMap>(&entry);
+        if (map == nullptr) continue;
+        DragZone z;
+        const auto* path = std::get_if<std::string>(&map->find(
+            flutter::EncodableValue("path"))->second);
+        if (path == nullptr || path->empty()) continue;
+        z.path = toWide(*path);
+        auto num = [&map](const char* key) -> double {
+          const auto it = map->find(flutter::EncodableValue(key));
+          if (it == map->end()) return 0;
+          if (const auto* d = std::get_if<double>(&it->second)) return *d;
+          if (const auto* i = std::get_if<int32_t>(&it->second))
+            return static_cast<double>(*i);
+          if (const auto* i64 = std::get_if<int64_t>(&it->second))
+            return static_cast<double>(*i64);
+          return 0;
+        };
+        z.x = num("x");
+        z.y = num("y");
+        z.w = num("w");
+        z.h = num("h");
+        if (z.w > 0 && z.h > 0) drag_zones_.push_back(std::move(z));
+      }
+    }
     result->Success();
     return;
   }

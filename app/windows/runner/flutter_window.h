@@ -24,9 +24,9 @@ class FlutterWindow : public Win32Window {
   LRESULT MessageHandler(HWND window, UINT const message, WPARAM const wparam,
                          LPARAM const lparam) noexcept override;
 
-  // Живой ресайз (RunSizeLoop): фактический размер окна → Dart, чтобы
-  // контент масштабировался каждый кадр без пересоздания свап-чейна.
-  void OnLiveSize(double logical_w, double logical_h) override;
+  // Живой ресайз (RunSizeLoop): фактический размер окна и якорь → Dart,
+  // чтобы контент масштабировался каждый кадр без пересоздания свап-чейна.
+  void OnLiveSize(double logical_w, double logical_h, int anchor) override;
   void OnLiveSizeEnd() override;
 
  private:
@@ -67,6 +67,22 @@ class FlutterWindow : public Win32Window {
     double x = 0, y = 0, w = 0, h = 0;
   };
   std::vector<ChromeRect> chrome_rects_;
+
+  // Зоны drag-out: прямоугольники ГОТОВЫХ строк диспетчера в координатах
+  // канваса + путь файла. Заполняются из Dart (setZones), используются
+  // нативно: курсор-рука над зоной и старт DoDragDrop уверенным жестом.
+  struct DragZone {
+    std::wstring path;
+    double x = 0, y = 0, w = 0, h = 0;
+  };
+  std::vector<DragZone> drag_zones_;
+  // Жест drag-out в полёте: точка нажатия и зона (индекс в drag_zones_).
+  bool drag_press_valid_ = false;
+  POINT drag_press_{};
+  int drag_press_zone_ = -1;
+
+  // Точка (экран) → координаты канваса 560×670 (cover-масштаб клиента).
+  void WindowToCanvas(POINT screen, double& cx, double& cy) const;
 
   // Окно одно на процесс — статический доступ из подклассового wndproc.
   static FlutterWindow* active_window_;

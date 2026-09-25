@@ -319,9 +319,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   static const _native = MethodChannel('kload/native');
 
   // Живой ресайз окна (Windows): view на время жеста держит максимальный
-  // размер, а фактический приходит сюда каналом — контент масштабируется
-  // каждый кадр без пересоздания свап-чейна. null — жеста нет.
+  // размер, а фактический приходит сюда каналом вместе с ЯКОРЕМ —
+  // противоположным тянущемуся краю углом (0 topLeft … 3 bottomRight),
+  // к которому прижат контент. null — жеста нет.
   Size? _liveSize;
+  int _liveAnchor = 0;
 
   // обновление через GitHub Releases
   final updates = UpdateService();
@@ -415,17 +417,23 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     super.initState();
     _boot();
     // Живой ресайз: раннер присылает фактический размер окна (логические
-    // px), null — жест закончился.
+    // px) и якорь (противоположный тянущемуся краю угол), null — жест
+    // закончился.
     _native.setMethodCallHandler((call) async {
       if (call.method == 'liveSize') {
         final args = call.arguments;
-        final Size? size;
-        if (args is List && args.length == 2) {
+        Size? size;
+        var anchor = 0;
+        if (args is List && args.length >= 2) {
           size = Size((args[0] as num).toDouble(), (args[1] as num).toDouble());
-        } else {
-          size = null;
+          if (args.length >= 3) anchor = (args[2] as num).toInt();
         }
-        if (mounted) setState(() => _liveSize = size);
+        if (mounted) {
+          setState(() {
+            _liveSize = size;
+            _liveAnchor = anchor;
+          });
+        }
       }
       return null;
     });
@@ -607,11 +615,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   void _scheduleDragZones() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      // Windows: нативные зоны не нужны (drag стартует из жеста строки),
-      // зато раннеру нужны прямоугольники кнопок окна.
       if (Platform.isWindows) {
         _sendChromeRects();
-        return;
       }
       // Зоны в координатах канваса 560×670 — того самого, что масштабирует
       // окно. Нативный слой сам учтёт cover-масштаб и поля телевизора.
@@ -1563,15 +1568,22 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       backgroundColor: const Color(0xFF161413),
       body: LayoutBuilder(builder: (context, box) {
         // Во время живого ресайза view держит максимальный размер — берём
-        // фактический из канала. Пропорция окна всегда 560:670, поэтому
-        // topLeft совпадает с центром и в обычном режиме.
+        // фактический из канала и прижимаем контент к ЯКОРЮ (неподвижному
+        // от тянущегося края углу): интерфейс не «прыгает» при ресайзе
+        // слева/сверху. В обычном режиме размеры совпадают — якорь не важен.
         final double availW = _liveSize?.width ?? box.maxWidth;
         final double availH = _liveSize?.height ?? box.maxHeight;
         final scale = (availW / tvW) > (availH / tvH)
             ? availW / tvW
             : availH / tvH;
+        const anchors = [
+          Alignment.topLeft,
+          Alignment.topRight,
+          Alignment.bottomLeft,
+          Alignment.bottomRight,
+        ];
         return OverflowBox(
-          alignment: Alignment.topLeft,
+          alignment: anchors[_liveAnchor.clamp(0, 3)],
           maxWidth: tvW * scale,
           maxHeight: tvH * scale,
           child: SizedBox(
