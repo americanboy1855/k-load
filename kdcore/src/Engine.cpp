@@ -3285,8 +3285,12 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
     yt.link = query;
     yt.isSearch = true;
     yt.service = Detector::Service::youtube;
-    if (wantYoutube)
+    // Тело YouTube-поиска: в авто-режиме исполняется параллельно с
+    // остальными каталогами (страница выдачи YouTube — самый долгий
+    // запрос, раньше он шёл перед остальными и растягивал весь поиск).
+    auto youtubeSearch = [&]()
     {
+        if (! wantYoutube) return;
         const auto html = fetch ("https://www.youtube.com/results?search_query="
                                  + kd::urlEscape (query));
         const Str marker = "var ytInitialData = ";
@@ -3389,23 +3393,13 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
                 }
             }
         }
-    }
-
-    // Выбранный каталог: единственный источник, как попросили.
-    if (! site.empty() && site != "youtube" && site != "soundcloud")
-    {
-        if (site == "apple")          p = searchAppleMusicList (query);
-        else if (site == "spotify")   p = searchSpotifyList (query);
-        else if (site == "pinterest") p = searchPinterest (query);
-        else                          p.error = "Такой источник поиска не поддерживается";
-        if (! p.ok && p.error.empty())
-            p.error = "По этому названию в выбранном каталоге ничего не нашлось";
-        return p;
-    }
+    };
 
     // АВТО: агрегатор до 20 результатов из каталогов, где текстовый поиск
-    // и скачивание реально работают. Кто недоступен из сети — просто без
-    // своих строк, поиск не разваливается.
+    // и скачивание реально работают. Все каталоги — включая YouTube —
+    // ищут ОДНОВРЕМЕННО: итоговая скорость равна самому медленному
+    // источнику, а не сумме. Кто недоступен из сети — просто без своих
+    // строк, поиск не разваливается.
     if (site.empty())
     {
         p.service = Detector::Service::youtube;
@@ -3422,16 +3416,14 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
             }
         };
 
-        // Каталоги ищем ОДНОВРЕМЕННО: итоговая скорость поиска равна самому
-        // медленному источнику, а не сумме. Кто ошибся/не успел — просто
-        // без своих строк, поиск не разваливается.
         Probe sc, am, sp;
-        std::thread scThread, amThread, spThread;
+        std::thread ytThread, scThread, amThread, spThread;
+        ytThread = std::thread ([&] { youtubeSearch(); });
         if (wantSoundcloud)
             scThread = std::thread ([&] { sc = searchSoundcloudList (query, 5); });
         amThread = std::thread ([&] { am = searchAppleMusicList (query); });
         spThread = std::thread ([&] { sp = searchSpotifyList (query); });
-        for (auto* t : { &scThread, &amThread, &spThread })
+        for (auto* t : { &ytThread, &scThread, &amThread, &spThread })
             if (t->joinable()) t->join();
 
         if (yt.ok) append (yt, 8);
@@ -3468,7 +3460,20 @@ Probe Engine::probeSearch (const Str& query, const Str& site) const
         return p;
     }
 
+    // Выбранный каталог: единственный источник, как попросили.
+    if (site != "youtube" && site != "soundcloud")
+    {
+        if (site == "apple")          p = searchAppleMusicList (query);
+        else if (site == "spotify")   p = searchSpotifyList (query);
+        else if (site == "pinterest") p = searchPinterest (query);
+        else                          p.error = "Такой источник поиска не поддерживается";
+        if (! p.ok && p.error.empty())
+            p.error = "По этому названию в выбранном каталоге ничего не нашлось";
+        return p;
+    }
+
     // Явный youtube/soundcloud (один источник).
+    youtubeSearch();
     if (yt.ok)
     {
         p = yt;

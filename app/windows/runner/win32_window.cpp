@@ -54,16 +54,24 @@ void EnableFullDpiSupportIfAvailable(HWND hwnd) {
   FreeLibrary(user32_module);
 }
 
-// Пропорция 560:670 и лимиты 0.8×–1.4×, применённые к тянущемуся краю
-// (edge — HTLEFT..HTBOTTOMRIGHT, значения совпадают с WMSZ_*). Сторона, за
-// которую тянут, неподвижна, противоположная подгоняется.
+// Пропорция 560:670 и лимиты 0.8×–1.4×, применённые к тянущемуся краю.
+// edge приходит и как HTLEFT..HTBOTTOMRIGHT (10..17, наш цикл ресайза),
+// и как WMSZ_* (1..8, системный WM_SIZING) — числа НЕ совпадают, поэтому
+// сначала нормализуем в HT-пространство. Сторона, за которую тянут,
+// следует за мышью. Рост перпендикулярной оси у краёв идёт от центра —
+// иначе при тяге левого края окно уползало вверх за экран (репорт
+// «интерфейс плавает при resize слева/сверху»). У углов противоположный
+// угол неподвижен, как принято в Windows.
 void ApplySizeConstraints(RECT* rc, UINT edge, UINT dpi) {
+  if (edge >= WMSZ_LEFT && edge <= WMSZ_BOTTOMRIGHT) {
+    edge = edge + (HTSIZEFIRST - WMSZ_LEFT);  // WMSZ_* -> HT*
+  }
   const double aspect = 560.0 / 670.0;
   const LONG min_h = MulDiv(536, static_cast<int>(dpi), 96);
   const LONG max_h = MulDiv(938, static_cast<int>(dpi), 96);
   LONG w = rc->right - rc->left;
   LONG h = rc->bottom - rc->top;
-  if (edge == WMSZ_TOP || edge == WMSZ_BOTTOM) {
+  if (edge == HTTOP || edge == HTBOTTOM) {
     w = static_cast<LONG>(h * aspect + 0.5);
   } else {
     h = static_cast<LONG>(w / aspect + 0.5);
@@ -75,19 +83,46 @@ void ApplySizeConstraints(RECT* rc, UINT edge, UINT dpi) {
     h = max_h;
     w = static_cast<LONG>(h * aspect + 0.5);
   }
-  const bool hold_left = edge == WMSZ_LEFT || edge == WMSZ_TOPLEFT ||
-                         edge == WMSZ_BOTTOMLEFT;
+  const bool hold_left =
+      edge == HTLEFT || edge == HTTOPLEFT || edge == HTBOTTOMLEFT;
   const bool hold_top =
-      edge == WMSZ_TOP || edge == WMSZ_TOPLEFT || edge == WMSZ_TOPRIGHT;
-  if (hold_left) {
+      edge == HTTOP || edge == HTTOPLEFT || edge == HTTOPRIGHT;
+  if (edge == HTLEFT || edge == HTRIGHT) {
+    // Горизонтальная сторона — за мышью (при упоре в лимит держим
+    // противоположную), вертикаль — от центра.
+    if (w != rc->right - rc->left) {
+      if (hold_left) {
+        rc->left = rc->right - w;
+      } else {
+        rc->right = rc->left + w;
+      }
+    }
+    const LONG cy = (rc->top + rc->bottom) / 2;
+    rc->top = cy - h / 2;
+    rc->bottom = rc->top + h;
+  } else if (edge == HTTOP || edge == HTBOTTOM) {
+    // Вертикальная сторона — за мышью, горизонталь — от центра.
+    if (h != rc->bottom - rc->top) {
+      if (hold_top) {
+        rc->top = rc->bottom - h;
+      } else {
+        rc->bottom = rc->top + h;
+      }
+    }
+    const LONG cx = (rc->left + rc->right) / 2;
+    rc->left = cx - w / 2;
     rc->right = rc->left + w;
   } else {
-    rc->left = rc->right - w;
-  }
-  if (hold_top) {
-    rc->bottom = rc->top + h;
-  } else {
-    rc->top = rc->bottom - h;
+    if (hold_left) {
+      rc->right = rc->left + w;
+    } else {
+      rc->left = rc->right - w;
+    }
+    if (hold_top) {
+      rc->bottom = rc->top + h;
+    } else {
+      rc->top = rc->bottom - h;
+    }
   }
 }
 
