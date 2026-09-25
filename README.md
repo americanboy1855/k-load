@@ -9,7 +9,7 @@
 [![Сборка Windows](https://github.com/americanboy1855/k-load/actions/workflows/win-build.yml/badge.svg)](https://github.com/americanboy1855/k-load/actions/workflows/win-build.yml)
 [![Скачать](https://img.shields.io/github/v/release/americanboy1855/k-load?label=версия&color=FFB000)](../../releases/latest)
 
-- **Источники:** YouTube · TikTok · Instagram · VK · Spotify · Apple Music · SoundCloud · Pinterest
+- **Источники:** YouTube · TikTok · Instagram · Spotify · Apple Music · SoundCloud · Pinterest
 - **Режимы:** ВИДЕО (до 4K) · МУЗЫКА (MP3, FLAC, WAV) · **ХРОН** — вырезка фрагмента по таймкодам «ОТ–ДО»
 - **Пачка ссылок** с разных сервисов вперемешку и **плейлисты целиком** (недоступные ролики пропускаются)
 - **Поиск по названию**: помнишь только строчку из песни — пишешь текст, приложение находит трек

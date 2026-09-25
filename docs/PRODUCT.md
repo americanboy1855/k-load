@@ -21,7 +21,7 @@ VST3/AU-плагин для DAW (этап 3, после готовности п�
 ## Задачи (v1)
 
 - Источники: YouTube, YouTube Music, Instagram Reels, TikTok, Pinterest,
-  ВК, Spotify, Apple Music, SoundCloud.
+  Spotify, Apple Music, SoundCloud.
 - Поиск по названию → видео или музыка на выбор пользователя.
 - Только реально доступные качества; если неоднозначно — «Макс. качество».
 - Пачка ссылок вперемешку; плейлист YouTube целиком.

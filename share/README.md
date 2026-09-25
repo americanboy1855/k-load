@@ -1,7 +1,7 @@
 # K LOAD cli — раздача для второй машины
 
 Консольная версия скачивателя: те же правила, что в приложении
-(YouTube, SoundCloud, TikTok, Instagram, ВК, Pinterest; Spotify — через
+(YouTube, SoundCloud, TikTok, Instagram, Pinterest; Spotify — через
 поиск по названию трека; плейлисты YouTube целиком; пачки ссылок).
 
 ## Как забрать на второй машине (та же Wi-Fi/сеть)
