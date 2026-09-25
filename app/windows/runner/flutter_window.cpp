@@ -1,5 +1,9 @@
 #include "flutter_window.h"
 
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
+#include <fstream>
 #include <optional>
 
 #include <flutter/method_channel.h>
@@ -261,6 +265,28 @@ void FlutterWindow::HandleMethodCall(
     // из жеста нажатия. Блокирует платформенный поток — так и задумано:
     // модальный цикл сам качает сообщения.
     const HRESULT hr = kload::DragOutFile (toWide (*path));
+    // Штатные исходы — S_OK (бросили) и DRAGDROP_S_CANCEL/DROP (ушли с
+    // цели). Всё прочее — отказ (например, DRAGDROP_E_NOTREGISTERED без
+    // OLE): причина уходит в engine.log, иначе «не тянется» не диагностируемо.
+    if (hr != S_OK && hr != DRAGDROP_S_CANCEL && hr != DRAGDROP_S_DROP) {
+      char stamp[32] = {};
+      const std::time_t t = std::time(nullptr);
+      std::tm tm {};
+      localtime_s(&tm, &t);
+      std::strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &tm);
+      char line[640] = {};
+      std::snprintf(line, sizeof(line),
+                    "[%s] drag-out отказ: hr=0x%08lX file=%s\n", stamp,
+                    static_cast<unsigned long>(hr), path->c_str());
+      char* appdata = nullptr;
+      size_t len = 0;
+      if (_dupenv_s(&appdata, &len, "APPDATA") == 0 && appdata != nullptr) {
+        std::ofstream out(std::string(appdata) + "\\K LOAD\\engine.log",
+                          std::ios::app);
+        out << line;
+        free(appdata);
+      }
+    }
     result->Success(flutter::EncodableValue((int64_t) hr));
     return;
   }
