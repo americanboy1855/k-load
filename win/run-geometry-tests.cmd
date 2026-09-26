@@ -14,4 +14,12 @@ if errorlevel 1 (
   exit /b 1
 )
 "%TEMP%\kload-geom\geometry_tests.exe"
+if errorlevel 1 exit /b 1
+
+"%CL_EXE%" /nologo /std:c++17 /EHsc /W3 /utf-8 /Fo"%TEMP%\kload-geom\d.obj" /Fe"%TEMP%\kload-geom\drag_tests.exe" "%RUNNER%\drag_payload_test.cpp" >nul
+if errorlevel 1 (
+  echo drag payload test compilation failed
+  exit /b 1
+)
+"%TEMP%\kload-geom\drag_tests.exe"
 exit /b %errorlevel%
