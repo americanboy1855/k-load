@@ -10,6 +10,7 @@ on:
 jobs:
   diag:
     runs-on: windows-2022
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 

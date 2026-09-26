@@ -3,6 +3,7 @@
 // проверяем канал beginDrag (HRESULT от DoDragDrop). Результаты — файлы
 // в <temp>/kdiag: сырые BGRA-кадры (конвертация в PNG локально) + results.txt.
 
+import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
@@ -52,6 +53,20 @@ final int Function(int, int, int, int, Pointer<Uint8>, Pointer<Uint8>, int)
             int)>('GetDIBits');
 final int Function(int) _deleteObject = _gdi32
     .lookupFunction<Int32 Function(IntPtr), int Function(int)>('DeleteObject');
+final int Function(int, Pointer<Uint8>, int) _sendInput = _user32.lookupFunction<
+    Uint32 Function(Uint32, Pointer<Uint8>, Int32),
+    int Function(int, Pointer<Uint8>, int)>('SendInput');
+
+/// Синтетическое «отпустили левую кнопку»: DoDragDrop ждёт изменения
+/// состояния мыши — без этого модальный цикл висит бесконечно.
+void _sendLeftUp() {
+  final buf = calloc<Uint8>(40); // INPUT на x64 = 40 байт
+  final bd = ByteData.view(buf.asTypedList(40).buffer);
+  bd.setUint32(0, 0, Endian.little); // INPUT_MOUSE
+  bd.setUint32(12, 0x0004, Endian.little); // MOUSEEVENTF_LEFTUP
+  _sendInput(1, buf, 40);
+  calloc.free(buf);
+}
 
 final _results = <String>[];
 void _log(String s) {
@@ -124,10 +139,15 @@ void main() {
     final tmpFile = File('${dir.path}/drag-probe.txt')..writeAsStringSync('probe');
     var hr = -1;
     Object? err;
+    // Зонд с гарантией завершения: если DoDragDrop завис (ждёт мышь),
+    // через 600 мс синтетически «отпускаем кнопку» — цикл вернёт DROP.
+    final probe = const MethodChannel('kload/native')
+        .invokeMethod<int>('beginDrag', tmpFile.path);
+    Future<void>.delayed(const Duration(milliseconds: 600), _sendLeftUp);
     try {
-      hr = await const MethodChannel('kload/native')
-              .invokeMethod<int>('beginDrag', tmpFile.path) ??
-          -1;
+      hr = await probe.timeout(const Duration(seconds: 5)) ?? -1;
+    } on TimeoutException {
+      hr = -2; // DoDragDrop не вернулся даже после отпускания
     } on Object catch (e) {
       err = e;
     }
