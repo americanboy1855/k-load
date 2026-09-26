@@ -80,6 +80,8 @@ class FlutterWindow : public Win32Window {
   bool drag_press_valid_ = false;
   POINT drag_press_{};
   int drag_press_zone_ = -1;
+  // Для трассы в engine.log: логируем только смену числа зон.
+  size_t last_zones_count_ = 0;
 
   // Точка (экран) → координаты канваса 560×670 (cover-масштаб клиента).
   void WindowToCanvas(POINT screen, double& cx, double& cy) const;

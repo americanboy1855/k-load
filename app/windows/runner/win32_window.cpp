@@ -4,6 +4,7 @@
 #include <flutter_windows.h>
 #include <windowsx.h>
 
+#include "resize_geometry.h"
 #include "resource.h"
 
 namespace {
@@ -54,76 +55,21 @@ void EnableFullDpiSupportIfAvailable(HWND hwnd) {
   FreeLibrary(user32_module);
 }
 
-// Пропорция 560:670 и лимиты 0.8×–1.4×, применённые к тянущемуся краю.
-// edge приходит и как HTLEFT..HTBOTTOMRIGHT (10..17, наш цикл ресайза),
-// и как WMSZ_* (1..8, системный WM_SIZING) — числа НЕ совпадают, поэтому
-// сначала нормализуем в HT-пространство. Сторона, за которую тянут,
-// следует за мышью. Рост перпендикулярной оси у краёв идёт от центра —
-// иначе при тяге левого края окно уползало вверх за экран (репорт
-// «интерфейс плавает при resize слева/сверху»). У углов противоположный
-// угол неподвижен, как принято в Windows.
-void ApplySizeConstraints(RECT* rc, UINT edge, UINT dpi) {
+// Пропорция 560:670, лимиты 0.8×–1.4× и якоря — в resize_geometry.h
+// (чистая логика, покрыта тестами win/run-geometry-tests.cmd). Здесь —
+// только привязка к окну: DPI-лимиты и HT/WMSZ-нормализация.
+resize::Limits LimitsForDpi(UINT dpi) {
+  return {MulDiv(448, static_cast<int>(dpi), 96),
+          MulDiv(784, static_cast<int>(dpi), 96),
+          MulDiv(536, static_cast<int>(dpi), 96),
+          MulDiv(938, static_cast<int>(dpi), 96)};
+}
+
+resize::Edge NormalizeEdge(UINT edge) {
   if (edge >= WMSZ_LEFT && edge <= WMSZ_BOTTOMRIGHT) {
     edge = edge + (HTSIZEFIRST - WMSZ_LEFT);  // WMSZ_* -> HT*
   }
-  const double aspect = 560.0 / 670.0;
-  const LONG min_h = MulDiv(536, static_cast<int>(dpi), 96);
-  const LONG max_h = MulDiv(938, static_cast<int>(dpi), 96);
-  LONG w = rc->right - rc->left;
-  LONG h = rc->bottom - rc->top;
-  if (edge == HTTOP || edge == HTBOTTOM) {
-    w = static_cast<LONG>(h * aspect + 0.5);
-  } else {
-    h = static_cast<LONG>(w / aspect + 0.5);
-  }
-  if (h < min_h) {
-    h = min_h;
-    w = static_cast<LONG>(h * aspect + 0.5);
-  } else if (h > max_h) {
-    h = max_h;
-    w = static_cast<LONG>(h * aspect + 0.5);
-  }
-  const bool hold_left =
-      edge == HTLEFT || edge == HTTOPLEFT || edge == HTBOTTOMLEFT;
-  const bool hold_top =
-      edge == HTTOP || edge == HTTOPLEFT || edge == HTTOPRIGHT;
-  if (edge == HTLEFT || edge == HTRIGHT) {
-    // Горизонтальная сторона — за мышью (при упоре в лимит держим
-    // противоположную), вертикаль — от центра.
-    if (w != rc->right - rc->left) {
-      if (hold_left) {
-        rc->left = rc->right - w;
-      } else {
-        rc->right = rc->left + w;
-      }
-    }
-    const LONG cy = (rc->top + rc->bottom) / 2;
-    rc->top = cy - h / 2;
-    rc->bottom = rc->top + h;
-  } else if (edge == HTTOP || edge == HTBOTTOM) {
-    // Вертикальная сторона — за мышью, горизонталь — от центра.
-    if (h != rc->bottom - rc->top) {
-      if (hold_top) {
-        rc->top = rc->bottom - h;
-      } else {
-        rc->bottom = rc->top + h;
-      }
-    }
-    const LONG cx = (rc->left + rc->right) / 2;
-    rc->left = cx - w / 2;
-    rc->right = rc->left + w;
-  } else {
-    if (hold_left) {
-      rc->right = rc->left + w;
-    } else {
-      rc->left = rc->right - w;
-    }
-    if (hold_top) {
-      rc->bottom = rc->top + h;
-    } else {
-      rc->top = rc->bottom - h;
-    }
-  }
+  return resize::EdgeFromHt(edge);
 }
 
 // Цикл ресайза активен: Flutter-view держит максимальный размер (784×938),
@@ -141,27 +87,10 @@ void ResizeViewToClient(HWND hwnd) {
   ::MoveWindow(view, 0, 0, cr.right, cr.bottom, TRUE);
 }
 
-// Якорь — противоположный от тянущегося края угол (0 topLeft … 3
-// bottomRight): контент в Dart прижимается к НЕподвижному краю окна, и
-// при ресайзе «не прыгает».
-int AnchorForEdge(UINT edge) {
-  switch (edge) {
-    case HTLEFT:      return 1;  // topRight
-    case HTRIGHT:     return 0;  // topLeft
-    case HTTOP:       return 2;  // bottomLeft
-    case HTBOTTOM:    return 0;  // topLeft
-    case HTTOPLEFT:   return 3;  // bottomRight
-    case HTTOPRIGHT:  return 2;  // bottomLeft
-    case HTBOTTOMLEFT: return 1; // topRight
-    case HTBOTTOMRIGHT: return 0;// topLeft
-  }
-  return 0;
-}
-
 // На время жеста view прижат к якорному углу клиента (его размер
 // максимальный), чтобы видимая часть поверхности совпадала с тем, что
 // Dart рисует прижатым к тому же углу.
-void PinViewToAnchor(HWND hwnd, UINT edge, UINT dpi) {
+void PinViewToAnchor(HWND hwnd, resize::Edge edge, UINT dpi) {
   const HWND view = ::GetWindow(hwnd, GW_CHILD);
   if (view == nullptr) {
     return;
@@ -170,7 +99,7 @@ void PinViewToAnchor(HWND hwnd, UINT edge, UINT dpi) {
   ::GetClientRect(hwnd, &cr);
   const LONG vw = MulDiv(784, static_cast<int>(dpi), 96);
   const LONG vh = MulDiv(938, static_cast<int>(dpi), 96);
-  const int anchor = AnchorForEdge(edge);
+  const int anchor = resize::AnchorForEdge(edge);
   const LONG x = (anchor == 1 || anchor == 3) ? (cr.right - vw) : 0;
   const LONG y = (anchor == 2 || anchor == 3) ? (cr.bottom - vh) : 0;
   ::MoveWindow(view, x, y, vw, vh, FALSE);
@@ -223,6 +152,9 @@ void RunSizeLoop(HWND hwnd, UINT edge, Win32Window* self) {
   const UINT norm_edge = (edge >= WMSZ_LEFT && edge <= WMSZ_BOTTOMRIGHT)
                              ? edge + (HTSIZEFIRST - WMSZ_LEFT)
                              : edge;
+  const resize::Edge geom_edge = resize::EdgeFromHt(norm_edge);
+  const resize::Limits limits = LimitsForDpi(dpi);
+  ULONGLONG last_live_ms = 0;
   auto send_live_size = [&]() {
     if (self == nullptr) {
       return;
@@ -231,13 +163,13 @@ void RunSizeLoop(HWND hwnd, UINT edge, Win32Window* self) {
     ::GetClientRect(hwnd, &cr);
     self->OnLiveSize((cr.right - cr.left) * 96.0 / dpi,
                      (cr.bottom - cr.top) * 96.0 / dpi,
-                     AnchorForEdge(norm_edge));
+                     resize::AnchorForEdge(geom_edge));
   };
 
   // Вид — на максимум и прижат к якорю до начала жеста: Dart получает
   // live-размер раньше смены метрик, первый кадр жеста сразу правильный.
   send_live_size();
-  PinViewToAnchor(hwnd, norm_edge, dpi);
+  PinViewToAnchor(hwnd, geom_edge, dpi);
 
   g_in_size_loop = true;
   ::SetCapture(hwnd);
@@ -254,6 +186,13 @@ void RunSizeLoop(HWND hwnd, UINT edge, Win32Window* self) {
     }
     switch (msg.message) {
       case WM_MOUSEMOVE: {
+        // Коалесинг: выгребаем ВСЕ накопившиеся движения и применяем
+        // последнее — рамка не «догоняет» пачками (репорт «рамка отстаёт
+        // и догоняет прерывисто»).
+        MSG extra;
+        while (::PeekMessage(&extra, nullptr, WM_MOUSEMOVE, WM_MOUSEMOVE,
+                             PM_REMOVE)) {
+        }
         POINT cur{};
         ::GetCursorPos(&cur);
         RECT rc = start;
@@ -272,12 +211,18 @@ void RunSizeLoop(HWND hwnd, UINT edge, Win32Window* self) {
             edge == HTBOTTOMRIGHT) {
           rc.bottom += dy;
         }
-        ApplySizeConstraints(&rc, edge, dpi);
+        resize::ApplySizeConstraints(&rc, geom_edge, 560.0 / 670.0, limits);
         ::SetWindowPos(hwnd, nullptr, rc.left, rc.top,
                        rc.right - rc.left, rc.bottom - rc.top,
                        SWP_NOACTIVATE | SWP_NOZORDER);
-        PinViewToAnchor(hwnd, norm_edge, dpi);
-        send_live_size();
+        PinViewToAnchor(hwnd, geom_edge, dpi);
+        // liveSize — не чаще ~80 Гц: канал и rebuild не должны узкого места
+        // стоять между мышью и рамкой.
+        const ULONGLONG now = ::GetTickCount64();
+        if (now - last_live_ms >= 12) {
+          last_live_ms = now;
+          send_live_size();
+        }
         break;
       }
       case WM_LBUTTONUP:
@@ -318,6 +263,20 @@ void RunSizeLoop(HWND hwnd, UINT edge, Win32Window* self) {
   ResizeViewToClient(hwnd);
   if (self != nullptr) {
     self->OnLiveSizeEnd();
+  }
+}
+
+// Гарантия «никаких системных кнопок/рамки»: Windows 10/11 может сама
+// добавить WS_CAPTION в переходах состояния (восстановление, фокус) —
+// и тогда поверх нашего интерфейса вылезают белые системные иконки
+// (репорт владельца). Вотчдог снимает флаг при любом его появлении.
+void EnsureNoSystemCaption(HWND hwnd) {
+  const LONG_PTR style = ::GetWindowLongPtrW(hwnd, GWL_STYLE);
+  if ((style & WS_CAPTION) != 0) {
+    ::SetWindowLongPtrW(hwnd, GWL_STYLE, style & ~WS_CAPTION);
+    ::SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                       SWP_NOACTIVATE | SWP_FRAMECHANGED);
   }
 }
 
@@ -481,7 +440,10 @@ Win32Window::MessageHandler(HWND hwnd,
       // Активация borderless с WS_SYSMENU перерисовывает «шапку»
       // стандартной рамкой — видна белая полоса на кадр. Приём против
       // мигания: lParam = -1 просит систему не перерисовывать
-      // неклиентскую область при смене активности.
+      // неклиентскую область при смене активности. Вотчдог стиля — на
+      // случай, если Windows подмешала WS_CAPTION (белые системные
+      // кнопки, репорт владельца).
+      EnsureNoSystemCaption(hwnd);
       return DefWindowProc(hwnd, message, wparam, static_cast<LPARAM>(-1));
 
     case WM_NCCALCSIZE:
@@ -556,14 +518,18 @@ Win32Window::MessageHandler(HWND hwnd,
 
     case WM_SIZING: {
       // Fallback (программный ресайз снаружи): пропорция 560:670, лимиты
-      // 0.8×–1.4× — см. ApplySizeConstraints.
-      ApplySizeConstraints(reinterpret_cast<RECT*>(lparam),
-                           static_cast<UINT>(wparam),
-                           ::GetDpiForWindow(hwnd));
+      // 0.8×–1.4× — та же чистая геометрия, что и в RunSizeLoop.
+      resize::ApplySizeConstraints(
+          reinterpret_cast<RECT*>(lparam),
+          resize::EdgeFromHt(static_cast<UINT>(wparam)), 560.0 / 670.0,
+          LimitsForDpi(::GetDpiForWindow(hwnd)));
       return TRUE;
     }
 
     case WM_SIZE: {
+      // Вотчдог системной рамки: Windows иногда подмешивает WS_CAPTION
+      // в переходах состояния — без снятия появляются белые кнопки.
+      EnsureNoSystemCaption(hwnd);
       if (g_in_size_loop) {
         // Размером Flutter-view в это время управляет RunSizeLoop
         // (throttled-синхронизация): иначе каждый шаг ждал пересоздания

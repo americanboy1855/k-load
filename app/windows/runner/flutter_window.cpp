@@ -18,6 +18,25 @@
 
 FlutterWindow* FlutterWindow::active_window_ = nullptr;
 
+namespace {
+
+// Диагностика drag-out → engine.log (в %APPDATA%\K LOAD): старты, отказы
+// и число зон. Без этого «не тянется» не диагностируемо.
+void LogDragLine(const char* line) {
+  char* appdata = nullptr;
+  size_t len = 0;
+  if (_dupenv_s(&appdata, &len, "APPDATA") == 0 && appdata != nullptr) {
+    std::ofstream out(std::string(appdata) + "\\K LOAD\\engine.log",
+                      std::ios::app);
+    if (out.good()) {
+      out << "[" << line << "]\n";
+    }
+    free(appdata);
+  }
+}
+
+}  // namespace
+
 namespace
 {
 
@@ -167,10 +186,49 @@ LRESULT CALLBACK FlutterWindow::ViewProcThunk(HWND hwnd, UINT message,
       return self->ViewHitTest(hwnd, lparam);
     }
     // ---- Нативный drag-out (паритет с macOS-зонами) ----
-    // Курсор-рука над зоной ГОТОВОЙ строки и старт DoDragDrop уверенным
-    // жестом — независимо от Flutter hit-test (репорт «рука не появляется,
-    // файл не перетаскивается»). Клик БЕЗ движения прокидывается во
-    // Flutter — кнопки строки остаются кликабельными.
+    // ВАЖЕН ПОРЯДОК: захваченный жест (drag_press_valid_) проверяется
+    // РАНЬШЕ общего курсорного WM_MOUSEMOVE — иначе общий блок съедает
+    // все движения, и drag никогда не стартует (репорт «файл не
+    // перетаскивается»). Клик БЕЗ движения прокидывается во Flutter —
+    // кнопки строки остаются кликабельными.
+    if (message == WM_MOUSEMOVE && self->drag_press_valid_) {
+      POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+      const LONG dx = pt.x - self->drag_press_.x;
+      const LONG dy = pt.y - self->drag_press_.y;
+      if (std::abs(dx) >= 10 && std::abs(dx) > std::abs(dy)) {
+        const std::wstring path =
+            self->drag_zones_[self->drag_press_zone_].path;
+        self->drag_press_valid_ = false;
+        if (::GetCapture() == hwnd) ::ReleaseCapture();
+        LogDragLine(("drag start: " + toUtf8(path)).c_str());
+        // Модальный системный перенос; курсор и образ файла рисует ОС.
+        const HRESULT hr = kload::DragOutFile(path);
+        if (hr != S_OK && hr != DRAGDROP_S_CANCEL && hr != DRAGDROP_S_DROP) {
+          char line[64] = {};
+          std::snprintf(line, sizeof(line), "drag hr=0x%08lX",
+                        static_cast<unsigned long>(hr));
+          LogDragLine(line);
+        }
+        return 0;
+      }
+      // Курсор grabbing на время удержания (стандартного «grabbing» нет —
+      // система сама подменит при старте переноса).
+      ::SetCursor(::LoadCursor(nullptr, IDC_HAND));
+      return 0;
+    }
+    if (message == WM_LBUTTONUP && self->drag_press_valid_) {
+      // Клик без движения: честно отдаём во Flutter (кнопки строки).
+      self->drag_press_valid_ = false;
+      if (::GetCapture() == hwnd) ::ReleaseCapture();
+      const LPARAM lp = lparam;
+      ::CallWindowProc(self->default_view_proc_, hwnd, WM_LBUTTONDOWN,
+                       MK_LBUTTON, lp);
+      ::CallWindowProc(self->default_view_proc_, hwnd, WM_LBUTTONUP, 0, lp);
+      return 0;
+    }
+    if (message == WM_CAPTURECHANGED) {
+      self->drag_press_valid_ = false;
+    }
     if (message == WM_MOUSEMOVE && !self->drag_zones_.empty()) {
       POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
       double cx = 0, cy = 0;
@@ -180,9 +238,7 @@ LRESULT CALLBACK FlutterWindow::ViewProcThunk(HWND hwnd, UINT message,
                            lparam);
       for (const auto& z : self->drag_zones_) {
         if (cx >= z.x && cy >= z.y && cx <= z.x + z.w && cy <= z.y + z.h) {
-          const bool pressed = wparam & MK_LBUTTON;
-          ::SetCursor(::LoadCursor(
-              nullptr, pressed ? IDC_APPSTARTING : IDC_HAND));
+          ::SetCursor(::LoadCursor(nullptr, IDC_HAND));
           break;
         }
       }
@@ -201,38 +257,10 @@ LRESULT CALLBACK FlutterWindow::ViewProcThunk(HWND hwnd, UINT message,
           self->drag_press_valid_ = true;
           self->drag_press_ = pt;
           self->drag_press_zone_ = static_cast<int>(i);
-          ::SetCursor(::LoadCursor(nullptr, IDC_APPSTARTING));
+          ::SetCursor(::LoadCursor(nullptr, IDC_HAND));
           return 0;
         }
       }
-    }
-    if (message == WM_MOUSEMOVE && self->drag_press_valid_) {
-      POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-      const LONG dx = pt.x - self->drag_press_.x;
-      const LONG dy = pt.y - self->drag_press_.y;
-      if (std::abs(dx) >= 10 && std::abs(dx) > std::abs(dy)) {
-        const std::wstring path =
-            self->drag_zones_[self->drag_press_zone_].path;
-        self->drag_press_valid_ = false;
-        if (::GetCapture() == hwnd) ::ReleaseCapture();
-        // Модальный системный перенос; курсор и образ файла рисует ОС.
-        kload::DragOutFile(path);
-        return 0;
-      }
-      return 0;
-    }
-    if (message == WM_LBUTTONUP && self->drag_press_valid_) {
-      // Клик без движения: честно отдаём во Flutter (кнопки строки).
-      self->drag_press_valid_ = false;
-      if (::GetCapture() == hwnd) ::ReleaseCapture();
-      const LPARAM lp = lparam;
-      ::CallWindowProc(self->default_view_proc_, hwnd, WM_LBUTTONDOWN,
-                       MK_LBUTTON, lp);
-      ::CallWindowProc(self->default_view_proc_, hwnd, WM_LBUTTONUP, 0, lp);
-      return 0;
-    }
-    if (message == WM_CAPTURECHANGED) {
-      self->drag_press_valid_ = false;
     }
     if (message == WM_NCLBUTTONDOWN && self->GetHandle() != nullptr) {
       // HTCAPTION/края от дочернего (WS_CHILD) HWND Windows доставляет
@@ -337,8 +365,9 @@ void FlutterWindow::HandleMethodCall(
         const auto* map = std::get_if<flutter::EncodableMap>(&entry);
         if (map == nullptr) continue;
         DragZone z;
-        const auto* path = std::get_if<std::string>(&map->find(
-            flutter::EncodableValue("path"))->second);
+        const auto path_it = map->find(flutter::EncodableValue("path"));
+        if (path_it == map->end()) continue;
+        const auto* path = std::get_if<std::string>(&path_it->second);
         if (path == nullptr || path->empty()) continue;
         z.path = toWide(*path);
         auto num = [&map](const char* key) -> double {
@@ -357,6 +386,14 @@ void FlutterWindow::HandleMethodCall(
         z.h = num("h");
         if (z.w > 0 && z.h > 0) drag_zones_.push_back(std::move(z));
       }
+    }
+    // Трасса: изменение числа зон (не спамим на каждый вызов канала).
+    if (drag_zones_.size() != last_zones_count_) {
+      last_zones_count_ = drag_zones_.size();
+      char line[64] = {};
+      std::snprintf(line, sizeof(line), "drag зоны: %u",
+                    static_cast<unsigned>(drag_zones_.size()));
+      LogDragLine(line);
     }
     result->Success();
     return;
@@ -397,23 +434,11 @@ void FlutterWindow::HandleMethodCall(
     // цели). Всё прочее — отказ (например, DRAGDROP_E_NOTREGISTERED без
     // OLE): причина уходит в engine.log, иначе «не тянется» не диагностируемо.
     if (hr != S_OK && hr != DRAGDROP_S_CANCEL && hr != DRAGDROP_S_DROP) {
-      char stamp[32] = {};
-      const std::time_t t = std::time(nullptr);
-      std::tm tm {};
-      localtime_s(&tm, &t);
-      std::strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &tm);
-      char line[640] = {};
+      char line[256] = {};
       std::snprintf(line, sizeof(line),
-                    "[%s] drag-out отказ: hr=0x%08lX file=%s\n", stamp,
+                    "beginDrag отказ: hr=0x%08lX file=%s",
                     static_cast<unsigned long>(hr), path->c_str());
-      char* appdata = nullptr;
-      size_t len = 0;
-      if (_dupenv_s(&appdata, &len, "APPDATA") == 0 && appdata != nullptr) {
-        std::ofstream out(std::string(appdata) + "\\K LOAD\\engine.log",
-                          std::ios::app);
-        out << line;
-        free(appdata);
-      }
+      LogDragLine(line);
     }
     result->Success(flutter::EncodableValue((int64_t) hr));
     return;

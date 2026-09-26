@@ -10,6 +10,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../kd/kd_bindings.dart';
 import '../update/update_service.dart';
+import 'live_resize.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -637,8 +638,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
           if (box == null || !box.attached) continue;
           final topLeft = box.localToGlobal(Offset.zero, ancestor: canvasBox);
           // Зона без правых кнопок (папка/корзина остаются кликабельными).
-          final w = box.size.width - 84;
-          if (w <= 40) continue;
+          final w = zoneWidth(box.size.width);
+          if (w == null) continue;
           zones.add({
             'path': it.files.first,
             'x': topLeft.dx,
@@ -1576,14 +1577,8 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
         final scale = (availW / tvW) > (availH / tvH)
             ? availW / tvW
             : availH / tvH;
-        const anchors = [
-          Alignment.topLeft,
-          Alignment.topRight,
-          Alignment.bottomLeft,
-          Alignment.bottomRight,
-        ];
         return OverflowBox(
-          alignment: anchors[_liveAnchor.clamp(0, 3)],
+          alignment: alignmentForAnchor(_liveAnchor),
           maxWidth: tvW * scale,
           maxHeight: tvH * scale,
           child: SizedBox(
