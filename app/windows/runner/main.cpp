@@ -26,8 +26,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
-  // Логические 560×670 — канвас-телевизор K LOAD (на маке те же габариты).
-  Win32Window::Size size(560, 670);
+  // Логические 532×637 — размер зафиксирован по выбору владельца
+  // (репорт «зафиксировать окно в текущем размере», замер 532×637).
+  Win32Window::Size size(532, 637);
   if (!window.Create(L"K LOAD", origin, size)) {
     return EXIT_FAILURE;
   }

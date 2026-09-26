@@ -489,13 +489,16 @@ Win32Window::MessageHandler(HWND hwnd,
       return 0;
 
     case WM_GETMINMAXINFO: {
-      // Габариты: 560×670 логических, ресайз 0.8×–1.4× (паритет с macOS).
+      // Размер зафиксирован (репорт «зафиксировать окно в текущем
+      // размере»): минимум = максимум = 532×637 логических, с учётом DPI.
       auto* mmi = reinterpret_cast<MINMAXINFO*>(lparam);
       const UINT dpi = ::GetDpiForWindow(hwnd);
-      mmi->ptMinTrackSize.x = MulDiv(448, static_cast<int>(dpi), 96);
-      mmi->ptMinTrackSize.y = MulDiv(536, static_cast<int>(dpi), 96);
-      mmi->ptMaxTrackSize.x = MulDiv(784, static_cast<int>(dpi), 96);
-      mmi->ptMaxTrackSize.y = MulDiv(938, static_cast<int>(dpi), 96);
+      const LONG w = MulDiv(532, static_cast<int>(dpi), 96);
+      const LONG h = MulDiv(637, static_cast<int>(dpi), 96);
+      mmi->ptMinTrackSize.x = w;
+      mmi->ptMinTrackSize.y = h;
+      mmi->ptMaxTrackSize.x = w;
+      mmi->ptMaxTrackSize.y = h;
       return 0;
     }
 

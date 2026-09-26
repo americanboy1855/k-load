@@ -269,8 +269,7 @@ LRESULT CALLBACK FlutterWindow::ViewProcThunk(HWND hwnd, UINT message,
       // сюда же, но DefWindowProc ребенка не запускает move/size-loop —
       // окно «не двигается». Переправляем NC-нажатие родителю: lparam
       // NC-сообщений уже в экранных координатах, общих для обоих окон.
-      const bool ncZone = wparam == HTCAPTION
-          || (wparam >= HTLEFT && wparam <= HTBOTTOMRIGHT);
+      const bool ncZone = wparam == HTCAPTION;
       if (ncZone) {
         ::ReleaseCapture();
         ::SendMessage(self->GetHandle(), WM_NCLBUTTONDOWN, wparam, lparam);
@@ -306,21 +305,8 @@ LRESULT FlutterWindow::ViewHitTest(HWND hwnd, LPARAM lparam) {
   RECT rc{};
   ::GetClientRect(hwnd, &rc);
 
-  // Края окна — ресайз.
-  const UINT dpi = ::GetDpiForWindow(hwnd);
-  const LONG border = MulDiv(8, static_cast<int>(dpi), 96);
-  const bool left = client.x < border;
-  const bool right = client.x >= rc.right - border;
-  const bool top = client.y < border;
-  const bool bottom = client.y >= rc.bottom - border;
-  if (top && left) return HTTOPLEFT;
-  if (top && right) return HTTOPRIGHT;
-  if (bottom && left) return HTBOTTOMLEFT;
-  if (bottom && right) return HTBOTTOMRIGHT;
-  if (left) return HTLEFT;
-  if (right) return HTRIGHT;
-  if (top) return HTTOP;
-  if (bottom) return HTBOTTOM;
+  // Размер окна зафиксирован (репорт «не хочу уменьшать/увеличивать»):
+  // никаких resize-зон у краёв — только перемещение за верхнюю полосу.
 
   // Курсор → координаты канваса 560×670 (cover-масштаб, как на macOS).
   const double scale = (rc.right > 0 && rc.bottom > 0)

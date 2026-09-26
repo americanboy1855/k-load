@@ -1,5 +1,7 @@
 #include "drag_out.h"
 
+#include "drag_payload.h"
+
 #include <shellapi.h>
 #include <shlobj.h>
 
@@ -74,11 +76,17 @@ public:
         return E_NOTIMPL;
     }
 
-    HRESULT STDMETHODCALLTYPE EnumFormatEtc (DWORD, IEnumFORMATETC** out) override
+    HRESULT STDMETHODCALLTYPE EnumFormatEtc (DWORD direction, IEnumFORMATETC** out) override
     {
+        // Цели-оболочки (рабочий стол, папки Проводника) перечисляют
+        // форматы при наведении: без перечислителя они показывают запрет
+        // и отвергают дроп (репорт «на стол не перетащить, в DAW можно»).
         if (out == nullptr) return E_POINTER;
-        *out = nullptr;
-        return E_NOTIMPL;
+        FORMATETC formats[] = {
+            { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL },
+            { dropEffect_, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL },
+        };
+        return ::SHCreateStdEnumFmtEtc (2, formats, out);
     }
 
     HRESULT STDMETHODCALLTYPE DAdvise (FORMATETC*, DWORD, IAdviseSink*, DWORD*) override
@@ -167,10 +175,9 @@ private:
 
 HRESULT kload::DragOutFile (const std::wstring& path)
 {
-    // DROPFILES + wide-строка пути + двойной нуль-терминатор.
-    const SIZE_T pathBytes = (path.size() + 1) * sizeof (wchar_t);
-    const SIZE_T total = sizeof (DROPFILES) + pathBytes + sizeof (wchar_t);
-    HGLOBAL hdrop = ::GlobalAlloc (GMEM_MOVEABLE | GMEM_ZEROINIT, total);
+    // CF_HDROP-буфер строит протестированная функция (drag_payload.h).
+    const std::vector<BYTE> buffer = drag::BuildHdropBuffer (path);
+    HGLOBAL hdrop = ::GlobalAlloc (GMEM_MOVEABLE | GMEM_ZEROINIT, buffer.size());
     if (hdrop == nullptr) return E_OUTOFMEMORY;
 
     auto* df = static_cast<DROPFILES*> (::GlobalLock (hdrop));
@@ -179,9 +186,7 @@ HRESULT kload::DragOutFile (const std::wstring& path)
         ::GlobalFree (hdrop);
         return E_FAIL;
     }
-    df->pFiles = sizeof (DROPFILES);
-    df->fWide = TRUE;
-    memcpy (reinterpret_cast<char*> (df) + sizeof (DROPFILES), path.c_str(), pathBytes);
+    memcpy (df, buffer.data(), buffer.size());
     ::GlobalUnlock (hdrop);
 
     auto* data = new FileDataObject (hdrop); // владение hdrop переходит
