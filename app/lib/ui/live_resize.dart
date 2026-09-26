@@ -12,8 +12,16 @@ Alignment alignmentForAnchor(int anchor) {
     Alignment.topRight,
     Alignment.bottomLeft,
     Alignment.bottomRight,
+    Alignment.center, // 4 — края: контент центрируется в видимой части
   ];
-  return anchors[anchor.clamp(0, 3)];
+  return anchors[anchor.clamp(0, 4)];
+}
+
+/// Данные живого ресайза: фактический логический размер окна + якорь.
+class LiveSizeData {
+  const LiveSizeData(this.size, this.anchor);
+  final Size size;
+  final int anchor;
 }
 
 /// Ширина зоны drag-out готовой строки: вся строка минус правые кнопки

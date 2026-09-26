@@ -211,7 +211,8 @@ void RunSizeLoop(HWND hwnd, UINT edge, Win32Window* self) {
             edge == HTBOTTOMRIGHT) {
           rc.bottom += dy;
         }
-        resize::ApplySizeConstraints(&rc, geom_edge, 560.0 / 670.0, limits);
+        resize::ApplySizeConstraints(&rc, start, geom_edge, 560.0 / 670.0,
+                                     limits);
         ::SetWindowPos(hwnd, nullptr, rc.left, rc.top,
                        rc.right - rc.left, rc.bottom - rc.top,
                        SWP_NOACTIVATE | SWP_NOZORDER);
@@ -281,6 +282,10 @@ void EnsureNoSystemCaption(HWND hwnd) {
 }
 
 }  // namespace
+
+bool Win32Window::SizeLoopActive() {
+  return g_in_size_loop;
+}
 
 // Manages the Win32Window's window class registration.
 class WindowClassRegistrar {
@@ -519,8 +524,9 @@ Win32Window::MessageHandler(HWND hwnd,
     case WM_SIZING: {
       // Fallback (программный ресайз снаружи): пропорция 560:670, лимиты
       // 0.8×–1.4× — та же чистая геометрия, что и в RunSizeLoop.
+      RECT anchor = *reinterpret_cast<RECT*>(lparam);
       resize::ApplySizeConstraints(
-          reinterpret_cast<RECT*>(lparam),
+          reinterpret_cast<RECT*>(lparam), anchor,
           resize::EdgeFromHt(static_cast<UINT>(wparam)), 560.0 / 670.0,
           LimitsForDpi(::GetDpiForWindow(hwnd)));
       return TRUE;

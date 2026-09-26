@@ -320,11 +320,11 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
   static const _native = MethodChannel('kload/native');
 
   // Живой ресайз окна (Windows): view на время жеста держит максимальный
-  // размер, а фактический приходит сюда каналом вместе с ЯКОРЕМ —
-  // противоположным тянущемуся краю углом (0 topLeft … 3 bottomRight),
-  // к которому прижат контент. null — жеста нет.
-  Size? _liveSize;
-  int _liveAnchor = 0;
+  // размер, а фактический размер + якорь приходят сюда каналом. Через
+  // ValueNotifier — чтобы при движении мыши перестраивался только виджет
+  // канваса, а не весь экран (иначе ресайз подвисает).
+  final ValueNotifier<LiveSizeData?> _liveSizeNotifier =
+      ValueNotifier<LiveSizeData?>(null);
 
   // обновление через GitHub Releases
   final updates = UpdateService();
@@ -419,22 +419,18 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
     _boot();
     // Живой ресайз: раннер присылает фактический размер окна (логические
     // px) и якорь (противоположный тянущемуся краю угол), null — жест
-    // закончился.
+    // закончился. Без setState: перестраивается только канвас.
     _native.setMethodCallHandler((call) async {
       if (call.method == 'liveSize') {
         final args = call.arguments;
-        Size? size;
-        var anchor = 0;
+        LiveSizeData? data;
         if (args is List && args.length >= 2) {
-          size = Size((args[0] as num).toDouble(), (args[1] as num).toDouble());
-          if (args.length >= 3) anchor = (args[2] as num).toInt();
+          data = LiveSizeData(
+            Size((args[0] as num).toDouble(), (args[1] as num).toDouble()),
+            (args.length >= 3 ? (args[2] as num).toInt() : 0),
+          );
         }
-        if (mounted) {
-          setState(() {
-            _liveSize = size;
-            _liveAnchor = anchor;
-          });
-        }
+        _liveSizeNotifier.value = data;
       }
       return null;
     });
@@ -1569,29 +1565,34 @@ class _KLoadScreenState extends State<KLoadScreen> with TickerProviderStateMixin
       backgroundColor: const Color(0xFF161413),
       body: LayoutBuilder(builder: (context, box) {
         // Во время живого ресайза view держит максимальный размер — берём
-        // фактический из канала и прижимаем контент к ЯКОРЮ (неподвижному
-        // от тянущегося края углу): интерфейс не «прыгает» при ресайзе
-        // слева/сверху. В обычном режиме размеры совпадают — якорь не важен.
-        final double availW = _liveSize?.width ?? box.maxWidth;
-        final double availH = _liveSize?.height ?? box.maxHeight;
-        final scale = (availW / tvW) > (availH / tvH)
-            ? availW / tvW
-            : availH / tvH;
-        return OverflowBox(
-          alignment: alignmentForAnchor(_liveAnchor),
-          maxWidth: tvW * scale,
-          maxHeight: tvH * scale,
-          child: SizedBox(
-            width: tvW * scale,
-            height: tvH * scale,
-            child: FittedBox(
-                fit: BoxFit.fill,
-                child: SizedBox(
-                    key: _canvasKey,
-                    width: tvW,
-                    height: tvH,
-                    child: _tv())),
-          ),
+        // фактический из канала (ValueNotifier: на каждое движение мыши
+        // перестраивается ТОЛЬКО этот поддерево, не весь экран) и прижимаем
+        // контент к ЯКОРЮ: край — центр, угол — противоположный угол.
+        return ValueListenableBuilder<LiveSizeData?>(
+          valueListenable: _liveSizeNotifier,
+          builder: (context, live, _) {
+            final double availW = live?.size.width ?? box.maxWidth;
+            final double availH = live?.size.height ?? box.maxHeight;
+            final scale = (availW / tvW) > (availH / tvH)
+                ? availW / tvW
+                : availH / tvH;
+            return OverflowBox(
+              alignment: alignmentForAnchor(live?.anchor ?? 4),
+              maxWidth: tvW * scale,
+              maxHeight: tvH * scale,
+              child: SizedBox(
+                width: tvW * scale,
+                height: tvH * scale,
+                child: FittedBox(
+                    fit: BoxFit.fill,
+                    child: SizedBox(
+                        key: _canvasKey,
+                        width: tvW,
+                        height: tvH,
+                        child: _tv())),
+              ),
+            );
+          },
         );
       }),
     );

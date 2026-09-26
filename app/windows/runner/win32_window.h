@@ -49,6 +49,11 @@ class Win32Window {
   // window properties. Returns nullptr if the window has been destroyed.
   HWND GetHandle();
 
+  // Идёт ли сейчас жест живого ресайза (RunSizeLoop). Для
+  // WM_WINDOWPOSCHANGING-view: в этот момент смещения view заданы пином
+  // и НЕ должны сбрасываться в (0,0).
+  static bool SizeLoopActive();
+
   // If true, closing this window will quit the application.
   void SetQuitOnClose(bool quit_on_close);
 

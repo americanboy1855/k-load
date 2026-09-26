@@ -11,9 +11,13 @@ void main() {
       expect(alignmentForAnchor(3), Alignment.bottomRight);
     });
 
-    test('вне диапазона — зажим в допустимый угол (без исключений)', () {
+    test('край (4) — центр', () {
+      expect(alignmentForAnchor(4), Alignment.center);
+    });
+
+    test('вне диапазона — зажим в допустимый диапазон (без исключений)', () {
       expect(alignmentForAnchor(-5), Alignment.topLeft);
-      expect(alignmentForAnchor(99), Alignment.bottomRight);
+      expect(alignmentForAnchor(99), Alignment.center);
     });
   });
 

@@ -195,7 +195,9 @@ LRESULT CALLBACK FlutterWindow::ViewProcThunk(HWND hwnd, UINT message,
       POINT pt{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
       const LONG dx = pt.x - self->drag_press_.x;
       const LONG dy = pt.y - self->drag_press_.y;
-      if (std::abs(dx) >= 10 && std::abs(dx) > std::abs(dy)) {
+      // Старт в ЛЮБОМ направлении (репорт «на стол не перетаскивается»:
+      // вертикальная тяна не начинала перенос), порог 8 px.
+      if (dx * dx + dy * dy >= 64) {
         const std::wstring path =
             self->drag_zones_[self->drag_press_zone_].path;
         self->drag_press_valid_ = false;
@@ -280,13 +282,16 @@ LRESULT CALLBACK FlutterWindow::ViewProcThunk(HWND hwnd, UINT message,
       return 0;
     }
     if (message == WM_WINDOWPOSCHANGING) {
-      // View занимает клиентскую область целиком и всегда в (0,0):
-      // что-то в процессе старта сдвигало его внутрь окна, из-за чего
-      // контент рисовался со сдвигом и обрезкой (см. отчёт, правка 2).
-      auto* wp = reinterpret_cast<WINDOWPOS*>(lparam);
-      if (wp != nullptr && (wp->x != 0 || wp->y != 0)) {
-        wp->x = 0;
-        wp->y = 0;
+      // Вне ресайза view стоит в (0,0) — защита от сдвига при старте.
+      // ВО ВРЕМЯ живого ресайза гард молчит: PinViewToAnchor осознанно
+      // смещает view к якорному углу (отрицательные смещения), иначе
+      // гард и пин воюют — контент дёргается и подвисает (репорт).
+      if (!Win32Window::SizeLoopActive()) {
+        auto* wp = reinterpret_cast<WINDOWPOS*>(lparam);
+        if (wp != nullptr && (wp->x != 0 || wp->y != 0)) {
+          wp->x = 0;
+          wp->y = 0;
+        }
       }
     }
   }

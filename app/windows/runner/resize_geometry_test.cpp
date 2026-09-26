@@ -35,130 +35,164 @@ static bool SameRect(const RECT& a, const RECT& b) {
 static LONG W(const RECT& r) { return r.right - r.left; }
 static LONG H(const RECT& r) { return r.bottom - r.top; }
 
-// Базовый прямоугольник 560×670 в (100,100).
+// Базовый (якорный) прямоугольник 560×670 в (100,100). Центры: cx=380,
+// cy=435.
 static RECT Base() {
   return {100, 100, 660, 770};
 }
 
 // Тяга за угол вниз-вправо в пределах лимитов: левый-верхний угол стоит.
 static void CornerBottomRight_Free() {
-  RECT rc = Base();
-  rc.right += 40;   // 600 шириной
+  RECT anchor = Base();
+  RECT rc = anchor;
+  rc.right += 40;
   rc.bottom += 48;
-  resize::ApplySizeConstraints(&rc, resize::kBottomRight, kAspect, Lim());
+  ApplySizeConstraints(&rc, anchor, resize::kBottomRight, kAspect, Lim());
   CHECK(rc.left == 100);
   CHECK(rc.top == 100);
-  CHECK(H(rc) == W(rc) * 670 / 560 || H(rc) == W(rc) * 670 / 560 + 1);
+  CHECK(W(rc) == 600);
+  CHECK(H(rc) == 718 || H(rc) == 719);
 }
 
-// Тяга за угол НИЖЕ-ПРАВО за максимальный лимит: левый-верхний стоит,
-// размер зажат максимумом, повторное применение ничего не меняет
-// («замерание» на лимите).
+// Тяга за угол вниз-вправо ЗА максимальный лимит: якорь (левый-верх)
+// стоит, размер зажат максимумом, повторное применение не меняет ничего
+// (курсор летит дальше — окно замерло).
 static void CornerBottomRight_MaxFrozen() {
-  RECT rc = Base();
-  rc.right += 900;    // далеко за максимум
+  RECT anchor = Base();
+  RECT rc = anchor;
+  rc.right += 900;
   rc.bottom += 1100;
-  resize::ApplySizeConstraints(&rc, resize::kBottomRight, kAspect, Lim());
+  ApplySizeConstraints(&rc, anchor, resize::kBottomRight, kAspect, Lim());
   CHECK(rc.left == 100);
   CHECK(rc.top == 100);
-  CHECK(W(rc) <= 784 && H(rc) <= 938);
-  RECT before = rc;
+  CHECK(W(rc) == 784 && H(rc) == 938);
   RECT rc2 = rc;
-  rc2.right += 50;   // мышь ушла ещё дальше за лимит
+  rc2.right += 50;
   rc2.bottom += 60;
-  resize::ApplySizeConstraints(&rc2, resize::kBottomRight, kAspect, Lim());
-  CHECK(SameRect(rc, rc2)) ;
-  (void)before;
+  ApplySizeConstraints(&rc2, anchor, resize::kBottomRight, kAspect, Lim());
+  CHECK(SameRect(rc, rc2));
 }
 
-// Тяга за угол влево-вверх за минимальный лимит: правый-нижний стоит,
-// размер зажат минимумом, повтор — без изменений.
-static void CornerTopLeft_MinFrozen() {
-  RECT rc = Base();
+// Тяга за угол влево-вверх ЗА максимальный лимит: якорь (правый-низ)
+// стоит, размер зажат максимумом, замерание (курсор летит — окно стоит).
+static void CornerTopLeft_MaxFrozen() {
+  RECT anchor = Base();
+  RECT rc = anchor;
   rc.left -= 900;
   rc.top -= 1100;
-  resize::ApplySizeConstraints(&rc, resize::kTopLeft, kAspect, Lim());
+  ApplySizeConstraints(&rc, anchor, resize::kTopLeft, kAspect, Lim());
   CHECK(rc.right == 660);
   CHECK(rc.bottom == 770);
-  CHECK(W(rc) >= 448 && H(rc) >= 536);
+  CHECK(W(rc) == 784 && H(rc) == 938);
   RECT rc2 = rc;
   rc2.left -= 40;
   rc2.top -= 50;
-  resize::ApplySizeConstraints(&rc2, resize::kTopLeft, kAspect, Lim());
+  ApplySizeConstraints(&rc2, anchor, resize::kTopLeft, kAspect, Lim());
   CHECK(SameRect(rc, rc2));
 }
 
-// Левый край: правая сторона — якорь, на лимите правый край не двигается.
-static void LeftEdge_MaxFrozen() {
-  RECT rc = Base();
-  rc.left -= 900;
-  resize::ApplySizeConstraints(&rc, resize::kLeft, kAspect, Lim());
+// Тяга за угол влево-внутрь за минимальный лимит: якорь (правый-низ)
+// стоит, замерание на минимуме.
+static void CornerTopLeft_MinFrozen() {
+  RECT anchor = Base();
+  RECT rc = anchor;
+  rc.left += 900;
+  rc.top += 1100;
+  ApplySizeConstraints(&rc, anchor, resize::kTopLeft, kAspect, Lim());
   CHECK(rc.right == 660);
-  CHECK(W(rc) <= 784);
+  CHECK(rc.bottom == 770);
+  CHECK(W(rc) == 448 && H(rc) == 536);
+  RECT rc2 = rc;
+  rc2.left += 40;
+  rc2.top += 50;
+  ApplySizeConstraints(&rc2, anchor, resize::kTopLeft, kAspect, Lim());
+  CHECK(SameRect(rc, rc2));
+}
+
+// Левый край за максимум: правая сторона — якорь, перпендикуляр от центра
+// якоря, замерание.
+static void LeftEdge_MaxFrozen() {
+  RECT anchor = Base();
+  RECT rc = anchor;
+  rc.left -= 900;
+  ApplySizeConstraints(&rc, anchor, resize::kLeft, kAspect, Lim());
+  CHECK(rc.right == 660);
+  CHECK(rc.top == 435 - 938 / 2);
+  CHECK(rc.bottom == 435 + 938 / 2);
+  CHECK(W(rc) == 784);
   RECT rc2 = rc;
   rc2.left -= 60;
-  resize::ApplySizeConstraints(&rc2, resize::kLeft, kAspect, Lim());
+  ApplySizeConstraints(&rc2, anchor, resize::kLeft, kAspect, Lim());
   CHECK(SameRect(rc, rc2));
 }
 
-// Правый край: левая сторона — якорь.
+// Правый край за минимум: левая сторона — якорь, замерание.
 static void RightEdge_MinFrozen() {
-  RECT rc = Base();
+  RECT anchor = Base();
+  RECT rc = anchor;
   rc.right -= 900;
-  resize::ApplySizeConstraints(&rc, resize::kRight, kAspect, Lim());
+  ApplySizeConstraints(&rc, anchor, resize::kRight, kAspect, Lim());
   CHECK(rc.left == 100);
-  CHECK(W(rc) >= 448);
+  CHECK(rc.top == 435 - 536 / 2);
+  CHECK(rc.bottom == 435 + 536 / 2);
+  CHECK(W(rc) == 448);
   RECT rc2 = rc;
   rc2.right -= 40;
-  resize::ApplySizeConstraints(&rc2, resize::kRight, kAspect, Lim());
+  ApplySizeConstraints(&rc2, anchor, resize::kRight, kAspect, Lim());
   CHECK(SameRect(rc, rc2));
 }
 
-// Верхний край: низ и лево — якорь; на минимуме замерает (ширина при
-// тяге верх/низ подгоняется под пропорцию с фиксацией левого края).
-static void TopEdge_MinFrozen() {
-  RECT rc = Base();
+// Верхний край за максимум: низ — якорь, горизонталь от центра якоря,
+// замерание.
+static void TopEdge_MaxFrozen() {
+  RECT anchor = Base();
+  RECT rc = anchor;
   rc.top -= 900;
-  resize::ApplySizeConstraints(&rc, resize::kTop, kAspect, Lim());
+  ApplySizeConstraints(&rc, anchor, resize::kTop, kAspect, Lim());
   CHECK(rc.bottom == 770);
-  CHECK(rc.left == 100);
-  CHECK(W(rc) == 784 && H(rc) == 938);
+  CHECK(rc.left == 380 - 784 / 2);
+  CHECK(rc.right == 380 + 784 / 2);
+  CHECK(H(rc) == 938);
   RECT rc2 = rc;
   rc2.top -= 40;
-  resize::ApplySizeConstraints(&rc2, resize::kTop, kAspect, Lim());
+  ApplySizeConstraints(&rc2, anchor, resize::kTop, kAspect, Lim());
   CHECK(SameRect(rc, rc2));
 }
 
-// Нижний край: верх и лево — якорь; на максимуме замерает.
+// Нижний край за максимум: верх — якорь, горизонталь от центра якоря,
+// замерание.
 static void BottomEdge_MaxFrozen() {
-  RECT rc = Base();
+  RECT anchor = Base();
+  RECT rc = anchor;
   rc.bottom += 900;
-  resize::ApplySizeConstraints(&rc, resize::kBottom, kAspect, Lim());
+  ApplySizeConstraints(&rc, anchor, resize::kBottom, kAspect, Lim());
   CHECK(rc.top == 100);
-  CHECK(rc.left == 100);
-  CHECK(W(rc) == 784 && H(rc) == 938);
+  CHECK(rc.left == 380 - 784 / 2);
+  CHECK(rc.right == 380 + 784 / 2);
+  CHECK(H(rc) == 938);
   RECT rc2 = rc;
   rc2.bottom += 60;
-  resize::ApplySizeConstraints(&rc2, resize::kBottom, kAspect, Lim());
+  ApplySizeConstraints(&rc2, anchor, resize::kBottom, kAspect, Lim());
   CHECK(SameRect(rc, rc2));
 }
 
-// Правый-верхний угол: левый и нижний края неподвижны.
+// Правый-верхний угол: левый и нижний края (якорь) неподвижны.
 static void CornerTopRight_Anchor() {
-  RECT rc = Base();
+  RECT anchor = Base();
+  RECT rc = anchor;
   rc.right += 300;
   rc.top -= 360;
-  resize::ApplySizeConstraints(&rc, resize::kTopRight, kAspect, Lim());
+  ApplySizeConstraints(&rc, anchor, resize::kTopRight, kAspect, Lim());
   CHECK(rc.left == 100);
   CHECK(rc.bottom == 770);
 }
 
-// Якоря для Dart: противоположный тянущемуся угол.
+// Якоря для Dart: края — центр (4), углы — противоположный угол.
 static void AnchorMapping() {
-  CHECK(resize::AnchorForEdge(resize::kLeft) == 1);
-  CHECK(resize::AnchorForEdge(resize::kRight) == 0);
-  CHECK(resize::AnchorForEdge(resize::kTop) == 2);
-  CHECK(resize::AnchorForEdge(resize::kBottom) == 0);
+  CHECK(resize::AnchorForEdge(resize::kLeft) == 4);
+  CHECK(resize::AnchorForEdge(resize::kRight) == 4);
+  CHECK(resize::AnchorForEdge(resize::kTop) == 4);
+  CHECK(resize::AnchorForEdge(resize::kBottom) == 4);
   CHECK(resize::AnchorForEdge(resize::kTopLeft) == 3);
   CHECK(resize::AnchorForEdge(resize::kTopRight) == 2);
   CHECK(resize::AnchorForEdge(resize::kBottomLeft) == 1);
@@ -167,9 +201,9 @@ static void AnchorMapping() {
   CHECK(EdgeFromHt(HTBOTTOMRIGHT) == resize::kBottomRight);
 }
 
-// Соответствие лимитам: итоговые размеры всегда в диапазоне.
+// Всегда в лимитах и в пропорции (±1 px округления) на любом шаге.
 static void AlwaysWithinLimits() {
-  RECT rc = Base();
+  RECT anchor = Base();
   for (int step = -60; step <= 60; step += 7) {
     for (int e = 0; e < 8; ++e) {
       RECT r = Base();
@@ -185,12 +219,11 @@ static void AlwaysWithinLimits() {
         case resize::kBottomLeft: r.left += d; r.bottom += d; break;
         case resize::kBottomRight: r.right += d; r.bottom += d; break;
       }
-      resize::ApplySizeConstraints(&r, edge, kAspect, Lim());
+      ApplySizeConstraints(&r, anchor, edge, kAspect, Lim());
       const LONG w = W(r);
       const LONG h = H(r);
       CHECK(w >= 448 && w <= 784);
       CHECK(h >= 536 && h <= 938);
-      // пропорция в допуске ±1 px на округление
       CHECK(h >= static_cast<LONG>(w * 670 / 560) - 1);
       CHECK(h <= static_cast<LONG>(w * 670 / 560) + 1);
     }
@@ -200,10 +233,11 @@ static void AlwaysWithinLimits() {
 int main() {
   CornerBottomRight_Free();
   CornerBottomRight_MaxFrozen();
+  CornerTopLeft_MaxFrozen();
   CornerTopLeft_MinFrozen();
   LeftEdge_MaxFrozen();
   RightEdge_MinFrozen();
-  TopEdge_MinFrozen();
+  TopEdge_MaxFrozen();
   BottomEdge_MaxFrozen();
   CornerTopRight_Anchor();
   AnchorMapping();
