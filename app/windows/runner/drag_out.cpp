@@ -1,137 +1,50 @@
 #include "drag_out.h"
 
-#include "drag_payload.h"
-
 #include <shellapi.h>
 #include <shlobj.h>
+#include <shobjidl.h>
+
+#include <ctime>
+#include <fstream>
+#include <string>
 
 namespace {
 
-// Минимальный IDataObject: один формат CF_HDROP на чтение плюс приём
-// «Preferred DropEffect» от приёмника (Проводник пишет его через SetData).
-class FileDataObject : public IDataObject
+// Диагностика drag-out → engine.log (в %APPDATA%\K LOAD): каждый запуск
+// переноса пишет результат и эффект — «не тянется» всегда диагностируемо.
+void LogDrag (const std::wstring& path, HRESULT hr, DWORD effect)
 {
-public:
-    explicit FileDataObject (HGLOBAL hdrop) : hdrop_ (hdrop) {}
-    ~FileDataObject() { if (hdrop_) ::GlobalFree (hdrop_); }
-
-    HRESULT STDMETHODCALLTYPE GetData (FORMATETC* format, STGMEDIUM* medium) override
+    char* appdata = nullptr;
+    size_t len = 0;
+    if (_dupenv_s (&appdata, &len, "APPDATA") == 0 && appdata != nullptr)
     {
-        if (format == nullptr || medium == nullptr) return E_POINTER;
-        if (format->cfFormat != CF_HDROP || ! (format->tymed & TYMED_HGLOBAL))
-            return DV_E_FORMATETC;
-        if (hdrop_ == nullptr) return DV_E_FORMATETC;
-
-        const SIZE_T size = ::GlobalSize (hdrop_);
-        HGLOBAL copy = ::GlobalAlloc (GMEM_MOVEABLE, size);
-        if (copy == nullptr) return STG_E_MEDIUMFULL;
-
-        const void* src = ::GlobalLock (hdrop_);
-        void* dst = ::GlobalLock (copy);
-        if (src == nullptr || dst == nullptr)
+        std::ofstream out (std::string (appdata) + "\\K LOAD\\engine.log",
+                           std::ios::app);
+        if (out.good())
         {
-            if (dst) ::GlobalUnlock (copy);
-            if (src) ::GlobalUnlock (hdrop_);
-            ::GlobalFree (copy);
-            return E_FAIL;
+            char stamp[32] = {};
+            const std::time_t t = std::time (nullptr);
+            std::tm tm {};
+            localtime_s (&tm, &t);
+            std::strftime (stamp, sizeof (stamp), "%Y-%m-%d %H:%M:%S", &tm);
+            char line[512] = {};
+            std::string narrow;
+            narrow.reserve (path.size());
+            for (wchar_t wc : path)
+                narrow.push_back (wc >= 0 && wc <= 0x7f ? static_cast<char> (wc)
+                                                        : '?');
+            std::snprintf (line, sizeof (line),
+                           "[%s] drag-out: hr=0x%08lX effect=%lu file=%s\n",
+                           stamp, static_cast<unsigned long> (hr),
+                           static_cast<unsigned long> (effect),
+                           narrow.c_str());
+            out << line;
         }
-        memcpy (dst, src, size);
-        ::GlobalUnlock (copy);
-        ::GlobalUnlock (hdrop_);
-
-        medium->tymed = TYMED_HGLOBAL;
-        medium->hGlobal = copy;
-        medium->pUnkForRelease = nullptr;
-        return S_OK;
+        free (appdata);
     }
+}
 
-    HRESULT STDMETHODCALLTYPE GetDataHere (FORMATETC*, STGMEDIUM*) override
-    { return E_NOTIMPL; }
-
-    HRESULT STDMETHODCALLTYPE QueryGetData (FORMATETC* format) override
-    {
-        if (format == nullptr) return E_POINTER;
-        if (format->cfFormat == CF_HDROP && (format->tymed & TYMED_HGLOBAL))
-            return S_OK;
-        if (format->cfFormat == dropEffect_)
-            return S_OK;
-        return DV_E_FORMATETC;
-    }
-
-    HRESULT STDMETHODCALLTYPE GetCanonicalFormatEtc (FORMATETC*, FORMATETC* out) override
-    {
-        if (out != nullptr) out->ptd = nullptr;
-        return DATA_S_SAMEFORMATETC;
-    }
-
-    HRESULT STDMETHODCALLTYPE SetData (FORMATETC* format, STGMEDIUM* medium, BOOL release) override
-    {
-        // Эффект от приёмника нам не нужен дальше — принимаем и освобождаем.
-        if (format != nullptr && format->cfFormat == dropEffect_
-            && medium != nullptr && medium->hGlobal != nullptr)
-        {
-            if (release) ::ReleaseStgMedium (medium);
-            return S_OK;
-        }
-        return E_NOTIMPL;
-    }
-
-    HRESULT STDMETHODCALLTYPE EnumFormatEtc (DWORD direction, IEnumFORMATETC** out) override
-    {
-        // Цели-оболочки (рабочий стол, папки Проводника) перечисляют
-        // форматы при наведении: без перечислителя они показывают запрет
-        // и отвергают дроп (репорт «на стол не перетащить, в DAW можно»).
-        if (out == nullptr) return E_POINTER;
-        FORMATETC formats[] = {
-            { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL },
-            { dropEffect_, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL },
-        };
-        return ::SHCreateStdEnumFmtEtc (2, formats, out);
-    }
-
-    HRESULT STDMETHODCALLTYPE DAdvise (FORMATETC*, DWORD, IAdviseSink*, DWORD*) override
-    { return OLE_E_ADVISENOTSUPPORTED; }
-
-    HRESULT STDMETHODCALLTYPE DUnadvise (DWORD) override
-    { return OLE_E_ADVISENOTSUPPORTED; }
-
-    HRESULT STDMETHODCALLTYPE EnumDAdvise (IEnumSTATDATA** out) override
-    {
-        if (out == nullptr) return E_POINTER;
-        *out = nullptr;
-        return OLE_E_ADVISENOTSUPPORTED;
-    }
-
-    HRESULT STDMETHODCALLTYPE QueryInterface (REFIID riid, void** out) override
-    {
-        if (out == nullptr) return E_POINTER;
-        if (riid == IID_IUnknown || riid == IID_IDataObject)
-        {
-            *out = static_cast<IDataObject*> (this);
-            AddRef();
-            return S_OK;
-        }
-        *out = nullptr;
-        return E_NOINTERFACE;
-    }
-
-    ULONG STDMETHODCALLTYPE AddRef() override { return ++ref_; }
-
-    ULONG STDMETHODCALLTYPE Release() override
-    {
-        const ULONG left = --ref_;
-        if (left == 0) delete this;
-        return left;
-    }
-
-private:
-    HGLOBAL hdrop_ = nullptr;
-    long ref_ = 1;
-    const CLIPFORMAT dropEffect_
-        = static_cast<CLIPFORMAT> (::RegisterClipboardFormatW (CFSTR_PREFERREDDROPEFFECT));
-};
-
-// Стандартный источник: левая кнопка отпущена — сброс, Esc — отмена.
+// Стандартный источник: левая кнопка отпущена — дроп, Esc — отмена.
 class DropSource : public IDropSource
 {
 public:
@@ -175,25 +88,35 @@ private:
 
 HRESULT kload::DragOutFile (const std::wstring& path)
 {
-    // CF_HDROP-буфер строит протестированная функция (drag_payload.h).
-    const std::vector<BYTE> buffer = drag::BuildHdropBuffer (path);
-    HGLOBAL hdrop = ::GlobalAlloc (GMEM_MOVEABLE | GMEM_ZEROINIT, buffer.size());
-    if (hdrop == nullptr) return E_OUTOFMEMORY;
-
-    auto* df = static_cast<DROPFILES*> (::GlobalLock (hdrop));
-    if (df == nullptr)
+    // Нативный shell-объект файла (тот же, что создаёт Проводник при
+    // перетаскивании): цели-оболочки (рабочий стол, папки, браузеры) и
+    // DAW принимают его без ограничений. Самодельный CF_HDROP-объект
+    // отвергался целями-оболочками (перечёркнутый круг).
+    IShellItem* item = nullptr;
+    HRESULT hr = ::SHCreateItemFromParsingName (path.c_str(), nullptr,
+                                                IID_PPV_ARGS (&item));
+    IDataObject* data = nullptr;
+    if (SUCCEEDED (hr) && item != nullptr)
     {
-        ::GlobalFree (hdrop);
-        return E_FAIL;
+        hr = item->BindToHandler (nullptr, BHID_DataObject,
+                                  IID_PPV_ARGS (&data));
+        item->Release();
+        item = nullptr;
     }
-    memcpy (df, buffer.data(), buffer.size());
-    ::GlobalUnlock (hdrop);
 
-    auto* data = new FileDataObject (hdrop); // владение hdrop переходит
+    if (FAILED (hr) || data == nullptr)
+    {
+        if (item != nullptr) item->Release();
+        LogDrag (path, FAILED (hr) ? hr : E_FAIL, 0);
+        return FAILED (hr) ? hr : E_FAIL;
+    }
+
     auto* source = new DropSource();
     DWORD effect = DROPEFFECT_NONE;
-    const HRESULT hr = ::DoDragDrop (data, source, DROPEFFECT_COPY, &effect);
+    const HRESULT hr_drop = ::DoDragDrop (data, source, DROPEFFECT_COPY,
+                                          &effect);
+    LogDrag (path, hr_drop, effect);
     data->Release();
     source->Release();
-    return hr;
+    return hr_drop;
 }
