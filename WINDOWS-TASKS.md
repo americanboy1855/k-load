@@ -24,10 +24,10 @@
 **Что сделать:**
 
 1. `kdcore/src/VpnMonitor.cpp`, `checkOnce()`, список имён адаптеров
-   (`kd::containsAny`) — расширить: добавить `"happ", "clash", "mihomo",
+   (`kd::containsAny`) — расширить: добавить `"happ", "amnezia", "awg", "clash", "mihomo",
    "sing", "shadowsocks", "v2ray", "xray", "hysteria", "tor", "psiphon",
    "warp", "tailscale", "zerotier", "outline"`. Обратить внимание: `"tun"`
-   уже покрывает `tun2socks`; `"sing"` покроет `sing-box`.
+   уже покрывает `tun2socks`; `"sing"` покроет `sing-box`; `"awg"` — Amnezia WireGuard.
 2. Добавить третий метод — WinHTTP-дефолт-проки
    (`WinHttpGetDefaultHTTPSecureProxy` или реестр
    `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\Connections`
