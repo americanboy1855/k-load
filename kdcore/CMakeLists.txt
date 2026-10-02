@@ -12,6 +12,9 @@ if(APPLE)
     if(NOT CMAKE_OSX_ARCHITECTURES)
         set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS architectures" FORCE)
     endif()
+    # Минимум — 12.0 (Monterey): ниже не собирается готовый FlutterMacOS
+    # framework (minos 12.0 в SDK). Маки 2012 с Catalina/Big Sur не
+    # поддерживаются текущим стеком; OCLP-маки (Sonoma+) работают.
 endif()
 
 if(MSVC)

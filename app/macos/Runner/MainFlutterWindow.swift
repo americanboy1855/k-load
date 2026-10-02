@@ -22,6 +22,11 @@ class MainFlutterWindow: NSWindow {
     standardWindowButton(.zoomButton)?.isEnabled = false
     collectionBehavior.insert(.fullScreenDisallowsTiling)
 
+    // Восстановление позиции окна гасим: macOS иногда поднимает
+    // сохранённое/каскадное состояние (окно «прилипало» к левому верхнему
+    // углу) — приложение всегда открывается по центру экрана.
+    isRestorable = false
+
     // Окно 560×670; тянется только по диагонали, пропорционально.
     let design = NSSize(width: 560, height: 670)
     setContentSize(design)

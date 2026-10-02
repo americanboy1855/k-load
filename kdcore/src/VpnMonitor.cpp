@@ -1,5 +1,6 @@
 #include "VpnMonitor.h"
 #include "kd_process.h"
+#include "Engine.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -88,35 +89,74 @@ bool VpnMonitor::checkOnce()
     }
 }
 #else
-bool VpnMonitor::checkOnce()
+// Вывод утилиты целиком (короткий запуск, вывод маленький).
+static Str captureCommand (const StrVec& args)
 {
-    kd::ChildProcess route;
-    if (! route.start ({ "route", "-n", "get", "default" }))
-        return false;
-
+    kd::ChildProcess proc;
+    if (! proc.start (args)) return {};
     Str out;
     char chunk[4096];
     for (;;)
     {
-        const int n = route.read (chunk, (int) sizeof (chunk), 100);
+        const int n = proc.read (chunk, (int) sizeof (chunk), 120);
         if (n > 0) out.append (chunk, (size_t) n);
         else if (n == 0) break;
     }
-    route.waitExitCode();
+    proc.waitExitCode();
+    return out;
+}
 
-    if (kd::contains (out, "not in table")) return false;
-
-    for (const auto& line : kd::splitLines (out))
+bool VpnMonitor::checkOnce()
+{
+    // Метод 1 — туннельный интерфейс в маршруте по умолчанию (utun/tun/tap/
+    // ppp/ipsec/wg; Happ и WireGuard в TUN-режиме попадают сюда же).
+    const auto route = captureCommand ({ "route", "-n", "get", "default" });
+    if (! kd::contains (route, "not in table"))
     {
-        const auto t = kd::trim (line);
-        if (kd::startsWith (t, "interface:"))
+        for (const auto& line : kd::splitLines (route))
         {
-            const auto iface = kd::trim (kd::fromFirst (t, "interface:"));
-            return kd::startsWith (iface, "utun") || kd::startsWith (iface, "tun")
-                || kd::startsWith (iface, "tap") || kd::startsWith (iface, "ppp")
-                || kd::startsWith (iface, "ipsec") || kd::startsWith (iface, "wg");
+            const auto t = kd::trim (line);
+            if (kd::startsWith (t, "interface:"))
+            {
+                const auto iface = kd::lower (kd::trim (kd::fromFirst (t, "interface:")));
+                const bool tunnel = kd::startsWith (iface, "utun")
+                    || kd::startsWith (iface, "tun")
+                    || kd::startsWith (iface, "tap")
+                    || kd::startsWith (iface, "ppp")
+                    || kd::startsWith (iface, "ipsec")
+                    || kd::startsWith (iface, "wg");
+                if (tunnel)
+                {
+                    lastReason = "туннель " + iface;
+                    return true;
+                }
+            }
         }
     }
+
+    // Метод 2 — системный прокси: Clash/V2Ray/Happ в режиме «без TUN»
+    // туннель не создают, трафик идёт через SOCKS/HTTP-прокси (владелец
+    // подтвердил: системный прокси = VPN включён).
+    const auto proxy = captureCommand ({ "scutil", "--proxy" });
+    const bool proxyOn = kd::contains (proxy, "HTTPEnable : 1")
+        || kd::contains (proxy, "HTTPSEnable : 1")
+        || kd::contains (proxy, "SOCKSEnable : 1");
+    if (proxyOn)
+    {
+        lastReason = "системный прокси";
+        return true;
+    }
+
+    // Метод 3 — сетевые VPN-сервисы (встроенные IKEv2/L2TP-конфигурации):
+    // scutil --nc list помечает подключённые как "(Connected)".
+    const auto nc = captureCommand ({ "scutil", "--nc", "list" });
+    if (kd::contains (nc, "(Connected)"))
+    {
+        lastReason = "vpn-сервис";
+        return true;
+    }
+
+    lastReason.clear();
     return false;
 }
 #endif
@@ -147,8 +187,12 @@ void VpnMonitor::run()
             const auto next = on ? State::on : State::off;
             const auto prev = currentState.exchange (next, std::memory_order_relaxed);
             if (prev != next)
+            {
+                Engine::engineLog (on ? "vpn: включён (" + lastReason + ")"
+                                      : "vpn: выключен");
                 if (auto cb = copyOnChange())
                     cb (next);
+            }
         }
 
         // Проверка раз в секунду: две подряд одинаковые — состояние

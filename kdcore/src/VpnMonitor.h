@@ -4,6 +4,7 @@
 #include <functional>
 #include <thread>
 
+#include "kd_compat.h"
 #include "kd_thread.h"
 
 // Наблюдение за VPN: активен, если маршрут по умолчанию идёт через туннель
@@ -35,8 +36,9 @@ public:
 
     State state() const { return currentState.load (std::memory_order_relaxed); }
 
-    // Единичная проверка прямо сейчас (можно звать из любого потока).
-    static bool checkOnce();
+    // Единичная проверка (вызывается потоком наблюдения). lastReason —
+    // почему включён: «туннель utun5», «системный прокси», «vpn-сервис».
+    bool checkOnce();
 
 private:
     void signal (bool quitNow)
@@ -48,6 +50,7 @@ private:
     void run();
 
     std::atomic<State> currentState { State::unknown };
+    Str lastReason; // пишется в checkOnce, читается в run() (один поток)
     std::atomic<bool> quitFlag { false };
     std::mutex callbackMutex;
     std::function<void (State)> onChange;
