@@ -36,6 +36,10 @@ public:
 
     State state() const { return currentState.load (std::memory_order_relaxed); }
 
+    // Причина последнего решения checkOnce («адаптер happ», «прокси»…).
+    // Читается только потоком наблюдения (run) — без мьютекса.
+    const Str& reason() const { return lastReason; }
+
     // Единичная проверка (вызывается потоком наблюдения). lastReason —
     // почему включён: «туннель utun5», «системный прокси», «vpn-сервис».
     bool checkOnce();

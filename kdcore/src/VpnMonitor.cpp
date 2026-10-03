@@ -37,56 +37,112 @@ VpnMonitor::~VpnMonitor()
 #ifdef _WIN32
 bool VpnMonitor::checkOnce()
 {
+    // Метод 1 — туннельный интерфейс в маршруте по умолчанию (tun/tap/wg/
+    // ipsec/PPP и клиенты с TUN-режимом: Happ, Amnezia, Clash, sing-box…).
+    // Ошибка проверки ≠ «выключен»: при сбое методы ниже всё равно смотрим,
+    // а итоговое состояние сглаживается debounce'ом в run().
+    bool routeChecked = false;
     MIB_IPFORWARDROW row {};
-    if (::GetBestRoute (0, 0, &row) != NO_ERROR) return false;
-    const ULONG ifIdx = row.dwForwardIfIndex;
-
-    std::vector<char> buf (16 * 1024);
-    for (;;)
+    if (::GetBestRoute (0, 0, &row) == NO_ERROR)
     {
-        auto* aa = reinterpret_cast<IP_ADAPTER_ADDRESSES*> (buf.data());
-        ULONG size = (ULONG) buf.size();
-        const DWORD r = ::GetAdaptersAddresses (AF_UNSPEC, 0, nullptr, aa, &size);
-        if (r == ERROR_BUFFER_OVERFLOW) { buf.resize (size); continue; }
-        if (r != NO_ERROR) return false;
+        routeChecked = true;
+        const ULONG ifIdx = row.dwForwardIfIndex;
 
-        for (auto* a = aa; a != nullptr; a = a->Next)
+        std::vector<char> buf (16 * 1024);
+        for (;;)
         {
-            if (a->IfIndex != ifIdx) continue;
-            if (a->IfType == IF_TYPE_TUNNEL || a->IfType == IF_TYPE_PPP) return true;
+            auto* aa = reinterpret_cast<IP_ADAPTER_ADDRESSES*> (buf.data());
+            ULONG size = (ULONG) buf.size();
+            const DWORD r = ::GetAdaptersAddresses (AF_UNSPEC, 0, nullptr, aa, &size);
+            if (r == ERROR_BUFFER_OVERFLOW) { buf.resize (size); continue; }
+            if (r != NO_ERROR) break;
 
-            Str name;
-            if (a->FriendlyName != nullptr)
+            for (auto* a = aa; a != nullptr; a = a->Next)
             {
-                const int n = ::WideCharToMultiByte (CP_UTF8, 0, a->FriendlyName, -1,
-                                                     nullptr, 0, nullptr, nullptr);
-                std::vector<char> raw ((size_t) n, '\0');
-                ::WideCharToMultiByte (CP_UTF8, 0, a->FriendlyName, -1,
-                                       raw.data(), n, nullptr, nullptr);
-                name = kd::lower (Str (raw.data()));
-            }
-            if (kd::containsAny (name, { "tun", "tap", "wg", "vpn", "ppp", "ipsec" }))
-                return true;
-        }
+                if (a->IfIndex != ifIdx) continue;
+                if (a->IfType == IF_TYPE_TUNNEL || a->IfType == IF_TYPE_PPP)
+                {
+                    lastReason = "адаптер (тип туннель)";
+                    return true;
+                }
 
-        // Прокси-VPN (v2rayN, Clash и т.п.) не создаёт адаптер: трафик идёт
-        // через локальный прокси из настроек WinINET. Для пользователя такой
-        // VPN «включён» — иначе приложение зря ставило загрузки на паузу.
-        HKEY key = nullptr;
-        if (::RegOpenKeyExW (HKEY_CURRENT_USER,
-                L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
-                0, KEY_READ, &key) == ERROR_SUCCESS)
-        {
-            DWORD enabled = 0, size = sizeof (enabled);
-            const bool proxyOn =
-                ::RegQueryValueExW (key, L"ProxyEnable", nullptr, nullptr,
-                    reinterpret_cast<LPBYTE> (&enabled), &size) == ERROR_SUCCESS
-                && enabled != 0;
-            ::RegCloseKey (key);
-            if (proxyOn) return true;
+                Str name;
+                if (a->FriendlyName != nullptr)
+                {
+                    const int n = ::WideCharToMultiByte (CP_UTF8, 0, a->FriendlyName, -1,
+                                                         nullptr, 0, nullptr, nullptr);
+                    std::vector<char> raw ((size_t) n, '\0');
+                    ::WideCharToMultiByte (CP_UTF8, 0, a->FriendlyName, -1,
+                                           raw.data(), n, nullptr, nullptr);
+                    name = kd::lower (Str (raw.data()));
+                }
+                // Имена адаптеров VPN-клиентов: "tun" покрывает tun2socks,
+                // "sing" — sing-box, "awg" — Amnezia WireGuard (W-1).
+                static const char* kVpnNames[] = {
+                    "tun", "tap", "wg", "vpn", "ppp", "ipsec",
+                    "happ", "amnezia", "awg", "clash", "mihomo",
+                    "sing", "shadowsocks", "v2ray", "xray", "hysteria",
+                    "tor", "psiphon", "warp", "tailscale", "zerotier", "outline"
+                };
+                for (const char* marker : kVpnNames)
+                {
+                    if (kd::contains (name, marker))
+                    {
+                        lastReason = Str ("адаптер ") + marker;
+                        return true;
+                    }
+                }
+            }
+            break;
         }
-        return false;
     }
+    (void) routeChecked;
+
+    // Метод 2 — системный прокси WinINET (ProxyEnable): Clash/V2Ray/Happ
+    // в режиме «без TUN» туннель не создают, трафик идёт через локальный
+    // прокси. Владелец подтвердил: системный прокси = VPN включён.
+    HKEY key = nullptr;
+    if (::RegOpenKeyExW (HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+            0, KEY_READ, &key) == ERROR_SUCCESS)
+    {
+        DWORD enabled = 0, size = sizeof (enabled);
+        const bool proxyOn =
+            ::RegQueryValueExW (key, L"ProxyEnable", nullptr, nullptr,
+                reinterpret_cast<LPBYTE> (&enabled), &size) == ERROR_SUCCESS
+            && enabled != 0;
+        ::RegCloseKey (key);
+        if (proxyOn)
+        {
+            lastReason = "прокси";
+            return true;
+        }
+    }
+
+    // Метод 3 — WinHTTP-дефолт-прокси: некоторые клиенты прописывают его,
+    // не трогая WinINET (W-1). Реестр DefaultConnectionSettings → ищем
+    // флаг прокси-включён в бинарном блобе (байт со смещением 8 — флаги:
+    // бит 2 (0x04) = прокси включён, как в WINHTTP_PROXY_INFO).
+    HKEY winhttp = nullptr;
+    if (::RegOpenKeyExW (HKEY_LOCAL_MACHINE,
+            L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\\Connections",
+            0, KEY_READ, &winhttp) == ERROR_SUCCESS)
+    {
+        BYTE blob[512] = {};
+        DWORD blobSize = sizeof (blob);
+        const bool ok =
+            ::RegQueryValueExW (winhttp, L"DefaultConnectionSettings", nullptr,
+                nullptr, blob, &blobSize) == ERROR_SUCCESS && blobSize >= 12;
+        ::RegCloseKey (winhttp);
+        if (ok && (blob[8] & 0x04) != 0)
+        {
+            lastReason = "прокси winhttp";
+            return true;
+        }
+    }
+
+    lastReason.clear();
+    return false;
 }
 #else
 // Вывод утилиты целиком (короткий запуск, вывод маленький).
@@ -188,7 +244,7 @@ void VpnMonitor::run()
             const auto prev = currentState.exchange (next, std::memory_order_relaxed);
             if (prev != next)
             {
-                Engine::engineLog (on ? "vpn: включён (" + lastReason + ")"
+                Engine::engineLog (on ? "vpn: включён (" + reason() + ")"
                                       : "vpn: выключен");
                 if (auto cb = copyOnChange())
                     cb (next);
