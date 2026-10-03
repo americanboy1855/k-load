@@ -25,10 +25,31 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
   FlutterWindow window(project);
-  Win32Window::Point origin(10, 10);
   // Логические 532×637 — размер зафиксирован по выбору владельца
   // (репорт «зафиксировать окно в текущем размере», замер 532×637).
-  Win32Window::Size size(532, 637);
+  const LONG kWindowW = 532;
+  const LONG kWindowH = 637;
+
+  // W-3: окно по центру рабочей области монитора курсора (паритет с mac
+  // v1.3.0): MonitorFromPoint под мышь → GetMonitorInfo (рабочая область,
+  // без панели задач) → центр минус половина размера в физических пикселях
+  // (DPI учитывается тем же масштабом, что и в Win32Window::Create).
+  POINT cursor{};
+  ::GetCursorPos(&cursor);
+  HMONITOR monitor = ::MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+  MONITORINFO mi{};
+  mi.cbSize = sizeof(mi);
+  if (!::GetMonitorInfo(monitor, &mi)) {
+    mi.rcWork = {0, 0, 1920, 1080};
+  }
+  const UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
+  const double scale = dpi / 96.0;
+  const LONG wPix = static_cast<LONG>(kWindowW * scale);
+  const LONG hPix = static_cast<LONG>(kWindowH * scale);
+  const int cx = mi.rcWork.left + (mi.rcWork.right - mi.rcWork.left - wPix) / 2;
+  const int cy = mi.rcWork.top + (mi.rcWork.bottom - mi.rcWork.top - hPix) / 2;
+  Win32Window::Point origin(cx, cy);
+  Win32Window::Size size(kWindowW, kWindowH);
   if (!window.Create(L"K LOAD", origin, size)) {
     return EXIT_FAILURE;
   }
